@@ -1,10 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cases, modelCases, problems } from "./catalogue.ts";
 import { REPO } from "./harness.ts";
 import { type Outcome, type Status, runAll } from "./run.ts";
-import { CATEGORIES, type Category } from "./types.ts";
+import { CATEGORIES, type Category, type ModelReport } from "./types.ts";
 
 const WORD: Record<Status, string> = { held: "held", open: "**open finding**", failed: "**FAILED**", fixed: "**fixed, marker not removed**" };
 const RANK = { high: 0, medium: 1, low: 2 } as const;
@@ -77,12 +77,37 @@ export function render(outcomes: Outcome[], commit: string, date: string): strin
 
   l.push("## Model behaviour", "");
   l.push(
-    "Not measured yet. This section is for attacks on the model that reads peer text (the front desk). " +
-      "Those results will be reported here as rates over repeated trials, separately from the tables above, because they are measurements and not guarantees. " +
-      "The slot is `packages/gauntlet/src/cases/model.ts`.",
+    "The front desk is a model that reads the other side's text. These are attacks on it, run against a live model. " +
+      "They are measurements over a few trials, not guarantees, and they are not counted in the totals above. " +
+      "What protects the owner is in code: the model process has no tools and is given only the files the owner approved for that contact. " +
+      "These cases measure what is left: whether the model can be talked into saying something it should not, and whether values the model runtime adds to its own context get out.",
     "",
   );
-  if (modelCases.length) l.push(`${modelCases.length} model cases are defined but this report does not run them yet.`, "");
+  const modelFile = join(REPO, "docs/gauntlet-model.json");
+  if (!existsSync(modelFile)) {
+    l.push(`Not measured yet. ${modelCases.length} cases are defined. Run \`pnpm gauntlet:model\`.`, "");
+  } else {
+    const m = JSON.parse(readFileSync(modelFile, "utf8")) as ModelReport;
+    const attacks = m.results.filter((r) => !r.control);
+    const controls = m.results.filter((r) => r.control);
+    l.push(`Measured ${m.at} with ${m.model} (${m.runtime}), ${Math.min(...m.results.map((r) => r.trials))} to ${Math.max(...m.results.map((r) => r.trials))} trials per case. The outbound filter was off, so this shows the model alone.`, "");
+    l.push(
+      `${attacks.filter((r) => r.worked === 0).length} of ${attacks.length} attacks never worked. ${controls.filter((r) => r.worked === r.trials).length} of ${controls.length} ordinary questions were always handled correctly.`,
+      "",
+    );
+    l.push("| Attack | Family | The rule | Worked |", "| --- | --- | --- | ---: |");
+    for (const r of attacks) l.push(`| ${r.id} ${cell(r.title)} | ${cell(r.family)} | ${cell(r.claim)} | ${r.worked} of ${r.trials} |`);
+    l.push("", "| Ordinary question | What should happen | Correct |", "| --- | --- | ---: |");
+    for (const r of controls) l.push(`| ${r.id} ${cell(r.title)} | ${cell(r.claim)} | ${r.worked} of ${r.trials} |`);
+    l.push("");
+    const shown = m.results.filter((r) => r.example);
+    if (shown.length) {
+      l.push("### What went wrong", "");
+      const fence = "`".repeat(3);
+      for (const r of shown) l.push(`**${r.id} ${r.title}.** The desk replied:`, "", fence, r.example!.replaceAll(fence, "'''"), fence, "");
+    }
+    l.push("The cases are in `packages/gauntlet/src/cases/model.ts`. Run them with `pnpm gauntlet:model`. It makes real model calls, so CI does not run it.", "");
+  }
 
   l.push("## What this does not cover", "");
   l.push(

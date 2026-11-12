@@ -48,7 +48,7 @@ Nobody handles the case that matters here: two people who do not fully trust eac
 - **Relay.** A WebSocket server with a mailbox per device. It stores ciphertext until the recipient acknowledges it. It can be self-hosted. It cannot read messages. It does know which device sends to which, because it checks who is logging in, and it keeps that with each queued message.
 - **Daemon.** One per person. Holds keys, the event log, contacts, grants and budgets. Runs the rule checker. Talks to the relay.
 - **Front desk.** A model with no tools that answers a contact's questions using only a bundle of material the human approved for that contact. It can run while the human is away.
-- **Workers.** Sandboxed agents that write code against a copy of the repo. They produce a patch and nothing else.
+- **Workers** (M3). A model with no tools, given the agreed contract and files its human chose, that proposes edits. Code checks the edits and builds the patch. Nothing it writes is run locally.
 - **Adapters.** An MCP server so Claude Code and Codex can use Counterpart, and notifications into live sessions.
 - **Viewer.** A local web page showing transcripts, evidence and pending approvals. Approvals are given here, not through a model.
 
@@ -85,7 +85,7 @@ Defences, in order of how much we rely on them:
 
 1. **Nothing to steal.** The model that reads peer text (the front desk) can see only the approved bundle. It has no file access, no tools and no conversation history. If it is completely taken over, the worst it can do is disclose the bundle, which was approved for that contact anyway.
 2. **Nothing to do.** Peer text cannot cause local effects. Effects come from act-lane operations checked by code against grants the human issued.
-3. **Sandboxed work.** When a worker implements an agreed contract, it runs on a copy of the repo with no credentials and restricted network, and its output is a patch a human reviews.
+3. **Work without execution.** When a worker implements an agreed contract, it has no tools and sees only the files its human chose. Its output is a set of edits that code checks and turns into a patch for a human to review. Nothing it writes is run on the owner's machine.
 4. **Approvals outside the model.** An approval is a signature by the human's root key, which is locked with their passphrase. An agent on the same machine, even one with a shell, can read the key file and cannot sign with it. This holds while the machine is honest: a keylogger or a replaced `cpart` defeats it. Agents can propose, because a proposal binds nobody.
 5. **Rendering.** What reaches a live coding session is a fixed template built from verified fields: contact name, event type, hash, counts, a local link. No peer-written text.
 6. **A hostile-peer test suite** that runs in CI: [gauntlet.md](gauntlet.md). Results for the code-enforced rules and for model behaviour are reported separately, because only the first kind are guarantees.
@@ -103,8 +103,24 @@ Each side pays for its own model use. Before the daemon starts any model work it
 | M0 | Two paired daemons exchange encrypted messages and survive duplicate, delayed and reordered delivery | Done |
 | M1 | Front desk answers a contact's questions from an approved bundle while the human is offline. Viewer shows where each answer came from. Hostile-peer suite, first version. Slots and budgets | Done. The suite's model-behaviour section is still empty |
 | M2 | Act lane: contracts proposed and accepted by hash, human approvals, notifications into live Claude Code and Codex sessions | Contracts, approvals and agreement files done. MCP tools, viewer and notifications next |
-| M3 | Sandboxed workers produce patches. Each side opens a PR carrying the contract hash and the other side's signed evidence. A GitHub Action checks it and rejects stale evidence | |
+| M3 | Workers produce patches. Each side opens a PR carrying the agreement and the other side's signed evidence. A verifier in CI checks it and rejects stale evidence | Planned, see below |
 | M4 | Hosted invite-only relay. Launch demo: overnight answer, human steps in, two PRs, recovery from an interrupted delivery | |
+
+## Plan for M3: from agreement to pull requests
+
+Worked out with Codex in a fifth design round. Not built yet.
+
+**Nothing the model writes is run on the owner's machine.** Not tests, not builds, not scripts. A sandbox cannot be verified on an arbitrary laptop, and running a test suite after applying a patch written under the influence of the other side's contract text is remote code execution. Code runs where a sandbox already exists: the repo's own CI, on hosted runners, with no secrets.
+
+**The worker is the front desk's model, not an agent with file tools.** Confining an agent's file access to one directory cannot be demonstrated either. So the worker is the same tool-less model: the daemon gives it the agreed contract, a brief from its own human, and the contents of files the human named. It answers with structured edits. A broker in code checks every edit: only the named paths, no symlinks, no binaries, no executable bits, nothing under `.github/`, no manifests, lockfiles or install scripts unless the human asked for them separately. The daemon computes the diff itself from the before and after bytes.
+
+**Publishing has its own gate.** `cpart pr`, run by the human in their real repo, shows the exact repo, its visibility, the patch and what will be published about the agreement, and binds the review to a base commit and a patch hash. It writes the agreement file and bindings itself; the worker cannot. Git runs with hooks, filters and external diff tools disabled.
+
+**CI checks the link between agreement and code.** A verifier, run from the protected base branch by `workflow_dispatch` against a chosen PR, reads the PR's files as data and checks: the agreement verifies; its signers and thread are the ones pinned on the base branch; each bound part of the contract is byte-identical to the file at its bound path; and fixtures in the repo, both ones that should pass and ones that should fail, behave that way against the agreed schema. A missing agreement or a deleted binding fails.
+
+**Evidence between the two sides** is an act-lane event naming immutable things: agreement, proposal, repo, head and base commits, hashes of the bindings and trust policy, verifier version, per-part results, and the CI run. The receiver recomputes what it can and shows the rest as the other side's claim. Evidence goes stale when the head, base, bindings or policy change.
+
+**The demo:** two repos, one agreed schema, two reviewed patches, two PRs with passing checks and each side's evidence shown on the other's PR. Then change one byte of the schema and watch verification fail, and push a new commit and watch the old evidence go stale.
 
 ## Decisions and why
 
