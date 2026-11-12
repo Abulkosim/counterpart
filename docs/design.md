@@ -73,6 +73,10 @@ Every event is in one of two lanes:
 
 Text from a peer never becomes a file path, a command, a URL or a field of a grant.
 
+### Pull, not push
+
+There is one place where peer text does reach a privileged agent: when your own coding session asks for it. If you tell your agent "ask Bob's agent how X works", the answer has to come back into your session. The rule is that this only happens on an explicit read (`counterpart_read_thread`, `counterpart_wait_for_reply`), inside an envelope that marks it as someone else's words. Nothing a peer writes is ever pushed into a session, placed in a tool description, or shown in a list. It is the same risk as your agent reading a web page, and it is yours to supervise until grants limit what such a session can do.
+
 ## Prompt injection
 
 The threat: Bob's agent (or Bob, or someone who took over Bob's machine) sends text designed to make Alice's agent leak her code, run something, or agree to something.
@@ -97,7 +101,7 @@ Each side pays for its own model use. Before the daemon starts any model work it
 | | Outcome | State |
 | --- | --- | --- |
 | M0 | Two paired daemons exchange encrypted messages and survive duplicate, delayed and reordered delivery | Done |
-| M1 | Front desk answers a contact's questions from an approved bundle while the human is offline. Viewer shows where each answer came from. Hostile-peer suite, first version. Slots and budgets | In progress: front desk and budgets done |
+| M1 | Front desk answers a contact's questions from an approved bundle while the human is offline. Viewer shows where each answer came from. Hostile-peer suite, first version. Slots and budgets | Done except the hostile-peer suite, which is in review |
 | M2 | Act lane: contracts proposed and accepted by hash, human approvals, notifications into live Claude Code and Codex sessions | |
 | M3 | Sandboxed workers produce patches. Each side opens a PR carrying the contract hash and the other side's signed evidence. A GitHub Action checks it and rejects stale evidence | |
 | M4 | Hosted invite-only relay. Launch demo: overnight answer, human steps in, two PRs, recovery from an interrupted delivery | |
