@@ -1,0 +1,17 @@
+{
+  "name": "@counterpart/publish",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@counterpart/protocol": "workspace:*",
+    "@counterpart/verify": "workspace:*",
+    "@counterpart/worker": "workspace:*"
+  },
+  "devDependencies": {
+    "@counterpart/daemon": "workspace:*",
+    "@counterpart/relay": "workspace:*",
+    "@counterpart/frontdesk": "workspace:*"
+  }
+}

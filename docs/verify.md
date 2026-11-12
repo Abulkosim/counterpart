@@ -8,6 +8,10 @@ node verify.mjs --tree <checkout to check> --trust <trust.json from the base bra
 
 It is meant to run in CI on a pull request, from a copy of itself on the protected base branch. It reads the pull request's files as data. It never imports or runs anything from them.
 
+## Setting it up
+
+`cpart repo init <thread> <id> --repo . --bind <part>=<path>[,<valid dir>,<invalid dir>]` writes three files: `.counterpart/trust.json`, `.counterpart/verify.mjs` and `.github/workflows/counterpart-verify.yml`. Commit them to your main branch and protect it. The workflow is started by hand with a pull request number. It checks out main for the verifier and the trust file, fetches the pull request's files into a separate directory as data, and reports a `counterpart/verify` status on the commit it checked.
+
 ## What it checks
 
 1. Every file in `.counterpart/agreements/` is a valid agreement: the contract matches its hash, both signatures verify, both are for the same proposal and thread.

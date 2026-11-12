@@ -190,6 +190,9 @@ importers:
       '@counterpart/protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@counterpart/publish':
+        specifier: workspace:*
+        version: link:../publish
       '@counterpart/relay':
         specifier: workspace:*
         version: link:../relay
@@ -274,6 +277,28 @@ importers:
       '@hpke/dhkem-x25519':
         specifier: ^1.8.1
         version: 1.8.1
+
+  packages/publish:
+    dependencies:
+      '@counterpart/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@counterpart/verify':
+        specifier: workspace:*
+        version: link:../verify
+      '@counterpart/worker':
+        specifier: workspace:*
+        version: link:../worker
+    devDependencies:
+      '@counterpart/daemon':
+        specifier: workspace:*
+        version: link:../daemon
+      '@counterpart/frontdesk':
+        specifier: workspace:*
+        version: link:../frontdesk
+      '@counterpart/relay':
+        specifier: workspace:*
+        version: link:../relay
 
   packages/relay:
     dependencies:
