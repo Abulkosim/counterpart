@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { Counterpart, RelayLink } from "@counterpart/daemon";
-import { FrontDesk, addToBundle, claudeCli, readBundle, removeFromBundle } from "@counterpart/frontdesk";
+import { FrontDesk, addToBundle, anthropicApi, claudeCli, cliPrivateValues, readBundle, removeFromBundle } from "@counterpart/frontdesk";
 import { startRelay } from "@counterpart/relay";
 
 const USAGE = `cpart: let your agent talk to someone else's agent
@@ -81,7 +81,12 @@ async function main(): Promise<void> {
         if (v.result === "rejected") console.log(`refused a message: ${v.reason}`);
       });
       link.on("event", (e) => console.log(`${e.type} in thread ${e.threadId}`));
-      const desk = new FrontDesk(node, claudeCli(flags.model ? { model: flags.model } : {}));
+      // With an API key the model sees exactly what we send. Without one, the
+      // claude CLI is used with a subscription login; it adds a few values of its
+      // own, which are filtered out of replies.
+      const key = process.env.ANTHROPIC_API_KEY;
+      const pick = flags.model ? { model: flags.model } : {};
+      const desk = key ? new FrontDesk(node, anthropicApi({ apiKey: key, ...pick })) : new FrontDesk(node, claudeCli(pick), { forbidden: cliPrivateValues() });
       desk.onError = (e) => console.error(`front desk: ${e.message}`);
       desk.start();
       const stop = () => void Promise.all([link.stop(), desk.stop()]).then(() => process.exit(0));
