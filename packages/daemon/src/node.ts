@@ -3,7 +3,7 @@ import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, re
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
-  type DeviceCredential, type DeviceSecrets, type EventBodies, type EventType, type KeyPair, type ThreadEvent, type Wire,
+  type DeviceCredential, type DeviceSecrets, type EventBodies, type EventType, type KeyPair, type ThreadEvent, type Via, type Wire,
   LIMITS, canonicalize, decodeInvite, deviceId, encodeInvite, generateSigningKey, humanId, issueDevice, laneOf, open,
   randomId, renewDevice, safetyCode, seal,
 } from "@counterpart/protocol";
@@ -215,7 +215,7 @@ export class Counterpart {
     return threadId;
   }
 
-  async say(threadId: string, text: string): Promise<ThreadEvent> {
+  async say(threadId: string, text: string, via?: Via): Promise<ThreadEvent> {
     const t = this.db.prepare("SELECT contact_root FROM threads WHERE id = ?").get(threadId) as { contact_root: string } | undefined;
     if (!t) throw new Error(`no thread ${threadId}`);
     const c = this.activeContact(t.contact_root);
@@ -224,7 +224,7 @@ export class Counterpart {
     // concurrent writer fails the unique index and the caller retries.
     for (let attempt = 0; ; attempt++) {
       const seq = (this.db.prepare("SELECT COALESCE(MAX(author_seq), -1) + 1 AS n FROM events WHERE thread_id = ? AND author = ?").get(threadId, mine) as { n: number }).n;
-      const out = await this.build(c.credential, threadId, "talk.posted", { text }, seq, this.heads(threadId));
+      const out = await this.build(c.credential, threadId, "talk.posted", via ? { text, via } : { text }, seq, this.heads(threadId));
       try {
         this.tx(() => this.commitOut(out));
         return out.event;

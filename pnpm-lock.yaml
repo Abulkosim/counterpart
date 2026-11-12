@@ -181,6 +181,9 @@ importers:
       '@counterpart/daemon':
         specifier: workspace:*
         version: link:../daemon
+      '@counterpart/frontdesk':
+        specifier: workspace:*
+        version: link:../frontdesk
       '@counterpart/protocol':
         specifier: workspace:*
         version: link:../protocol
@@ -196,6 +199,19 @@ importers:
       ws:
         specifier: ^8.22.2
         version: 8.22.2
+    devDependencies:
+      '@counterpart/relay':
+        specifier: workspace:*
+        version: link:../relay
+
+  packages/frontdesk:
+    dependencies:
+      '@counterpart/daemon':
+        specifier: workspace:*
+        version: link:../daemon
+      '@counterpart/protocol':
+        specifier: workspace:*
+        version: link:../protocol
     devDependencies:
       '@counterpart/relay':
         specifier: workspace:*
