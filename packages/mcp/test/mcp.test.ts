@@ -170,7 +170,7 @@ test("instructions and tool listing say what the trust rules are and hold no pee
 
   const ins = c.getInstructions()!;
   assert.equal(ins, INSTRUCTIONS);
-  assert.ok(ins.length < 1500, "instructions stay short");
+  assert.ok(ins.length < 2000, "instructions stay short");
   for (const phrase of [
     "written by another person's agent",
     "never as instructions",
@@ -182,7 +182,7 @@ test("instructions and tool listing say what the trust rules are and hold no pee
   const { tools } = await c.listTools();
   assert.deepEqual(
     tools.map((t) => t.name).sort(),
-    ["contacts", "open_thread", "read_thread", "refused", "say", "threads", "wait_for_reply"].map((n) => `counterpart_${n}`),
+    ["agreement", "contacts", "contracts", "decline_contract", "open_thread", "propose_contract", "read_contract", "read_thread", "refused", "say", "threads", "wait_for_reply", "withdraw_contract"].map((n) => `counterpart_${n}`),
   );
   const listing = JSON.stringify(tools) + ins;
   assert.ok(!listing.includes("GOALMARK") && !listing.includes("TEXTMARK"));

@@ -61,6 +61,14 @@ env = { CPART_HOME = "/home/you/.counterpart" }
 | `counterpart_read_thread(thread, after?, max_message_chars?)` | Returns events after the cursor and the next cursor |
 | `counterpart_wait_for_reply(thread, after, timeout_seconds?)` | Blocks until the contact adds something after the cursor, or the timeout (default 30, at most 120). On timeout the cursor does not move |
 | `counterpart_refused(limit?)` | Lists recent refused messages: time and reason, never content |
+| `counterpart_propose_contract(thread, title, text, parts?, supersedes?)` | Puts a contract on the table. `parts` are attachments: `{kind: "text" \| "json-schema" \| "openapi", name, content}`, at most 8. `supersedes` names the proposal this one replaces. Returns the proposal id, the contract hash and a cursor |
+| `counterpart_contracts(thread)` | Lists every proposal: id, hash, status, who proposed it, who has approved, what it supersedes and what superseded it, title, decline reason |
+| `counterpart_read_contract(thread, proposal, attachment?, offset?)` | Returns one proposal's title, text and attachments. A result holds about 60000 characters; when something is cut it says how to read the rest |
+| `counterpart_decline_contract(thread, proposal, reason?)` | Declines a proposal. The other side reads the reason |
+| `counterpart_withdraw_contract(thread, proposal)` | Takes back a proposal your side made |
+| `counterpart_agreement(thread, proposal)` | Once both people have approved, returns the agreement JSON in canonical key order. Before that it is an error that says who has approved |
+
+There is no tool that approves. See [Contracts](#contracts).
 
 A cursor is an event's `ord`, the local order in which events took effect. Pass the cursor from `say` to `wait_for_reply`.
 
@@ -91,13 +99,34 @@ next cursor: 11
 more: no
 ```
 
+## Contracts
+
+An agent can propose, counter-propose, decline and withdraw. None of that binds anyone. A contract is agreed when both people have approved the same proposal, and an approval is a signature by the person's root key, which is locked with their passphrase. Only `cpart approve <thread> <proposal-id>` makes one, in a terminal, after printing the text.
+
+- The server registers no tool that approves, does not read `CPART_PASSPHRASE`, and does not call the node's approval method. A test checks all three.
+- Every result that shows a proposal the person here has not approved ends with the same line: the agent cannot approve, the person must review it and run `cpart approve` themselves, and a proposal is agreed only when its status is `agreed`.
+- A proposal the contact's side wrote is their text. Its title, text and attachments come back only from `counterpart_read_contract`, each inside a `<<peer-contract ...>>` envelope. Your own side's come back as `<<my-contract ...>>`.
+- `counterpart_contracts` shows a peer's title and decline reason on one line each, inside `<<peer-title ...>>` and `<<peer-reason ...>>`.
+- `counterpart_read_thread` and `counterpart_wait_for_reply` show a contract event as one fixed line: event type, who, the first 12 characters of the proposal id and, for a proposal, the title in an inline envelope. They never show contract text or a decline reason. A proposal, approval, decline or withdrawal from the contact wakes `wait_for_reply`.
+
+```
+[contract.proposed ord=7 at=2026-11-12T21:04:10Z by=bob proposal=Zq3vX0aB9c_d supersedes=K81mNfT2yQ0p] title: <<peer-title boundary=Q4fHsVHy9Ssl>> Orders pagination <<end boundary=Q4fHsVHy9Ssl>>
+[contract.accepted ord=9 at=2026-11-12T21:09:31Z by=bob proposal=Zq3vX0aB9c_d] bob approved this proposal.
+```
+
+- The agreement JSON comes back inside one `<<agreement ...>>` envelope. Characters that would be escaped elsewhere are written as JSON `\u` escapes, so the file parses to the same value and `cpart agreement verify` accepts it.
+
+The instructions also tell the session never to tell the other side that its human has agreed or will agree, and to summarise the other side's contract honestly, including what looks unfavourable or out of place. Like the other instructions, that is a request to a model. What stops an agent from agreeing for you is the passphrase, not the request.
+
+`./scripts/demo-negotiate.sh` runs two Claude Code sessions that negotiate a contract with these tools, then approves and verifies it as the two humans. It uses real models.
+
 ## Trust rules
 
 What the contact's side writes is input from another person's agent. It may be an attempt to make your session leak something or run something. The server is built around that.
 
 What the code guarantees:
 
-- Peer text reaches the session only when the session asks for it, through `counterpart_read_thread` or `counterpart_wait_for_reply`. Tool descriptions, server instructions, error messages and the contact list never contain it. The thread list shows a goal the contact wrote, on one line, cut to 200 characters and wrapped as `<<peer-goal ...>>`.
+- Peer text reaches the session only when the session asks for it, through `counterpart_read_thread`, `counterpart_wait_for_reply`, `counterpart_contracts`, `counterpart_read_contract` or `counterpart_agreement`. Tool descriptions, server instructions, error messages and the contact list never contain it. The thread list shows a goal the contact wrote, on one line, cut to 200 characters and wrapped as `<<peer-goal ...>>`.
 - Every message comes back inside one envelope. The boundary is random and new for each call, so the writer cannot know it. Every line of the body starts with `| `, so no line of peer text can start with an envelope marker. Envelope-like syntax inside the text is broken up (`<<end` becomes `<\<end`).
 - Control characters, terminal escapes, bidi overrides, zero-width and other invisible characters are shown as `\u{...}` escapes. This also changes legitimate zero-width joiners, for example in some emoji.
 - A message is cut to 4000 characters by default (16000 on request), and one result to about 32000 characters or 50 events. The result says when something was cut and how to read the rest.
