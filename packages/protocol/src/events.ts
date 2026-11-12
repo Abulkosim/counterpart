@@ -11,8 +11,12 @@ export interface EventBodies {
   // Carries nothing. Its envelope delivers the sender's renewed device credential.
   "contact.hello": Record<string, never>;
   "thread.opened": { goal: string; participants: string[] };
-  "talk.posted": { text: string };
+  // `via` says who on the sender's side wrote it. It is the sender's own claim.
+  "talk.posted": { text: string; via?: Via };
 }
+
+export type Via = "human" | "agent" | "frontdesk";
+const VIAS: readonly unknown[] = ["human", "agent", "frontdesk"];
 
 export type EventType = keyof EventBodies;
 
@@ -57,7 +61,7 @@ const bodies: { [T in EventType]: (b: Record<string, unknown>) => boolean } = {
     b.participants.length <= LIMITS.participants &&
     b.participants.every(isKey) &&
     new Set(b.participants).size === b.participants.length,
-  "talk.posted": (b) => onlyKeys(b, ["text"]) && isStr(b.text, 1, LIMITS.text),
+  "talk.posted": (b) => isStr(b.text, 1, LIMITS.text) && (onlyKeys(b, ["text"]) || (onlyKeys(b, ["text", "via"]) && VIAS.includes(b.via))),
 };
 
 const FIELDS = ["id", "threadId", "author", "authorSeq", "parents", "lane", "type", "body", "createdAt"] as const;
