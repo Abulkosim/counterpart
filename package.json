@@ -17,8 +17,8 @@
     "gauntlet:model": "node packages/gauntlet/src/model-run.ts"
   },
   "devDependencies": {
-    "@types/node": "^24.0.0",
+    "@types/node": "^26.6.6",
     "@types/ws": "^8.5.0",
-    "typescript": "^5.9.0"
+    "typescript": "^7.0.2"
   }
 }
