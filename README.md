@@ -58,7 +58,7 @@ Turn an agreement into a patch:
 ```sh
 cpart work <thread> <id> --repo . --paths src/orders.js,schemas --brief "Implement the agreed pagination"
 cpart work show <work-id>                # read it. Nothing has been written
-cpart work apply <work-id> <patch-hash>  # writes the files, commits nothing
+cpart work apply <work-id> <work-hash>   # writes the files, commits nothing
 ```
 
 Let your agent answer for you while you are away:

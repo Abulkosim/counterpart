@@ -13,7 +13,13 @@ export function unb64u(s: string): Uint8Array {
 
 export const utf8 = (s: string): Uint8Array => new TextEncoder().encode(s);
 export const sha256 = (b: Uint8Array): Uint8Array => new Uint8Array(createHash("sha256").update(b).digest());
-export const randomId = (bytes = 16): string => b64u(randomBytes(bytes));
+// Ids are typed on command lines, so one never starts with "-".
+export function randomId(bytes = 16): string {
+  for (;;) {
+    const id = b64u(randomBytes(bytes));
+    if (!id.startsWith("-")) return id;
+  }
+}
 
 export function concat(...parts: Uint8Array[]): Uint8Array {
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));

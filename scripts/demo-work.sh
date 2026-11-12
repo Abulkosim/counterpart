@@ -125,7 +125,7 @@ step "her repository is untouched so far"
 git -C "$REPO" status --short | sed 's/^/  /'; echo "  (clean)"
 
 step "she applies it"
-HASH=$(alice work show "$ID" --json | field .patchHash)
+HASH=$(alice work show "$ID" --json | field .workHash)
 alice work apply "$ID" "${HASH:0:12}"
 git -C "$REPO" status --short
 echo

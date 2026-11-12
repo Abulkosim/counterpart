@@ -48,7 +48,7 @@ it writes is run, and nothing is written until you apply it.
 
   cpart work <thread> <id> --repo <path> --paths <a,b,dir> --brief <what to do> [--allow <sensitive path>]...
   cpart work show <work-id>                                       the patch, what was refused, what to look at first
-  cpart work apply <work-id> <patch-hash> [--repo <path>]         write the reviewed files. Commits nothing
+  cpart work apply <work-id> <work-hash> [--repo <path>]          write the reviewed files. Commits nothing
 
 Front desk: a model with no tools that answers a contact while you are away,
 using only the files you put in that contact's bundle.
@@ -296,7 +296,7 @@ async function main(): Promise<void> {
         [
           `Work      ${w.id}`,
           `Repo      ${safe(w.repo)} at ${w.baseCommit.slice(0, 12)}`,
-          `Patch     ${w.patchHash}`,
+          `Work hash ${w.workHash}  (covers the base commit and every byte to be written)`,
           `Shown     ${w.given.length} file(s): ${w.given.map(safe).join(", ")}`,
           `Changes   ${w.changes.length ? w.changes.map((c) => `${safe(c.path)} (${c.status})`).join(", ") : "none"}`,
           ...(w.refused.length ? ["", "Refused by the checker:", ...w.refused.map((r) => `  ${safe(r.path)}: ${safe(r.reason)}`)] : []),
@@ -306,13 +306,13 @@ async function main(): Promise<void> {
       if (args[0] === "show") {
         need(2, "work show <work-id>");
         const w = load(args[1]!);
-        return out(`${summary(w)}\n\n${w.patch.split("\n").map(safe).join("\n")}\nTo write these files: cpart work apply ${w.id} ${w.patchHash.slice(0, 12)}`, w);
+        return out(`${summary(w)}\n\n${w.patch.split("\n").map(safe).join("\n")}\nTo write these files: cpart work apply ${w.id} ${w.workHash.slice(0, 12)}`, w);
       }
       if (args[0] === "apply") {
-        need(3, "work apply <work-id> <patch-hash>");
+        need(3, "work apply <work-id> <work-hash>");
         const w = load(args[1]!);
-        if (args[2]!.length < 12 || !w.patchHash.startsWith(args[2]!)) throw new Error("give at least the first 12 characters of the patch hash that `cpart work show` printed");
-        applyWork(flags.repo ?? w.repo, w, w.patchHash);
+        if (args[2]!.length < 12 || !w.workHash.startsWith(args[2]!)) throw new Error("give at least the first 12 characters of the work hash that `cpart work show` printed");
+        applyWork(flags.repo ?? w.repo, w, w.workHash);
         return out(`Wrote ${w.files.length} file(s) in ${flags.repo ?? w.repo}. Nothing is committed. Run your tests, then commit.`, { files: w.files.map((f) => f.path) });
       }
       need(2, "work <thread> <id> --repo <path> --paths <a,b> --brief <text>");
@@ -327,7 +327,7 @@ async function main(): Promise<void> {
         { repo: flags.repo, paths: flags.paths.split(",").map((p) => p.trim()).filter(Boolean), brief: flags.brief, contract: c.contract, contact: t.contact, ...(flags.allow ? { allow: flags.allow } : {}) },
         key ? anthropicApi({ apiKey: key, maxTokens: 16000, ...pick }) : claudeCli({ timeoutMs: 600_000, ...pick }),
       );
-      const id = result.patchHash.slice(0, 10);
+      const id = result.workHash.slice(0, 10);
       mkdirSync(dir, { recursive: true, mode: 0o700 });
       const saved = { id, repo: flags.repo, ...result };
       writeFileSync(join(dir, `${id}.json`), JSON.stringify(saved), { mode: 0o600 });

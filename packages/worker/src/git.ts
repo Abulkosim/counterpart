@@ -16,12 +16,15 @@ const HARDENED = [
 ];
 
 export function git(cwd: string, args: string[], opts: { input?: string | Buffer; maxBuffer?: number } = {}): Buffer {
-  return execFileSync("git", [...HARDENED, ...args], {
+  // Replacement refs and grafts could make a commit id stand for other content,
+  // and a partial clone could go to the network for a missing object.
+  return execFileSync("git", ["--no-replace-objects", ...HARDENED, ...args], {
+    timeout: 30_000,
     cwd,
     input: opts.input,
     maxBuffer: opts.maxBuffer ?? 16 * 1024 * 1024,
     stdio: ["pipe", "pipe", "pipe"],
-    env: { PATH: process.env.PATH ?? "", HOME: "/nonexistent", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" },
+    env: { PATH: process.env.PATH ?? "", HOME: "/nonexistent", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", GIT_NO_LAZY_FETCH: "1", GIT_NO_REPLACE_OBJECTS: "1", LC_ALL: "C" },
   });
 }
 
@@ -48,3 +51,7 @@ export function lsTree(repo: string, commit: string, paths: string[]): TreeEntry
 
 export const readBlob = (repo: string, sha: string): Buffer => git(repo, ["cat-file", "blob", sha]);
 export const headCommit = (repo: string): string => git(repo, ["rev-parse", "--verify", "HEAD^{commit}"]).toString("utf8").trim();
+
+// Every committed path, for spotting a new file that differs from an existing
+// one only by case, which is the same file on some filesystems.
+export const allPaths = (repo: string, commit: string): string[] => git(repo, ["ls-tree", "-r", "-z", "--name-only", "--full-tree", commit], { maxBuffer: 64 * 1024 * 1024 }).toString("utf8").split("\0").filter(Boolean);

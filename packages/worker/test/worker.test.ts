@@ -1,7 +1,7 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Model, ModelRequest } from "@counterpart/frontdesk";
@@ -66,7 +66,7 @@ test("turns an honest reply into a patch that applies cleanly, without touching 
   assert.match(result.patch, /\+  return \{ data: page\.rows, next_cursor: page\.next \};/);
   assert.equal(readFileSync(join(r, "src/orders.js"), "utf8"), HANDLER, "nothing is written until the owner applies it");
 
-  apply(r, result, result.patchHash);
+  apply(r, result, result.workHash);
   assert.equal(readFileSync(join(r, "src/orders.js"), "utf8"), NEW_HANDLER);
   assert.equal(execFileSync("git", ["log", "--oneline"], { cwd: r }).toString().trim().split("\n").length, 1, "nothing is committed");
 });
@@ -119,7 +119,7 @@ test("the broker refuses edits outside what was named, and every kind of file th
   for (const p of ["package.json", ".github/workflows/ci.yml", "scripts/deploy.sh", "docs/api.md", "src/secret-notes.md"]) assert.ok(!result.patch.includes(`b/${p}`), p);
   assert.ok(result.patch.includes("diff --git a/src/new/ok.js b/src/new/ok.js\nnew file mode 100644"));
   assert.ok(!/ [ab]\/[ab]\//.test(result.patch), "no scratch directory names in the patch");
-  apply(r, result, result.patchHash);
+  apply(r, result, result.workHash);
   assert.ok(existsSync(join(r, "src/new/ok.js")));
   assert.equal(readFileSync(join(r, "package.json"), "utf8"), '{"name":"shop","scripts":{"test":"node --test"}}\n');
 });
@@ -170,20 +170,20 @@ test("flags new addresses, code that runs programs, and thinner tests", async ()
 test("apply refuses a different patch, a moved repository, or a dirty file", async () => {
   const r = repo();
   const result = await work(req(r), scripted({ notes: "", edits: [{ path: "src/orders.js", content: NEW_HANDLER }] }));
-  assert.throws(() => apply(r, result, "0".repeat(64)), /not the patch you reviewed/);
+  assert.throws(() => apply(r, result, "0".repeat(64)), /not the work you reviewed/);
   // The stored result is edited after review: same hash on record, different content to write.
   const swapped = { ...result, files: [{ path: "src/orders.js", content: NEW_HANDLER.replace("page.rows", "page.rows.concat(secrets)") }] };
-  assert.throws(() => apply(r, swapped, result.patchHash), /not the patch you reviewed/);
+  assert.throws(() => apply(r, swapped, result.workHash), /not the work you reviewed/);
   assert.equal(readFileSync(join(r, "src/orders.js"), "utf8"), HANDLER);
   writeFileSync(join(r, "src/orders.js"), `${HANDLER}// local edit\n`);
-  assert.throws(() => apply(r, result, result.patchHash), /uncommitted changes/);
+  assert.throws(() => apply(r, result, result.workHash), /uncommitted changes/);
   const added = await work(req(r, { paths: ["src/orders.js", "src/fresh"] }), scripted({ notes: "", edits: [{ path: "src/fresh/a.js", content: "export {};\n" }] }));
   mkdirSync(join(r, "src/fresh"));
   writeFileSync(join(r, "src/fresh/a.js"), "already here\n");
-  assert.throws(() => apply(r, added, added.patchHash), /already exists/);
+  assert.throws(() => apply(r, added, added.workHash), /already exists/);
   rmSync(join(r, "src/fresh"), { recursive: true });
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qam", "move"], { cwd: r });
-  assert.throws(() => apply(r, result, result.patchHash), /has moved/);
+  assert.throws(() => apply(r, result, result.workHash), /has moved/);
 });
 
 test("a repo's own hooks and filters do not run", async () => {
@@ -201,7 +201,7 @@ test("a repo's own hooks and filters do not run", async () => {
   }
   rmSync(marker, { force: true });
   const result = await work(req(r), scripted({ notes: "", edits: [{ path: "src/orders.js", content: NEW_HANDLER }] }));
-  apply(r, result, result.patchHash);
+  apply(r, result, result.workHash);
   assert.equal(readFileSync(join(r, "src/orders.js"), "utf8"), NEW_HANDLER);
   assert.equal(existsSync(marker), false, "something from the repo's git configuration was executed");
 });
@@ -223,6 +223,63 @@ test("apply will not write through a symlinked directory", async () => {
   dirs.push(outside);
   const result = await work(req(r, { paths: ["src/orders.js", "src/gen"] }), scripted({ notes: "", edits: [{ path: "src/gen/out.js", content: "export {};\n" }] }));
   symlinkSync(outside, join(r, "src/gen"));
-  assert.throws(() => apply(r, result, result.patchHash), /not a plain directory/);
+  assert.throws(() => apply(r, result, result.workHash), /not a plain directory/);
   assert.equal(existsSync(join(outside, "out.js")), false);
+});
+
+test("the work hash covers every byte written: a file slipped into a stored result is refused", async () => {
+  const r = repo();
+  // A committed file that is not valid UTF-8. Decoding and re-encoding it changes its bytes without showing in a text diff.
+  writeFileSync(join(r, "src/legacy.txt"), Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]));
+  execFileSync("git", ["add", "-A"], { cwd: r });
+  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "legacy"], { cwd: r });
+  const result = await work(req(r), scripted({ notes: "", edits: [{ path: "src/orders.js", content: NEW_HANDLER }] }));
+  const lossy = readFileSync(join(r, "src/legacy.txt")).toString("utf8");
+  const tampered = { ...result, files: [...result.files, { path: "src/legacy.txt", content: lossy }] };
+  assert.throws(() => apply(r, tampered, result.workHash), /not the work you reviewed/);
+  const both = { ...tampered, changes: [...result.changes, { path: "src/legacy.txt", status: "modified" as const, before: null, after: "x" }] };
+  assert.throws(() => apply(r, both, result.workHash), /not the work you reviewed/);
+  assert.deepEqual([...readFileSync(join(r, "src/legacy.txt"))], [0x63, 0x61, 0x66, 0xe9, 0x0a]);
+  assert.equal(readFileSync(join(r, "src/orders.js"), "utf8"), HANDLER);
+});
+
+test("files that run by convention, odd spellings and lookalike paths are refused", async () => {
+  const r = repo({ "src/Readme.md": "hi\n" });
+  const tries = [
+    "src/new/conftest.py", "src/new/__init__.py", "src/new/build.rs", "src/new/binding.gyp", "src/new/noxfile.py", "src/new/jest.config.js", "src/new/vite.config.ts",
+    "src/new/.eslintrc.js", "src/new/babel.config.cjs", "src/new/tsconfig.json", "src/new/.pre-commit-config.yaml", "src/new/Rakefile", "src/new/gulpfile.js",
+    "src/new/Package.json", "src/new/.GITHUB/workflows/x.yml", "src/new/node_modules/left-pad/index.js", "src/new/RUN.SH",
+    "src/new/a:stream.js", "src/new/trailing.js.", "src/new/CON", "src/new/nul.js", "src/new/e\u0301.js",
+    "src/README.md",
+  ];
+  const result = await work(req(r, { paths: ["src/orders.js", "src/new", "src"] }), scripted({ notes: "", edits: [...tries.map((path) => ({ path, content: "x\n" })), { path: "src/new/fine.js", content: "export {};\n" }] }));
+  assert.deepEqual(result.changes.map((c) => c.path), ["src/new/fine.js"]);
+  assert.equal(result.refused.length, tries.length);
+  assert.match(result.refused.find((x) => x.path === "src/README.md")!.reason, /collides with src\/Readme\.md/);
+  assert.ok(result.flags.some((f) => /new files/.test(f)));
+});
+
+test("apply refuses a working copy that was made executable, and replaces files whole", async () => {
+  const r = repo();
+  const result = await work(req(r), scripted({ notes: "", edits: [{ path: "src/orders.js", content: NEW_HANDLER }] }));
+  chmodSync(join(r, "src/orders.js"), 0o755);
+  assert.throws(() => apply(r, result, result.workHash), /uncommitted changes/);
+  chmodSync(join(r, "src/orders.js"), 0o644);
+  // A hard link elsewhere must keep the old content.
+  const outside = mkdtempSync(join(tmpdir(), "cpart-w-"));
+  dirs.push(outside);
+  linkSync(join(r, "src/orders.js"), join(outside, "alias.js"));
+  apply(r, result, result.workHash);
+  assert.equal(readFileSync(join(r, "src/orders.js"), "utf8"), NEW_HANDLER);
+  assert.equal(readFileSync(join(outside, "alias.js"), "utf8"), HANDLER);
+});
+
+test("the owner's brief is in the system prompt; the agreement is data in the message", async () => {
+  const r = repo();
+  const model = scripted({ notes: "", edits: [] });
+  await work(req(r), model);
+  assert.ok(model.calls[0]!.system.includes(JSON.stringify("Switch listOrders to cursor pagination.")));
+  assert.ok(!model.calls[0]!.system.includes(CONTRACT.text));
+  assert.ok(model.calls[0]!.prompt.includes(JSON.stringify(CONTRACT.text)));
+  assert.ok(!model.calls[0]!.prompt.includes("Switch listOrders"));
 });
