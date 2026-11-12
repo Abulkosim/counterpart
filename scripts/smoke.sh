@@ -21,8 +21,8 @@ start_daemon() { CPART_HOME=$WORK/$1 node packages/cli/src/main.ts daemon >>"$WO
 
 step "relay and two identities"
 start_relay
-cpart alice init --relay "$RELAY"
-cpart bob init --relay "$RELAY"
+cpart alice init --relay "$RELAY" --no-passphrase
+cpart bob init --relay "$RELAY" --no-passphrase
 start_daemon alice
 start_daemon bob
 

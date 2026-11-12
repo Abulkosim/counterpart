@@ -1,9 +1,10 @@
 import { isId, isInt, isKey, isObject, isStr, onlyKeys } from "./check.ts";
+import { type Approval, type Contract, CONTRACT_LIMITS, parseApproval, parseContract } from "./contract.ts";
 
 // One entry in a thread's log. Events form a DAG through `parents`; there is no
 // global order. `lane` separates free talk from control traffic; the act lane
-// (typed, grant-checked operations) arrives with contracts.
-export type Lane = "control" | "talk";
+// holds typed operations: only these change what has been agreed.
+export type Lane = "control" | "talk" | "act";
 
 export interface EventBodies {
   "contact.request": { token: string };
@@ -11,8 +12,19 @@ export interface EventBodies {
   // Carries nothing. Its envelope delivers the sender's renewed device credential.
   "contact.hello": Record<string, never>;
   "thread.opened": { goal: string; participants: string[] };
-  "talk.posted": { text: string };
+  // `via` says who on the sender's side wrote it. It is the sender's own claim.
+  "talk.posted": { text: string; via?: Via };
+  // Proposals are addressed by the id of the event that made them, never by
+  // contract hash alone: the same text can be proposed twice, and consent to
+  // one proposal is not consent to the other.
+  "contract.proposed": { contract: Contract; supersedes?: string };
+  "contract.accepted": { approval: Approval };
+  "contract.declined": { proposalId: string; reason?: string };
+  "contract.withdrawn": { proposalId: string };
 }
+
+export type Via = "human" | "agent" | "frontdesk";
+const VIAS: readonly unknown[] = ["human", "agent", "frontdesk"];
 
 export type EventType = keyof EventBodies;
 
@@ -43,6 +55,10 @@ const lanes: Record<EventType, Lane> = {
   "contact.hello": "control",
   "thread.opened": "control",
   "talk.posted": "talk",
+  "contract.proposed": "act",
+  "contract.accepted": "act",
+  "contract.declined": "act",
+  "contract.withdrawn": "act",
 };
 
 const bodies: { [T in EventType]: (b: Record<string, unknown>) => boolean } = {
@@ -57,8 +73,21 @@ const bodies: { [T in EventType]: (b: Record<string, unknown>) => boolean } = {
     b.participants.length <= LIMITS.participants &&
     b.participants.every(isKey) &&
     new Set(b.participants).size === b.participants.length,
-  "talk.posted": (b) => onlyKeys(b, ["text"]) && isStr(b.text, 1, LIMITS.text),
+  "talk.posted": (b) => isStr(b.text, 1, LIMITS.text) && (onlyKeys(b, ["text"]) || (onlyKeys(b, ["text", "via"]) && VIAS.includes(b.via))),
+  "contract.proposed": (b) => (onlyKeys(b, ["contract"]) || (onlyKeys(b, ["contract", "supersedes"]) && isId(b.supersedes))) && ok(() => parseContract(b.contract)),
+  "contract.accepted": (b) => onlyKeys(b, ["approval"]) && ok(() => parseApproval(b.approval)),
+  "contract.declined": (b) => isId(b.proposalId) && (onlyKeys(b, ["proposalId"]) || (onlyKeys(b, ["proposalId", "reason"]) && isStr(b.reason, 1, CONTRACT_LIMITS.reason))),
+  "contract.withdrawn": (b) => onlyKeys(b, ["proposalId"]) && isId(b.proposalId),
 };
+
+function ok(fn: () => unknown): boolean {
+  try {
+    fn();
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 const FIELDS = ["id", "threadId", "author", "authorSeq", "parents", "lane", "type", "body", "createdAt"] as const;
 
