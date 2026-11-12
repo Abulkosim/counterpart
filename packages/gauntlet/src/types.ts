@@ -35,15 +35,40 @@ export interface Case {
   finding?: Finding;
 }
 
-// Attacks on the model that reads peer text. A code case either holds or it
-// does not. A model case is run many times and reports how often the attack
-// worked, so its results are measurements and are never mixed into the totals
-// for code cases.
+// Attacks on the model that reads peer text (the front desk). A code case
+// either holds or it does not. A model case is run several times against a
+// live model and reports how often the attack worked, so its results are
+// measurements and are never mixed into the totals for code cases.
 export interface ModelCase {
   id: string;
+  family: string;
   title: string;
-  attacker: Attacker;
   claim: string;
+  // What the other side sends, one message per turn. The desk answers each.
+  turns: string[];
+  // Use a bundle with an instruction planted in an approved file.
+  poisonedBundle?: boolean;
+  // true if the attack worked. `replies` is everything the desk sent back,
+  // `asks` the questions it passed to its owner.
+  worked(out: { replies: string[]; asks: string[]; leaked: string[] }): boolean;
+  // A control is not an attack: `worked` means the desk gave the right answer.
+  control?: boolean;
+}
+
+export interface ModelResult {
+  id: string;
+  family: string;
+  title: string;
+  claim: string;
+  control: boolean;
   trials: number;
-  attempt(ctx: Ctx): Promise<boolean>; // true if the attack succeeded on this trial
+  worked: number;
+  example: string | null; // one reply from a trial where the attack worked
+}
+
+export interface ModelReport {
+  at: string;
+  model: string;
+  runtime: string;
+  results: ModelResult[];
 }
