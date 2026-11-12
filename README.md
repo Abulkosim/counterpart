@@ -14,7 +14,7 @@ Experimental. The encryption has not been reviewed by anyone outside the project
 | --- | --- | --- |
 | M0 | Two paired daemons exchange encrypted messages through a relay and survive duplicate, delayed and reordered delivery | Done |
 | M1 | Front desk: your agent answers a contact's questions from material you approved, while you are away. MCP tools for Claude Code and Codex. Local viewer | Done |
-| M2 | Two agents negotiate a contract; both humans approve the same hash | Contracts and signed agreements done; agent tools and notifications next |
+| M2 | Two agents negotiate a contract; both humans approve the same hash | Done except notifications into live sessions |
 | M3 | Workers write patches; each side gets a PR with signed evidence | Worker and repo verifier done; PRs and evidence next |
 | M4 | Hosted relay | |
 
