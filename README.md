@@ -24,7 +24,18 @@ Needs Node 24 and pnpm.
 
 ```sh
 pnpm install
-pnpm verify
+pnpm verify          # types and tests
+./scripts/smoke.sh   # two people and a relay as real processes
 ```
+
+By hand, in three terminals:
+
+```sh
+pnpm cpart relay --port 7447
+CPART_HOME=/tmp/alice pnpm cpart init --relay ws://127.0.0.1:7447 && CPART_HOME=/tmp/alice pnpm cpart daemon
+CPART_HOME=/tmp/bob   pnpm cpart init --relay ws://127.0.0.1:7447 && CPART_HOME=/tmp/bob   pnpm cpart daemon
+```
+
+Then `cpart invite bob` as Alice, `cpart accept <invite> alice` as Bob, and `cpart open`, `cpart say`, `cpart log`.
 
 See [docs/design.md](docs/design.md) for how it works and [docs/verification.md](docs/verification.md) for what has been tested.

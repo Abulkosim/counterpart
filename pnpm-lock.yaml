@@ -196,6 +196,10 @@ importers:
       ws:
         specifier: ^8.22.2
         version: 8.22.2
+    devDependencies:
+      '@counterpart/relay':
+        specifier: workspace:*
+        version: link:../relay
 
   packages/protocol:
     dependencies:

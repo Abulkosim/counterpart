@@ -38,6 +38,12 @@ export async function issueDevice(root: KeyPair, now = Date.now(), ttlMs = DEFAU
   return { credential: { ...body, sig: sign(root, DOMAIN, canonicalBytes(body)) }, sign: signKey, enc };
 }
 
+// Same device keys, fresh expiry. The device id does not change.
+export function renewDevice(root: KeyPair, d: DeviceSecrets, now = Date.now(), ttlMs = DEFAULT_CREDENTIAL_TTL_MS): DeviceSecrets {
+  const body = { v: 1 as const, rootKey: root.publicKey, signKey: d.sign.publicKey, encKey: d.enc.publicKey, issuedAt: now, expiresAt: now + ttlMs };
+  return { ...d, credential: { ...body, sig: sign(root, DOMAIN, canonicalBytes(body)) } };
+}
+
 export function parseCredential(x: unknown): DeviceCredential {
   if (!isObject(x) || Object.keys(x).length !== 7) throw new Error("credential: shape");
   const { v, rootKey, signKey, encKey, issuedAt, expiresAt, sig } = x;
