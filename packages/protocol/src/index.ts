@@ -3,6 +3,7 @@ export * from "./canonical.ts";
 export * from "./check.ts";
 export * from "./keys.ts";
 export * from "./identity.ts";
+export * from "./contract.ts";
 export * from "./events.ts";
 export * from "./envelope.ts";
 export * from "./invite.ts";

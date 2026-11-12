@@ -21,8 +21,8 @@ field() { node -pe "JSON.parse(require('fs').readFileSync(0))$1"; }
 node packages/cli/src/main.ts relay --port "$PORT" --db "$WORK/relay.db" >"$WORK/relay.log" 2>&1 &
 pids+=("$!")
 sleep 1
-cpart alice init --relay "$RELAY" >/dev/null
-cpart bob init --relay "$RELAY" >/dev/null
+cpart alice init --relay "$RELAY" --no-passphrase >/dev/null
+cpart bob init --relay "$RELAY" --no-passphrase >/dev/null
 CPART_HOME=$WORK/alice node packages/cli/src/main.ts daemon >"$WORK/alice.log" 2>&1 &
 pids+=("$!")
 CPART_HOME=$WORK/bob node packages/cli/src/main.ts daemon >"$WORK/bob.log" 2>&1 &

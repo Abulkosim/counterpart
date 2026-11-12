@@ -33,3 +33,5 @@ jobs:
       - run: pnpm verify
       - name: Run the real programs end to end
         run: ./scripts/smoke.sh
+      - name: Reach a signed agreement end to end
+        run: ./scripts/contract-smoke.sh

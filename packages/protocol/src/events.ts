@@ -1,9 +1,10 @@
 import { isId, isInt, isKey, isObject, isStr, onlyKeys } from "./check.ts";
+import { type Approval, type Contract, CONTRACT_LIMITS, parseApproval, parseContract } from "./contract.ts";
 
 // One entry in a thread's log. Events form a DAG through `parents`; there is no
 // global order. `lane` separates free talk from control traffic; the act lane
-// (typed, grant-checked operations) arrives with contracts.
-export type Lane = "control" | "talk";
+// holds typed operations: only these change what has been agreed.
+export type Lane = "control" | "talk" | "act";
 
 export interface EventBodies {
   "contact.request": { token: string };
@@ -13,6 +14,11 @@ export interface EventBodies {
   "thread.opened": { goal: string; participants: string[] };
   // `via` says who on the sender's side wrote it. It is the sender's own claim.
   "talk.posted": { text: string; via?: Via };
+  // `supersedes` names the contract hash this proposal replaces.
+  "contract.proposed": { contract: Contract; supersedes?: string };
+  "contract.accepted": { approval: Approval };
+  "contract.declined": { contractHash: string; reason?: string };
+  "contract.withdrawn": { contractHash: string };
 }
 
 export type Via = "human" | "agent" | "frontdesk";
@@ -47,6 +53,10 @@ const lanes: Record<EventType, Lane> = {
   "contact.hello": "control",
   "thread.opened": "control",
   "talk.posted": "talk",
+  "contract.proposed": "act",
+  "contract.accepted": "act",
+  "contract.declined": "act",
+  "contract.withdrawn": "act",
 };
 
 const bodies: { [T in EventType]: (b: Record<string, unknown>) => boolean } = {
@@ -62,7 +72,20 @@ const bodies: { [T in EventType]: (b: Record<string, unknown>) => boolean } = {
     b.participants.every(isKey) &&
     new Set(b.participants).size === b.participants.length,
   "talk.posted": (b) => isStr(b.text, 1, LIMITS.text) && (onlyKeys(b, ["text"]) || (onlyKeys(b, ["text", "via"]) && VIAS.includes(b.via))),
+  "contract.proposed": (b) => (onlyKeys(b, ["contract"]) || (onlyKeys(b, ["contract", "supersedes"]) && isKey(b.supersedes))) && ok(() => parseContract(b.contract)),
+  "contract.accepted": (b) => onlyKeys(b, ["approval"]) && ok(() => parseApproval(b.approval)),
+  "contract.declined": (b) => isKey(b.contractHash) && (onlyKeys(b, ["contractHash"]) || (onlyKeys(b, ["contractHash", "reason"]) && isStr(b.reason, 1, CONTRACT_LIMITS.reason))),
+  "contract.withdrawn": (b) => onlyKeys(b, ["contractHash"]) && isKey(b.contractHash),
 };
+
+function ok(fn: () => unknown): boolean {
+  try {
+    fn();
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 const FIELDS = ["id", "threadId", "author", "authorSeq", "parents", "lane", "type", "body", "createdAt"] as const;
 
