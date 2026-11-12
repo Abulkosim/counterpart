@@ -201,6 +201,21 @@ importers:
         specifier: workspace:*
         version: link:../relay
 
+  packages/gauntlet:
+    dependencies:
+      '@counterpart/daemon':
+        specifier: workspace:*
+        version: link:../daemon
+      '@counterpart/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@counterpart/relay':
+        specifier: workspace:*
+        version: link:../relay
+      ws:
+        specifier: ^8.22.2
+        version: 8.22.2
+
   packages/protocol:
     dependencies:
       '@hpke/chacha20poly1305':
