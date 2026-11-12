@@ -4,5 +4,5 @@
   "private": true,
   "type": "module",
   "exports": "./src/index.ts",
-  "dependencies": { "@counterpart/daemon": "workspace:*", "@counterpart/protocol": "workspace:*" }
+  "dependencies": { "@counterpart/daemon": "workspace:*", "@counterpart/frontdesk": "workspace:*", "@counterpart/protocol": "workspace:*" }
 }

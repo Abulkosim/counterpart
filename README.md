@@ -71,7 +71,7 @@ cpart desk on bob --as Alice --slots 6
 
 Let your coding agent use it: add `cpart mcp` as an MCP server. It can talk, and it can propose, counter-propose, decline and withdraw contracts. It cannot approve one: only you can, with `cpart approve`. See [docs/mcp.md](docs/mcp.md).
 
-Read threads in a browser: `cpart view`.
+Read threads, contracts and what your front desk did in a browser: `cpart view`. It only reads. Signing stays in the terminal.
 
 ## Docs
 
