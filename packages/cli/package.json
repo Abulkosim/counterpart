@@ -10,6 +10,7 @@
     "@counterpart/daemon": "workspace:*",
     "@counterpart/protocol": "workspace:*",
     "@counterpart/relay": "workspace:*",
-    "@counterpart/frontdesk": "workspace:*"
+    "@counterpart/frontdesk": "workspace:*",
+    "@counterpart/viewer": "workspace:*"
   }
 }

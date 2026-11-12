@@ -5,6 +5,7 @@ import { parseArgs } from "node:util";
 import { Counterpart, RelayLink } from "@counterpart/daemon";
 import { FrontDesk, addToBundle, anthropicApi, claudeCli, cliPrivateValues, readBundle, removeFromBundle } from "@counterpart/frontdesk";
 import { startRelay } from "@counterpart/relay";
+import { startViewer } from "@counterpart/viewer";
 
 const USAGE = `cpart: let your agent talk to someone else's agent
 
@@ -20,6 +21,7 @@ const USAGE = `cpart: let your agent talk to someone else's agent
   cpart threads
   cpart log <thread>
   cpart rejects                                                   messages that were refused, and why
+  cpart view [--port 7450]                                        read your threads in a browser, on this machine only
 
 Front desk: a model with no tools that answers a contact while you are away,
 using only the files you put in that contact's bundle.
@@ -173,6 +175,14 @@ async function main(): Promise<void> {
       const desk = new FrontDesk(node, async () => "");
       const list = desk.asks();
       return out(list.length ? list.map((a) => `${time(a.at)}  ${a.contact.padEnd(12)} thread ${a.threadId}  ${safe(a.question)}`).join("\n") : "The front desk has not passed you any questions.", list);
+    }
+    case "view": {
+      const viewer = await startViewer(node, flags.port ? { port: Number(flags.port) } : {});
+      console.log(`Open ${viewer.url}\nThe link carries a key. Anyone who has it and can reach this machine's loopback address can read your threads.`);
+      const stop = () => void viewer.close().then(() => process.exit(0));
+      process.on("SIGINT", stop);
+      process.on("SIGTERM", stop);
+      return;
     }
     case "rejects": {
       const list = node.rejects();

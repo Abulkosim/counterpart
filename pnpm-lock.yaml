@@ -190,6 +190,9 @@ importers:
       '@counterpart/relay':
         specifier: workspace:*
         version: link:../relay
+      '@counterpart/viewer':
+        specifier: workspace:*
+        version: link:../viewer
 
   packages/daemon:
     dependencies:
