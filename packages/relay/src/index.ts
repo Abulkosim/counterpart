@@ -23,6 +23,12 @@ export interface RelayOptions {
   maxPerSenderTotal?: number; // queued messages from one device to everyone
   maxTotal?: number;
   deliveryWindow?: number; // unacknowledged deliveries per connection
+  // A sender is "known" to a recipient once the recipient has accepted a
+  // message from it. Everyone else shares a small allowance per mailbox, so
+  // throwaway identities cannot fill a mailbox and lock out real contacts.
+  maxUnknownPerMailbox?: number;
+  maxPerUnknownSender?: number;
+  maxUnauthenticated?: number; // sockets that have not logged in yet
   framesPerSecond?: number;
   now?: () => number;
   log?: (line: string) => void;
@@ -54,6 +60,12 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
   const maxPerSenderTotal = opts.maxPerSenderTotal ?? 2000;
   const maxTotal = opts.maxTotal ?? 200_000;
   const window = opts.deliveryWindow ?? 100;
+  const maxUnknownPerMailbox = opts.maxUnknownPerMailbox ?? 50;
+  const maxPerUnknownSender = opts.maxPerUnknownSender ?? 5;
+  const maxUnauthenticated = opts.maxUnauthenticated ?? 128;
+  let unauthenticated = 0;
+  // Rate limits follow the device, not the socket, so reconnecting earns nothing.
+  const buckets = new Map<string, { tokens: number; refilled: number }>();
   const rate = opts.framesPerSecond ?? 50;
   const allow = new Set(opts.allowRoots ?? []);
 
@@ -73,6 +85,7 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
     );
     CREATE INDEX IF NOT EXISTS mailbox_pair ON mailbox (to_device, from_device);
     CREATE INDEX IF NOT EXISTS mailbox_from ON mailbox (from_device);
+    CREATE TABLE IF NOT EXISTS known (to_device TEXT NOT NULL, from_device TEXT NOT NULL, PRIMARY KEY (to_device, from_device));
   `);
   const q = {
     find: db.prepare("SELECT hash, from_device FROM mailbox WHERE to_device = ? AND id = ?"),
@@ -80,6 +93,10 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
     pending: db.prepare("SELECT id, wire FROM mailbox WHERE to_device = ? AND expires_at > ? ORDER BY seq LIMIT ?"),
     countFrom: db.prepare("SELECT COUNT(*) AS n FROM mailbox WHERE from_device = ?"),
     ack: db.prepare("DELETE FROM mailbox WHERE to_device = ? AND id = ?"),
+    sender: db.prepare("SELECT from_device FROM mailbox WHERE to_device = ? AND id = ?"),
+    know: db.prepare("INSERT OR IGNORE INTO known (to_device, from_device) VALUES (?, ?)"),
+    isKnown: db.prepare("SELECT 1 FROM known WHERE to_device = ? AND from_device = ?"),
+    countUnknown: db.prepare("SELECT COUNT(*) AS n FROM mailbox m WHERE m.to_device = ? AND NOT EXISTS (SELECT 1 FROM known k WHERE k.to_device = m.to_device AND k.from_device = m.from_device)"),
     countPair: db.prepare("SELECT COUNT(*) AS n FROM mailbox WHERE to_device = ? AND from_device = ?"),
     countBox: db.prepare("SELECT COUNT(*) AS n FROM mailbox WHERE to_device = ?"),
     countAll: db.prepare("SELECT COUNT(*) AS n FROM mailbox"),
@@ -116,6 +133,13 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
 
   wss.on("connection", (ws) => {
     const s: Session = { device: null, outstanding: new Set(), nonce: randomBytes(24).toString("base64url"), tokens: rate * 2, refilled: now() };
+    if (unauthenticated >= maxUnauthenticated) return ws.close(4013, "too many connections waiting to log in");
+    unauthenticated++;
+    let counted = true;
+    const uncount = (): void => {
+      if (counted) unauthenticated--;
+      counted = false;
+    };
     const authTimer = setTimeout(() => ws.close(4001, "auth timeout"), 10_000);
     send(ws, { t: "challenge", nonce: s.nonce });
 
@@ -148,6 +172,12 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
           return refuse(ws, e instanceof RelayError ? e.code : "auth_failed");
         }
         clearTimeout(authTimer);
+        uncount();
+        const kept = buckets.get(s.device);
+        if (kept) {
+          s.tokens = Math.min(s.tokens, kept.tokens + ((t - kept.refilled) / 1000) * rate);
+          if (s.tokens < 0) return ws.close(4008, "rate limit");
+        }
         online.get(s.device)?.ws.close(4009, "replaced by a newer connection");
         online.set(s.device, { ws, s });
         send(ws, { t: "ready", device: s.device });
@@ -171,6 +201,8 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
             // Retrying the same message is fine. Reusing an id for different bytes is not.
             if (existing.hash !== hash || existing.from_device !== s.device) throw new RelayError("conflict");
           } else {
+            const stranger = !q.isKnown.get(to, s.device);
+            if (stranger && (count(q.countPair, to, s.device) >= maxPerUnknownSender || count(q.countUnknown, to) >= maxUnknownPerMailbox)) throw new RelayError("mailbox_full");
             if (
               count(q.countPair, to, s.device) >= maxPerSender ||
               count(q.countBox, to) >= maxPerMailbox ||
@@ -191,6 +223,11 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
         }
       } else if (frame.t === "ack") {
         if (!isId(frame.id)) return;
+        // `ok` means the recipient accepted the message, which makes its sender known to them.
+        if ((frame as { ok?: unknown }).ok === true) {
+          const from = (q.sender.get(s.device, frame.id) as { from_device: string } | undefined)?.from_device;
+          if (from) q.know.run(s.device, from);
+        }
         q.ack.run(s.device, frame.id);
         if (s.outstanding.delete(frame.id) && s.outstanding.size === 0) flush(s.device);
       } else ws.close(4002, "bad frame");
@@ -198,6 +235,11 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
 
     ws.on("close", () => {
       clearTimeout(authTimer);
+      uncount();
+      if (s.device) {
+        buckets.set(s.device, { tokens: s.tokens, refilled: s.refilled });
+        if (buckets.size > 50_000) buckets.delete(buckets.keys().next().value!);
+      }
       if (s.device && online.get(s.device)?.ws === ws) online.delete(s.device);
     });
     ws.on("error", () => ws.terminate());

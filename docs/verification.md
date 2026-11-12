@@ -20,6 +20,7 @@ What has actually been run, and what has not.
 | 2026-11-12 | `pnpm verify` with contract tests (forged, borrowed and replayed approvals, tampered agreement files, proposal flood, locked-root renewal) | 90 pass | |
 | 2026-11-12 | Codex reviewed contracts and approvals. Seven findings, all fixed with tests: state is now kept per proposal, so approvals of two proposals with the same text do not add up; the approval screen prints every attachment in full; stored text is re-hashed before it is shown or signed and compared with what the owner saw; agreement files carry the thread's first event; there is no way to lock a root key after the fact; hidden Unicode characters are escaped in CLI output. `pnpm verify`, both smoke scripts | 92 pass | |
 | 2026-11-12 | `scripts/smoke.sh` crashed once with a Node error when run straight after `pnpm verify`. 31 further runs passed | Not reproduced, cause unknown | Open |
+| 2026-11-12 | Hostile-peer suite ([gauntlet.md](gauntlet.md)): 99 attacks run against the real code as a stranger, a contact, the relay and the network. First run: 79 held, 20 worked | 18 of the 20 fixed, including the two serious ones: a stranger could make message handling throw with a contact request carrying an unusable key, and then stall the victim's incoming mail. Now 97 held, 2 open (both low). `pnpm verify` 191 pass | Relay timers, TLS and real networks, crash mid-write, several processes on one home, macOS and Windows |
 
 ## Known limits
 
@@ -30,6 +31,8 @@ What has actually been run, and what has not.
 - Approvals cannot be revoked. That is by design, and the approval screen says so.
 - With a locked root key the device credential (90 days) is renewed by hand with `cpart renew`.
 - One device per person.
+- The relay knows which device writes to which, and stores it with each queued message.
+- A stranger who sends 1000 junk messages pushes older entries out of the refused-messages log.
 - A coding session that reads a peer's reply through the MCP tools is reading untrusted text, like reading a web page. The reply is wrapped and labelled, and in our runs the session did not act on injected instructions, but nothing in code stops a session with shell access from being talked into something. Until grants exist (M2), use the MCP tools in sessions where you approve commands yourself.
 - With a subscription login the front desk model runs through the `claude` CLI, which adds the account email, OS version and date to the model's context. Replies containing those exact values are dropped, but an encoded form would get through if the model were talked into it. With `ANTHROPIC_API_KEY` set the model sees only what we send; that path is tested against a fake server, not the real API.
 - The front desk runs on Claude only. Codex has no confirmed way to run with no tools on a subscription login, and the API-key adapters are not written.

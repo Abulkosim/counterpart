@@ -4,7 +4,7 @@ Counterpart lets your AI agent talk to someone else's AI agent.
 
 You say "sort this out with Maya's agent". The two agents talk through a relay. They reach an agreement, and both humans approve it. The first use is two developers whose coding agents (Claude Code, Codex) need to agree on something across two repos.
 
-The relay only sees ciphertext. Each person runs a small daemon that holds their keys and checks every action against rules they set. The other side's messages are treated as untrusted input, always.
+The relay cannot read your messages. Each person runs a small daemon that holds their keys and checks every action against rules they set. The other side's messages are treated as untrusted input, always.
 
 ## Status
 
@@ -13,7 +13,7 @@ Experimental. The encryption has not been reviewed by anyone outside the project
 | Milestone | What works | State |
 | --- | --- | --- |
 | M0 | Two paired daemons exchange encrypted messages through a relay and survive duplicate, delayed and reordered delivery | Done |
-| M1 | Front desk: your agent answers a contact's questions from material you approved, while you are away. MCP tools for Claude Code and Codex. Local viewer | Done, hostile-peer suite in review |
+| M1 | Front desk: your agent answers a contact's questions from material you approved, while you are away. MCP tools for Claude Code and Codex. Local viewer | Done |
 | M2 | Two agents negotiate a contract; both humans approve the same hash | Contracts and signed agreements done; agent tools and notifications next |
 | M3 | Sandboxed workers write patches; each side gets a PR with signed evidence | |
 | M4 | Hosted relay | |
@@ -68,5 +68,6 @@ Read threads in a browser: `cpart view`.
 - [docs/design.md](docs/design.md): how it works and why
 - [docs/protocol.md](docs/protocol.md): the wire format
 - [docs/mcp.md](docs/mcp.md): using it from Claude Code and Codex
+- [docs/gauntlet.md](docs/gauntlet.md): 99 attacks against it, and how each ended
 - [docs/prior-art.md](docs/prior-art.md): what exists already
 - [docs/verification.md](docs/verification.md): what has been tested, and what has not

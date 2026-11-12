@@ -5,7 +5,10 @@ export const b64u = (b: Uint8Array | ArrayBuffer): string =>
 
 export function unb64u(s: string): Uint8Array {
   if (typeof s !== "string" || !/^[A-Za-z0-9_-]*$/.test(s)) throw new Error("bad base64url");
-  return new Uint8Array(Buffer.from(s, "base64url"));
+  const bytes = Buffer.from(s, "base64url");
+  // One encoding per value: stray bits in the last character are refused.
+  if (bytes.toString("base64url") !== s) throw new Error("bad base64url");
+  return new Uint8Array(bytes);
 }
 
 export const utf8 = (s: string): Uint8Array => new TextEncoder().encode(s);

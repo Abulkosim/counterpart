@@ -15,7 +15,8 @@ export type ClientFrame =
   // a client's login to another.
   | { t: "auth"; credential: DeviceCredential; relay: string; sig: string }
   | { t: "send"; wire: Wire }
-  | { t: "ack"; id: string };
+  // `ok` is true when the message was accepted, false or absent when it was refused.
+  | { t: "ack"; id: string; ok?: boolean };
 
 export const RELAY_AUTH_DOMAIN = "relay-auth/v1";
 

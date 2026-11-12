@@ -291,9 +291,9 @@ async function main(): Promise<void> {
       const link = new RelayLink(node).start();
       link.on("ready", () => console.log(`connected to ${node.relay}`));
       link.on("offline", () => console.log("relay connection lost, retrying"));
-      link.on("error", (e) => console.error(`error: ${e.message}`));
+      link.on("error", (e) => console.error(`error: ${safe(e.message)}`));
       link.on("verdict", (v) => {
-        if (v.result === "rejected") console.log(`refused a message: ${v.reason}`);
+        if (v.result === "rejected") console.log(`refused a message: ${safe(v.reason)}`);
       });
       link.on("event", (e) => console.log(`${e.type} in thread ${e.threadId}`));
       // With an API key the model sees exactly what we send. Without one, the
@@ -354,8 +354,9 @@ async function main(): Promise<void> {
           : e.type === "contract.declined" ? `declined proposal ${(b.proposalId as string).slice(0, 12)}`
           : e.type === "contract.withdrawn" ? `withdrew proposal ${(b.proposalId as string).slice(0, 12)}`
           : e.type;
-        const text = what.split("\n").map(safe).join(`\n${" ".repeat(34)}`);
-        return `${time(e.createdAt)}  ${who.padEnd(12)} ${e.status === "pending" ? "(held) " : ""}${text}`;
+        // One event, one line, stamped with the time it took effect here. The
+        // sender's own clock and line breaks are theirs to fake.
+        return `${time(e.receivedAt)}  ${who.padEnd(12)} ${e.status === "pending" ? "(held) " : ""}${safe(what)}`;
       });
       return out(lines.join("\n"), events);
     }
@@ -410,7 +411,7 @@ async function main(): Promise<void> {
     }
     case "rejects": {
       const list = node.rejects();
-      return out(list.length ? list.map((r) => `${time(r.at)}  ${r.reason}`).join("\n") : "Nothing has been refused.", list);
+      return out(list.length ? list.map((r) => `${time(r.at)}  ${safe(r.reason)}`).join("\n") : "Nothing has been refused.", list);
     }
     default:
       throw new Error(`unknown command "${cmd}". Run: cpart help`);

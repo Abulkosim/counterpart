@@ -10,7 +10,8 @@
     "test": "node --test --test-concurrency=1 \"packages/*/test/*.test.ts\"",
     "vectors": "node packages/protocol/scripts/make-vectors.ts",
     "verify": "pnpm typecheck && pnpm test",
-    "cpart": "node packages/cli/src/main.ts"
+    "cpart": "node packages/cli/src/main.ts",
+    "gauntlet": "node packages/gauntlet/src/report.ts"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
