@@ -3,7 +3,10 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { Counterpart, RelayLink } from "@counterpart/daemon";
+import { FrontDesk, addToBundle, anthropicApi, claudeCli, cliPrivateValues, readBundle, removeFromBundle } from "@counterpart/frontdesk";
+import { startMcpServer } from "@counterpart/mcp";
 import { startRelay } from "@counterpart/relay";
+import { startViewer } from "@counterpart/viewer";
 
 const USAGE = `cpart: let your agent talk to someone else's agent
 
@@ -19,6 +22,20 @@ const USAGE = `cpart: let your agent talk to someone else's agent
   cpart threads
   cpart log <thread>
   cpart rejects                                                   messages that were refused, and why
+  cpart mcp                                                       MCP server on stdio, for Claude Code and Codex
+  cpart view [--port 7450]                                        read your threads in a browser, on this machine only
+
+Front desk: a model with no tools that answers a contact while you are away,
+using only the files you put in that contact's bundle.
+
+  cpart bundle add <contact> <file...>                            share copies of these files with a contact
+  cpart bundle list <contact>
+  cpart bundle remove <contact> <name>
+  cpart desk on <contact> [--as <your name>] [--slots 6] [--daily 30]
+  cpart desk off <contact>
+  cpart desk status
+  cpart desk refill <thread>                                      allow more replies in a thread
+  cpart asks                                                      questions the front desk passed to you
 
 Identity lives in $CPART_HOME (default ~/.counterpart). Add --json for machine output.`;
 
@@ -26,7 +43,7 @@ const { values: flags, positionals } = parseArgs({
   allowPositionals: true,
   options: {
     relay: { type: "string" }, port: { type: "string" }, host: { type: "string" }, db: { type: "string" },
-    home: { type: "string" }, url: { type: "string" }, json: { type: "boolean" }, help: { type: "boolean", short: "h" },
+    home: { type: "string" }, as: { type: "string" }, slots: { type: "string" }, daily: { type: "string" }, model: { type: "string" }, url: { type: "string" }, json: { type: "boolean" }, help: { type: "boolean", short: "h" },
   },
 });
 const [cmd, ...args] = positionals;
@@ -68,7 +85,15 @@ async function main(): Promise<void> {
         if (v.result === "rejected") console.log(`refused a message: ${v.reason}`);
       });
       link.on("event", (e) => console.log(`${e.type} in thread ${e.threadId}`));
-      const stop = () => void link.stop().then(() => process.exit(0));
+      // With an API key the model sees exactly what we send. Without one, the
+      // claude CLI is used with a subscription login; it adds a few values of its
+      // own, which are filtered out of replies.
+      const key = process.env.ANTHROPIC_API_KEY;
+      const pick = flags.model ? { model: flags.model } : {};
+      const desk = key ? new FrontDesk(node, anthropicApi({ apiKey: key, ...pick })) : new FrontDesk(node, claudeCli(pick), { forbidden: cliPrivateValues() });
+      desk.onError = (e) => console.error(`front desk: ${e.message}`);
+      desk.start();
+      const stop = () => void Promise.all([link.stop(), desk.stop()]).then(() => process.exit(0));
       process.on("SIGINT", stop);
       process.on("SIGTERM", stop);
       return;
@@ -107,11 +132,62 @@ async function main(): Promise<void> {
       if (!t) throw new Error(`no thread ${args[0]}`);
       const events = node.log(t.id);
       const lines = events.map((e) => {
-        const who = e.mine ? "me" : t.contact;
+        const via = (e.body as { via?: string }).via;
+        const who = e.mine ? (via === "frontdesk" ? "my desk" : "me") : t.contact;
         const what = e.type === "talk.posted" ? (e.body as { text: string }).text : e.type === "thread.opened" ? `opened: ${(e.body as { goal: string }).goal}` : e.type;
-        return `${time(e.createdAt)}  ${who.padEnd(12)} ${e.status === "pending" ? "(held) " : ""}${safe(what)}`;
+        const text = what.split("\n").map(safe).join(`\n${" ".repeat(34)}`);
+        return `${time(e.createdAt)}  ${who.padEnd(12)} ${e.status === "pending" ? "(held) " : ""}${text}`;
       });
       return out(lines.join("\n"), events);
+    }
+    case "bundle": {
+      need(2, "bundle add|list|remove <contact> ...");
+      const c = node.contact(args[1]!);
+      const b = args[0] === "add" ? addToBundle(home, c.name, args.slice(2)) : args[0] === "remove" ? removeFromBundle(home, c.name, args[2] ?? "") : readBundle(home, c.name);
+      if (args[0] === "add" && args.length < 3) throw new Error("usage: cpart bundle add <contact> <file...>");
+      const list = b.files.map((f) => `${f.name.padEnd(32)} ${String(Buffer.byteLength(f.text)).padStart(7)} bytes`).join("\n");
+      return out(b.files.length ? `${c.name} can be told what is in:\n${list}` : `Nothing is shared with ${c.name}.`, { contact: c.name, hash: b.hash, files: b.files.map((f) => ({ name: f.name, sha256: f.sha256 })) });
+    }
+    case "desk": {
+      const desk = new FrontDesk(node, async () => {
+        throw new Error("not available here");
+      });
+      const show = (d: { contact: string; enabled: boolean; owner: string; slotsPerThread: number; slotsPerDay: number }): string =>
+        `${d.contact.padEnd(20)} ${d.enabled ? "on " : "off"}  answers as ${d.owner}'s front desk, ${d.slotsPerThread} replies per thread, ${d.slotsPerDay} per day, ${readBundle(home, d.contact).files.length} file(s) shared`;
+      if (args[0] === "status" || !args[0]) {
+        const list = desk.desks();
+        return out(list.length ? list.map(show).join("\n") : "No contacts yet.", list);
+      }
+      if (args[0] === "refill") {
+        need(2, "desk refill <thread>");
+        desk.refill(args[1]!);
+        return out(`Thread ${args[1]} can get replies again.`, { ok: true });
+      }
+      if (args[0] !== "on" && args[0] !== "off") throw new Error("usage: cpart desk on|off|status|refill");
+      need(2, `desk ${args[0]} <contact>`);
+      const d = desk.configure(args[1]!, {
+        enabled: args[0] === "on",
+        ...(flags.as ? { owner: flags.as } : {}),
+        ...(flags.slots ? { slotsPerThread: Number(flags.slots) } : {}),
+        ...(flags.daily ? { slotsPerDay: Number(flags.daily) } : {}),
+      });
+      return out(show(d), d);
+    }
+    case "asks": {
+      const desk = new FrontDesk(node, async () => "");
+      const list = desk.asks();
+      return out(list.length ? list.map((a) => `${time(a.at)}  ${a.contact.padEnd(12)} thread ${a.threadId}  ${safe(a.question)}`).join("\n") : "The front desk has not passed you any questions.", list);
+    }
+    case "mcp":
+      await startMcpServer(node);
+      return;
+    case "view": {
+      const viewer = await startViewer(node, flags.port ? { port: Number(flags.port) } : {});
+      console.log(`Open ${viewer.url}\nThe link carries a key. Anyone who has it and can reach this machine's loopback address can read your threads.`);
+      const stop = () => void viewer.close().then(() => process.exit(0));
+      process.on("SIGINT", stop);
+      process.on("SIGTERM", stop);
+      return;
     }
     case "rejects": {
       const list = node.rejects();

@@ -215,7 +215,7 @@ export function createMcpServer(node: Counterpart, opts: McpOptions = {}): McpSe
     },
     guard(async ({ thread, text }, signal) => {
       const t = findThread(thread);
-      const event = await node.say(t.id, text);
+      const event = await node.say(t.id, text, "agent");
       const at = node.log(t.id).find((e) => e.id === event.id)?.ord ?? 0;
       const d = await delivery(event.id, t.contact, signal);
       return ok(`Message to ${t.contact} recorded in thread ${t.id}.\n${d}\ncursor: ${at}`);

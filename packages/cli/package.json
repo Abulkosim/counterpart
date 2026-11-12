@@ -3,6 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": { "cpart": "./src/main.ts" },
-  "dependencies": { "@counterpart/daemon": "workspace:*", "@counterpart/protocol": "workspace:*", "@counterpart/relay": "workspace:*" }
+  "bin": {
+    "cpart": "./src/main.ts"
+  },
+  "dependencies": {
+    "@counterpart/daemon": "workspace:*",
+    "@counterpart/protocol": "workspace:*",
+    "@counterpart/relay": "workspace:*",
+    "@counterpart/frontdesk": "workspace:*",
+    "@counterpart/viewer": "workspace:*",
+    "@counterpart/mcp": "workspace:*"
+  }
 }

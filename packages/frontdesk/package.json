@@ -1,0 +1,14 @@
+{
+  "name": "@counterpart/frontdesk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@counterpart/daemon": "workspace:*",
+    "@counterpart/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@counterpart/relay": "workspace:*"
+  }
+}
