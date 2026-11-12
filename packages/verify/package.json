@@ -1,0 +1,12 @@
+{
+  "name": "@counterpart/verify",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/verify.mjs",
+  "devDependencies": {
+    "@counterpart/daemon": "workspace:*",
+    "@counterpart/protocol": "workspace:*",
+    "@counterpart/relay": "workspace:*"
+  }
+}
