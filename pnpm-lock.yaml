@@ -283,6 +283,9 @@ importers:
       '@counterpart/daemon':
         specifier: workspace:*
         version: link:../daemon
+      '@counterpart/frontdesk':
+        specifier: workspace:*
+        version: link:../frontdesk
       '@counterpart/protocol':
         specifier: workspace:*
         version: link:../protocol

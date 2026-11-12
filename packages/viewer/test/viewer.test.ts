@@ -104,7 +104,8 @@ test("overview lists identity, threads, contacts and refused messages", async ()
   assert.match(res.headers["content-type"] ?? "", /^application\/json/);
   const o = JSON.parse(res.body) as ViewerOverview;
 
-  assert.deepEqual(o.me, { human: alice.me.human, device: alice.me.device, relay: alice.me.relay, rootKey: alice.me.rootKey, home: alice.home });
+  assert.deepEqual(o.me, { human: alice.me.human, device: alice.me.device, relay: alice.me.relay, rootKey: alice.me.rootKey, home: alice.home, protected: false, credentialExpiresAt: alice.credentialExpiresAt });
+  assert.deepEqual(o.needs, []);
   assert.deepEqual(o.threads.map((t) => t.id).sort(), [mine, theirs].sort());
   const t = o.threads.find((x) => x.id === mine)!;
   assert.deepEqual({ goal: t.goal, contact: t.contact, openedByMe: t.openedByMe, events: t.events }, { goal: "agree on the pagination format", contact: "bob", openedByMe: true, events: 3 });
@@ -144,7 +145,8 @@ test("a thread returns its events in order, with held ones marked", async () => 
       ["talk.posted", false, "pending", "held back"],
     ],
   );
-  for (const e of t.events) assert.deepEqual(Object.keys(e).sort(), ["createdAt", "id", "mine", "receivedAt", "status", "text", "type"]);
+  for (const e of t.events) assert.deepEqual(Object.keys(e).sort(), ["createdAt", "id", "mine", "proposalId", "receivedAt", "status", "text", "type", "via"]);
+  assert.deepEqual(t.proposals, []);
 });
 
 test("an unknown thread is a 404", async () => {
