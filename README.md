@@ -29,6 +29,7 @@ pnpm verify              # types and tests
 ./scripts/contract-smoke.sh # two people sign an agreement and verify it
 ./scripts/demo-work.sh       # after an agreement, a worker proposes the patch. Uses real models
 ./scripts/demo-agents.sh   # Bob's Claude Code session asks Alice's front desk. Uses real models
+./scripts/demo-negotiate.sh # two Claude Code sessions negotiate a contract; the script approves it as the two humans. Uses real models
 ```
 
 By hand, in three terminals:
@@ -68,7 +69,7 @@ cpart bundle add bob docs/api.md      # everything the front desk may tell bob
 cpart desk on bob --as Alice --slots 6
 ```
 
-Let your coding agent use it: add `cpart mcp` as an MCP server. See [docs/mcp.md](docs/mcp.md).
+Let your coding agent use it: add `cpart mcp` as an MCP server. It can talk, and it can propose, counter-propose, decline and withdraw contracts. It cannot approve one: only you can, with `cpart approve`. See [docs/mcp.md](docs/mcp.md).
 
 Read threads in a browser: `cpart view`.
 
