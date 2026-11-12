@@ -8,6 +8,7 @@ import { type ContractView, Counterpart, RelayLink } from "@counterpart/daemon";
 import { type ContractPart, canonicalize, verifyAgreement } from "@counterpart/protocol";
 import { FrontDesk, addToBundle, anthropicApi, claudeCli, cliPrivateValues, readBundle, removeFromBundle } from "@counterpart/frontdesk";
 import { startMcpServer } from "@counterpart/mcp";
+import { type Binding, preparePublication, publish, repoInit } from "@counterpart/publish";
 import { startRelay } from "@counterpart/relay";
 import { startViewer } from "@counterpart/viewer";
 import { type WorkResult, apply as applyWork, work } from "@counterpart/worker";
@@ -50,6 +51,13 @@ it writes is run, and nothing is written until you apply it.
   cpart work show <work-id>                                       the patch, what was refused, what to look at first
   cpart work apply <work-id> <work-hash> [--repo <path>]          write the reviewed files. Commits nothing
 
+Publish: tie a repository to an agreement and open the pull request.
+
+  cpart repo init <thread> <id> --repo <path> --bind <part>=<path>[,<valid fixtures dir>,<invalid fixtures dir>]...
+                                                                  writes the trust file, the verifier and its workflow. Commit them to your main branch
+  cpart pr <thread> <id> --work <work-id> [--repo <path>] [--branch <name>]
+                                                                  commits the applied work and the agreement on a branch, pushes, opens a pull request
+
 Front desk: a model with no tools that answers a contact while you are away,
 using only the files you put in that contact's bundle.
 
@@ -68,7 +76,7 @@ const { values: flags, positionals } = parseArgs({
   allowPositionals: true,
   options: {
     relay: { type: "string" }, port: { type: "string" }, host: { type: "string" }, db: { type: "string" },
-    home: { type: "string" }, repo: { type: "string" }, paths: { type: "string" }, brief: { type: "string" }, allow: { type: "string", multiple: true }, title: { type: "string" }, file: { type: "string" }, part: { type: "string", multiple: true }, supersedes: { type: "string" },
+    home: { type: "string" }, bind: { type: "string", multiple: true }, work: { type: "string" }, branch: { type: "string" }, repo: { type: "string" }, paths: { type: "string" }, brief: { type: "string" }, allow: { type: "string", multiple: true }, title: { type: "string" }, file: { type: "string" }, part: { type: "string", multiple: true }, supersedes: { type: "string" },
     out: { type: "string" }, yes: { type: "boolean" }, "no-passphrase": { type: "boolean" }, as: { type: "string" }, slots: { type: "string" }, daily: { type: "string" }, model: { type: "string" }, url: { type: "string" }, json: { type: "boolean" }, help: { type: "boolean", short: "h" },
   },
 });
@@ -285,6 +293,50 @@ async function main(): Promise<void> {
       const c = findContract(node, args[0]!, args[1]!);
       await node.withdraw(args[0]!, c.proposalId);
       return out(`Withdrew ${c.proposalId}. Approvals already given still stand.`, { proposalId: c.proposalId });
+    }
+    case "repo": {
+      if (args[0] !== "init") throw new Error("usage: cpart repo init <thread> <id> --repo <path> --bind <part>=<path>");
+      need(3, "repo init <thread> <id> --repo <path> --bind <part>=<path>");
+      if (!flags.repo) throw new Error("usage: cpart repo init <thread> <id> --repo <path> --bind <part>=<path>");
+      const c = findContract(node, args[1]!, args[2]!);
+      const bindings = (flags.bind ?? []).map((spec): Binding => {
+        const eq = spec.indexOf("=");
+        const [path, valid, invalid] = spec.slice(eq + 1).split(",");
+        if (eq < 1 || !path || (valid && !invalid)) throw new Error(`--bind ${spec}: use <part>=<path> or <part>=<path>,<valid dir>,<invalid dir>`);
+        return { part: spec.slice(0, eq), path, ...(valid && invalid ? { fixtures: { valid, invalid } } : {}) };
+      });
+      const written = repoInit(flags.repo, node.agreement(args[1]!, c.proposalId), bindings);
+      return out(
+        `Wrote in ${flags.repo}:\n${written.map((f) => `  ${f}`).join("\n")}\n\nRead them, then commit them to your main branch. Pull requests are checked against the trust file on that branch, so protect it.`,
+        { files: written },
+      );
+    }
+    case "pr": {
+      need(2, "pr <thread> <id> --work <work-id>");
+      if (!flags.work || !/^[A-Za-z0-9_-]{6,40}$/.test(flags.work) || !existsSync(join(home, "work", `${flags.work}.json`))) throw new Error("usage: cpart pr <thread> <id> --work <work-id>  (the id `cpart work` printed)");
+      const w = JSON.parse(readFileSync(join(home, "work", `${flags.work}.json`), "utf8")) as WorkResult & { repo: string };
+      const repo = flags.repo ?? w.repo;
+      const c = findContract(node, args[0]!, args[1]!);
+      const p = preparePublication(repo, node.agreement(args[0]!, c.proposalId), w, flags.branch ? { branch: flags.branch } : {});
+      console.error(
+        [
+          `Repository  ${safe(repo)}`,
+          `Pushes to   ${safe(p.remote)}`,
+          `Branch      ${safe(p.branch)}  (pull request into ${safe(p.base)})`,
+          "Commits     exactly these files:",
+          ...p.files.map((f) => `  ${safe(f)}`),
+          "",
+          "The agreement file holds the full contract text and both root keys. Anyone who can read the repository can read them.",
+          "",
+          "Checked here the way CI will check it:",
+          ...p.check.checks.map((k) => `  ${k.ok ? "ok  " : "FAIL"}  ${safe(k.what)}${k.detail ? `: ${safe(k.detail)}` : ""}`),
+          "",
+        ].join("\n"),
+      );
+      if (!p.check.ok) throw new Error("this would fail verification. Nothing was committed or pushed.");
+      if (!flags.yes && (await line("Type publish to commit, push and open the pull request: ")) !== "publish") throw new Error("nothing was committed or pushed.");
+      const url = publish(repo, p);
+      return out(`Opened ${url}`, { url, branch: p.branch, files: p.files });
     }
     case "work": {
       const dir = join(home, "work");
