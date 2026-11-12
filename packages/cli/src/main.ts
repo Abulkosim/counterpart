@@ -7,7 +7,7 @@ import { startRelay } from "@counterpart/relay";
 
 const USAGE = `cpart: let your agent talk to someone else's agent
 
-  cpart relay [--port 7447] [--host 127.0.0.1] [--db relay.db]   run a relay
+  cpart relay [--port 7447] [--host 127.0.0.1] [--db relay.db] [--url wss://public.name]   run a relay
   cpart init --relay <ws://host:port>                             create your identity
   cpart whoami
   cpart daemon                                                    stay connected, deliver and receive
@@ -26,7 +26,7 @@ const { values: flags, positionals } = parseArgs({
   allowPositionals: true,
   options: {
     relay: { type: "string" }, port: { type: "string" }, host: { type: "string" }, db: { type: "string" },
-    home: { type: "string" }, json: { type: "boolean" }, help: { type: "boolean", short: "h" },
+    home: { type: "string" }, url: { type: "string" }, json: { type: "boolean" }, help: { type: "boolean", short: "h" },
   },
 });
 const [cmd, ...args] = positionals;
@@ -43,7 +43,7 @@ async function main(): Promise<void> {
   if (!cmd || flags.help || cmd === "help") return console.log(USAGE);
 
   if (cmd === "relay") {
-    const relay = await startRelay({ port: Number(flags.port ?? 7447), host: flags.host ?? "127.0.0.1", dbPath: flags.db ?? "relay.db", log: (l) => console.log(l) });
+    const relay = await startRelay({ port: Number(flags.port ?? 7447), host: flags.host ?? "127.0.0.1", dbPath: flags.db ?? "relay.db", ...(flags.url ? { publicUrl: flags.url } : {}), log: (l) => console.log(l) });
     process.on("SIGINT", () => void relay.close().then(() => process.exit(0)));
     process.on("SIGTERM", () => void relay.close().then(() => process.exit(0)));
     return;
@@ -55,6 +55,7 @@ async function main(): Promise<void> {
   }
 
   const node = Counterpart.open(home);
+  await node.renewIfDue();
   switch (cmd) {
     case "whoami":
       return out(`human  ${node.me.human}\ndevice ${node.me.device}\nrelay  ${node.me.relay}`, node.me);

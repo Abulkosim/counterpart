@@ -208,7 +208,7 @@ test("queued messages survive a restart of the sender", async () => {
   await until("outbox clears", () => again.queued().length === 0);
 });
 
-test("a contact's renewed device credential is picked up from their next message", async () => {
+test("a renewed device credential reaches contacts before the old one expires", async () => {
   const { alice, bob, la, lb } = await paired();
   const before = bob.contact("alice").credential;
   await la.stop();
@@ -216,17 +216,55 @@ test("a contact's renewed device credential is picked up from their next message
   const homes = [alice.home, bob.home] as const;
   alice.close();
   bob.close();
-  // Seventy days later Alice's device renews its credential on start.
+  // Seventy days later both daemons start again.
   const now = () => Date.now() + 70 * 24 * 3600_000;
   const [alice2, bob2] = [Counterpart.open(homes[0], { now }), Counterpart.open(homes[1], { now })];
+  assert.equal(await alice2.renewIfDue(), true);
+  assert.equal(await alice2.renewIfDue(), false);
   assert.equal(alice2.me.device, deviceId(before));
-  assert.ok(alice2.device.credential.issuedAt > before.issuedAt);
-  const wire = await seal(
-    { id: randomId(), threadId: randomId(), author: alice2.me.device, authorSeq: 0, parents: [], lane: "control", type: "thread.opened", body: { goal: "renewed", participants: [alice2.me.rootKey, bob2.me.rootKey] }, createdAt: now() },
-    alice2.device, bob2.device.credential, now() + 3600_000,
-  );
-  assert.equal((await bob2.receive(wire)).result, "applied");
+  const [hello] = alice2.queued();
+  assert.equal((await bob2.receive(hello)).result, "applied");
   assert.ok(bob2.contact("alice").credential.expiresAt > before.expiresAt);
-  alice2.close();
-  bob2.close();
+  // A second process that still has the old credential in memory picks up the renewed one from disk.
+  const other = Counterpart.open(homes[0], { now });
+  assert.equal(await other.renewIfDue(), false);
+  assert.equal(other.device.credential.issuedAt, alice2.device.credential.issuedAt);
+  for (const n of [alice2, bob2, other]) n.close();
+});
+
+test("messages that overtake the pairing acceptance are held, not lost", async () => {
+  const [alice, bob] = [await person(), await person()];
+  await bob.acceptInvite(alice.createInvite("bob"), "alice");
+  const [request] = bob.queued();
+  assert.equal((await alice.receive(request)).result, "applied");
+  const thread = await alice.openThread("bob", "eager");
+  await alice.say(thread, "are you there?");
+  const [accepted, opened, said] = alice.queued();
+  // The relay delivers Alice's thread before her acceptance.
+  assert.equal((await bob.receive(said)).result, "pending");
+  assert.equal((await bob.receive(opened)).result, "pending");
+  assert.equal(bob.contact("alice").state, "pending");
+  assert.deepEqual(bob.threads(), []);
+  const v = await bob.receive(accepted);
+  assert.equal(v.result === "applied" && v.promoted.length, 2);
+  assert.deepEqual(texts(bob, thread), ["are you there?"]);
+});
+
+test("a consumer with a cursor sees every applied event exactly once, in order", async () => {
+  const { alice, bob } = await paired();
+  const thread = await alice.openThread("bob", "cursor");
+  for (const t of ["1", "2", "3"]) await alice.say(thread, t);
+  await until("bob has them", () => texts(bob, thread).length === 3);
+  const seen: string[] = [];
+  let cursor = 0;
+  for (;;) {
+    const batch = bob.since(cursor, 2);
+    if (batch.length === 0) break;
+    for (const e of batch) {
+      seen.push(e.type);
+      cursor = e.ord!;
+    }
+  }
+  assert.deepEqual(seen, ["contact.request", "contact.accepted", "thread.opened", "talk.posted", "talk.posted", "talk.posted"]);
+  assert.deepEqual(bob.since(cursor), []);
 });

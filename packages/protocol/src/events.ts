@@ -8,6 +8,8 @@ export type Lane = "control" | "talk";
 export interface EventBodies {
   "contact.request": { token: string };
   "contact.accepted": Record<string, never>;
+  // Carries nothing. Its envelope delivers the sender's renewed device credential.
+  "contact.hello": Record<string, never>;
   "thread.opened": { goal: string; participants: string[] };
   "talk.posted": { text: string };
 }
@@ -38,6 +40,7 @@ export const LIMITS = {
 const lanes: Record<EventType, Lane> = {
   "contact.request": "control",
   "contact.accepted": "control",
+  "contact.hello": "control",
   "thread.opened": "control",
   "talk.posted": "talk",
 };
@@ -45,6 +48,7 @@ const lanes: Record<EventType, Lane> = {
 const bodies: { [T in EventType]: (b: Record<string, unknown>) => boolean } = {
   "contact.request": (b) => onlyKeys(b, ["token"]) && isId(b.token),
   "contact.accepted": (b) => onlyKeys(b, []),
+  "contact.hello": (b) => onlyKeys(b, []),
   "thread.opened": (b) =>
     onlyKeys(b, ["goal", "participants"]) &&
     isStr(b.goal, 0, LIMITS.goal) &&

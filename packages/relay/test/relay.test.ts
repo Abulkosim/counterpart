@@ -148,3 +148,44 @@ test("an invite-only relay turns away other root keys", async () => {
     await closed.close();
   }
 });
+
+test("a login signed for a different relay URL is refused, with a reason", async () => {
+  const a = await device();
+  const evil = "ws://evil.example";
+  const c = dial();
+  const ch = (await c.next("challenge")) as { nonce: string };
+  // What a forwarding relay would pass on: a valid signature over its own URL.
+  c.ws.send(JSON.stringify({ t: "auth", credential: a.credential, relay: evil, sig: sign(a.sign, RELAY_AUTH_DOMAIN, relayAuthMessage(ch.nonce, evil)) }));
+  assert.deepEqual(await c.next("error"), { t: "error", code: "wrong_relay_url" });
+  assert.equal(await c.closed, 4003);
+});
+
+test("a long backlog is delivered a window at a time and one sender cannot fill the relay", async () => {
+  const small = await startRelay({ deliveryWindow: 2, maxPerSenderTotal: 5 });
+  try {
+    const [a, b] = [await device(), await device()];
+    const ca = await login(a, small.url);
+    for (let i = 0; i < 5; i++) {
+      ca.ws.send(JSON.stringify({ t: "send", wire: await wireFor(a, b) }));
+      await ca.next("stored");
+    }
+    // Spraying other recipients does not get around the limit.
+    ca.ws.send(JSON.stringify({ t: "send", wire: await wireFor(a, await device()) }));
+    assert.equal(((await ca.next("error")) as { code: string }).code, "mailbox_full");
+
+    const cb = await login(b, small.url);
+    const got: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const id = ((await cb.next("deliver")) as { wire: Wire }).wire.header.id;
+      got.push(id);
+      if (i === 1) {
+        await new Promise((r) => setTimeout(r, 80));
+        assert.equal(small.queued(deviceId(b.credential)), 5, "nothing beyond the window is sent before acks");
+        for (const g of got) cb.ws.send(JSON.stringify({ t: "ack", id: g }));
+      } else if (i > 1) cb.ws.send(JSON.stringify({ t: "ack", id }));
+    }
+    assert.equal(new Set(got).size, 5);
+  } finally {
+    await small.close();
+  }
+});

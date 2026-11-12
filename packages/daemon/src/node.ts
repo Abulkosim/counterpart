@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -12,6 +12,7 @@ const DAY = 24 * 3600 * 1000;
 const RENEW_BEFORE = 30 * DAY;
 const MAX_PENDING_PER_CONTACT = 200;
 const CLOCK_SKEW = 10 * 60_000;
+const MAX_REJECTS = 1000;
 
 interface Keys {
   v: 1;
@@ -30,6 +31,7 @@ export interface Contact {
 }
 
 export interface StoredEvent extends ThreadEvent {
+  ord: number | null; // local order in which the event took effect
   mine: boolean;
   status: "applied" | "pending";
   receivedAt: number;
@@ -122,12 +124,24 @@ export class Counterpart {
     const file = join(home, "keys.json");
     if (!existsSync(file)) throw new Error(`no Counterpart identity at ${home}. Run: cpart init --relay <url>`);
     const keys = JSON.parse(readFileSync(file, "utf8")) as Keys;
-    const now = opts.now ?? Date.now;
-    if (keys.device.credential.expiresAt - now() < RENEW_BEFORE) {
-      keys.device = renewDevice(keys.root, keys.device, now());
-      saveKeys(home, keys);
+    return new Counterpart(home, keys, opts.now ?? Date.now);
+  }
+
+  // Renew this device's credential when it is within 30 days of expiry, and
+  // tell every contact, so neither side is left holding an expired credential
+  // for the other. Safe to call often and from several processes.
+  async renewIfDue(): Promise<boolean> {
+    const onDisk = JSON.parse(readFileSync(join(this.home, "keys.json"), "utf8")) as Keys;
+    if (onDisk.device.credential.issuedAt > this.keys.device.credential.issuedAt) this.keys = onDisk;
+    if (this.keys.device.credential.expiresAt - this.now() >= RENEW_BEFORE) return false;
+    this.keys = { ...this.keys, device: renewDevice(this.keys.root, this.keys.device, this.now()) };
+    saveKeys(this.home, this.keys);
+    for (const c of this.contacts()) {
+      if (c.state !== "active") continue;
+      const out = await this.build(c.credential, randomId(), "contact.hello", {}, 0, []);
+      this.tx(() => this.commitOut(out));
     }
-    return new Counterpart(home, keys, now);
+    return true;
   }
 
   close(): void {
@@ -234,8 +248,15 @@ export class Counterpart {
   }
 
   log(threadId: string): StoredEvent[] {
-    const rows = this.db.prepare("SELECT json, mine, status, received_at FROM events WHERE thread_id = ? ORDER BY ord IS NULL, ord, rowid").all(threadId) as unknown as EventRow[];
-    return rows.map((r) => ({ ...(JSON.parse(r.json) as ThreadEvent), mine: !!r.mine, status: r.status, receivedAt: r.received_at }));
+    const rows = this.db.prepare("SELECT json, mine, status, received_at, ord FROM events WHERE thread_id = ? ORDER BY ord IS NULL, ord, rowid").all(threadId) as unknown as EventRow[];
+    return rows.map(toStored);
+  }
+
+  // Applied events after a cursor, in the order they took effect. A consumer
+  // that stores the last `ord` it handled never misses or repeats an event.
+  since(ord: number, limit = 100): StoredEvent[] {
+    const rows = this.db.prepare("SELECT json, mine, status, received_at, ord FROM events WHERE ord > ? ORDER BY ord LIMIT ?").all(ord, limit) as unknown as EventRow[];
+    return rows.map(toStored);
   }
 
   rejects(limit = 50): { at: number; reason: string; wireId: string | null }[] {
@@ -342,28 +363,37 @@ export class Counterpart {
 
         if (!contact) throw new Reject("message from an unknown sender");
         this.refreshCredential(contact, credential);
+        const hold = (): Verdict => {
+          const pending = (this.db.prepare("SELECT COUNT(*) AS n FROM events WHERE author_root = ? AND status = 'pending'").get(credential.rootKey) as { n: number }).n;
+          if (pending >= MAX_PENDING_PER_CONTACT) throw new Reject("too many out-of-order events held for this contact");
+          this.insertEvent(event, credential.rootKey, false, "pending");
+          return { result: "pending", event };
+        };
 
         if (event.type === "contact.accepted") {
           if (contact.state !== "pending") throw new Reject("unexpected contact.accepted");
           this.db.prepare("UPDATE contacts SET state = 'active' WHERE root_key = ?").run(contact.root_key);
           this.insertEvent(event, credential.rootKey, false, "applied");
+          // Anything they sent that overtook this acceptance was held; apply it now.
+          const threads = this.db.prepare("SELECT DISTINCT thread_id FROM events WHERE author_root = ? AND status = 'pending'").all(credential.rootKey) as { thread_id: string }[];
+          return { result: "applied", event, promoted: threads.flatMap((t) => this.promote(t.thread_id)) };
+        }
+        // The peer accepted us and wrote straight away, and the relay delivered
+        // that before their acceptance. Hold it rather than lose it.
+        if (contact.state !== "active") return hold();
+        if (event.type === "contact.hello") {
+          this.insertEvent(event, credential.rootKey, false, "applied");
           return { result: "applied", event, promoted: [] };
         }
-        if (contact.state !== "active") throw new Reject("message from a contact that is not active");
 
-        if (!this.ready(event, credential.rootKey)) {
-          const pending = (this.db.prepare("SELECT COUNT(*) AS n FROM events WHERE author_root = ? AND status = 'pending'").get(credential.rootKey) as { n: number }).n;
-          if (pending >= MAX_PENDING_PER_CONTACT) throw new Reject("too many out-of-order events held for this contact");
-          this.insertEvent(event, credential.rootKey, false, "pending");
-          return { result: "pending", event };
-        }
+        if (!this.ready(event, credential.rootKey)) return hold();
         this.apply(event, credential.rootKey);
         this.insertEvent(event, credential.rootKey, false, "applied");
         return { result: "applied", event, promoted: this.promote(event.threadId) };
       });
     } catch (e) {
       if (!(e instanceof Reject)) throw e;
-      this.db.prepare("INSERT INTO rejects (at, reason, wire_id) VALUES (?, ?, ?)").run(this.now(), e.message, wireId);
+      this.reject(e.message, wireId);
       return { result: "rejected", reason: e.message };
     }
   }
@@ -371,6 +401,7 @@ export class Counterpart {
   // Can this event be applied now, or must it wait for earlier ones? Throws if
   // it can never be valid.
   private ready(event: ThreadEvent, authorRoot: string): boolean {
+    if (event.type === "contact.hello") return true;
     if (event.type === "contact.request" || event.type === "contact.accepted") throw new Reject("contact event inside a thread");
     if (event.type === "thread.opened") {
       const body = (event as ThreadEvent<"thread.opened">).body;
@@ -411,7 +442,7 @@ export class Counterpart {
         } catch (e) {
           if (!(e instanceof Reject)) throw e;
           this.db.prepare("DELETE FROM events WHERE id = ?").run(event.id);
-          this.db.prepare("INSERT INTO rejects (at, reason, wire_id) VALUES (?, ?, ?)").run(this.now(), e.message, event.id);
+          this.reject(e.message, event.id);
         }
         progress = true;
       }
@@ -439,6 +470,11 @@ export class Counterpart {
     return (this.db.prepare("SELECT COALESCE(MAX(ord), 0) + 1 AS n FROM events").get() as { n: number }).n;
   }
 
+  private reject(reason: string, wireId: string | null): void {
+    this.db.prepare("INSERT INTO rejects (at, reason, wire_id) VALUES (?, ?, ?)").run(this.now(), reason, wireId);
+    this.db.prepare("DELETE FROM rejects WHERE seq <= (SELECT MAX(seq) FROM rejects) - ?").run(MAX_REJECTS);
+  }
+
   private tx<T>(fn: () => T): T {
     this.db.exec("BEGIN IMMEDIATE");
     try {
@@ -464,7 +500,10 @@ interface EventRow {
   mine: number;
   status: "applied" | "pending";
   received_at: number;
+  ord: number | null;
 }
+
+const toStored = (r: EventRow): StoredEvent => ({ ...(JSON.parse(r.json) as ThreadEvent), ord: r.ord, mine: !!r.mine, status: r.status, receivedAt: r.received_at });
 
 function checkName(name: string): void {
   if (!/^[a-z0-9][a-z0-9._-]{0,31}$/.test(name)) throw new Error("contact names are 1-32 characters: a-z, 0-9, dot, dash, underscore");
@@ -472,8 +511,21 @@ function checkName(name: string): void {
 
 function saveKeys(home: string, keys: Keys): void {
   const file = join(home, "keys.json");
-  const tmp = `${file}.tmp`;
-  writeFileSync(tmp, JSON.stringify(keys, null, 2), { mode: 0o600 });
-  chmodSync(tmp, 0o600);
+  // Unique temporary name, flushed before the rename and the directory flushed
+  // after, so a crash or a second process never leaves a partial identity file.
+  const tmp = `${file}.${process.pid}.${randomId(6)}.tmp`;
+  const fd = openSync(tmp, "wx", 0o600);
+  try {
+    writeSync(fd, JSON.stringify(keys, null, 2));
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
   renameSync(tmp, file);
+  const dir = openSync(home, "r");
+  try {
+    fsyncSync(dir);
+  } finally {
+    closeSync(dir);
+  }
 }

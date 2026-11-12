@@ -30,6 +30,7 @@ Event { id, threadId, author, authorSeq, parents[], lane, type, body, createdAt 
 | --- | --- | --- |
 | `contact.request` | control | `{ token }` |
 | `contact.accepted` | control | `{}` |
+| `contact.hello` | control | `{}`. Sent after a device renews its credential, so contacts receive the new one |
 | `thread.opened` | control | `{ goal, participants: [rootKey, rootKey] }` |
 | `talk.posted` | talk | `{ text }` |
 
@@ -58,6 +59,7 @@ A daemon applies an event only if all hold:
 - The event id is new. The same id with the same content is a duplicate and is ignored. The same id with different content is refused.
 - No other event has the same thread, author and sequence number.
 - `thread.opened` is the author's event 0 with no parents, and its participants are exactly the two root keys.
+- Events from a contact whose acceptance has not arrived yet are held and applied when it does.
 - For other events, the thread exists, the sender is its other participant, and all parents have been applied. If the thread or a parent is missing, the event is held (up to 200 per contact) and applied when they arrive.
 
 Everything refused is recorded with a reason.
@@ -76,6 +78,6 @@ relay  -> { t: "deliver", wire }
 client -> { t: "ack", id }
 ```
 
-`relay` is the URL the client dialled, so one relay cannot replay a login to another. The relay stores a message until the recipient acknowledges it or it expires (seven days at most). Delivery is at least once. Sending the same message again is accepted; reusing an id for different bytes returns `conflict`. Other codes: `mailbox_full`, `expired`, `ttl_too_long`, `too_large`, `bad_wire`.
+`relay` is the URL the client dialled. The relay accepts a login only for its own configured URL, so another relay cannot forward a challenge to its clients and log in as them. The relay stores a message until the recipient acknowledges it or it expires (seven days at most). Delivery is at least once. Sending the same message again is accepted; reusing an id for different bytes returns `conflict`. The relay sends a limited window of deliveries and sends more as they are acknowledged. Other codes: `mailbox_full`, `expired`, `ttl_too_long`, `too_large`, `bad_wire`.
 
 A client acknowledges only after it has durably recorded its decision about the message.
