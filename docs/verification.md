@@ -18,6 +18,8 @@ What has actually been run, and what has not.
 | 2026-11-12 | `scripts/contract-smoke.sh`: two identities with passphrases, real relay and daemons, CLI only. Alice proposes with a JSON Schema attached, Bob counters, both approve the counter, both export | The approval screen shows the full text, who wrote it, both key prefixes and the safety code. A wrong passphrase signs nothing. The two exported files are byte-identical and verify from an empty home. Changing one character makes verification fail | Two machines |
 | 2026-11-12 | `cpart init` in a pseudo-terminal, typing the passphrase the moment the prompt appears | First run showed the passphrase on screen: the prompt was printed before echo was turned off. Fixed; three more runs showed nothing | macOS and Windows terminals |
 | 2026-11-12 | `pnpm verify` with contract tests (forged, borrowed and replayed approvals, tampered agreement files, proposal flood, locked-root renewal) | 90 pass | |
+| 2026-11-12 | Codex reviewed contracts and approvals. Seven findings, all fixed with tests: state is now kept per proposal, so approvals of two proposals with the same text do not add up; the approval screen prints every attachment in full; stored text is re-hashed before it is shown or signed and compared with what the owner saw; agreement files carry the thread's first event; there is no way to lock a root key after the fact; hidden Unicode characters are escaped in CLI output. `pnpm verify`, both smoke scripts | 92 pass | |
+| 2026-11-12 | `scripts/smoke.sh` crashed once with a Node error when run straight after `pnpm verify`. 31 further runs passed | Not reproduced, cause unknown | Open |
 
 ## Known limits
 

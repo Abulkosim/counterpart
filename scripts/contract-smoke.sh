@@ -51,12 +51,12 @@ Pagination uses an opaque `cursor`. Maximum `limit` is 100.
 The server ships this by 2026-12-01. The client stops using offsets the same day.
 DOC
 echo '{"type":"object","required":["data","next_cursor"],"properties":{"next_cursor":{"type":["string","null"]}}}' >"$WORK/page.schema.json"
-H1=$(alice propose "$THREAD" --title "Orders pagination" --file "$WORK/v1.md" --part "json-schema:$WORK/page.schema.json" --json | field .hash)
+H1=$(alice propose "$THREAD" --title "Orders pagination" --file "$WORK/v1.md" --part "json-schema:$WORK/page.schema.json" --json | field .proposalId)
 wait_for "bob to see it" sh -c "CPART_HOME=$WORK/bob node packages/cli/src/main.ts contracts $THREAD | grep -q open"
 
 step "bob counters with a larger page size"
 sed 's/is 100/is 200/' "$WORK/v1.md" >"$WORK/v2.md"
-H2=$(bob propose "$THREAD" --title "Orders pagination" --file "$WORK/v2.md" --part "json-schema:$WORK/page.schema.json" --supersedes "${H1:0:10}" --json | field .hash)
+H2=$(bob propose "$THREAD" --title "Orders pagination" --file "$WORK/v2.md" --part "json-schema:$WORK/page.schema.json" --supersedes "${H1:0:10}" --json | field .proposalId)
 wait_for "alice to see it" sh -c "CPART_HOME=$WORK/alice node packages/cli/src/main.ts contracts $THREAD | grep -q superseded"
 alice contracts "$THREAD"
 

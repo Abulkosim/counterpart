@@ -14,11 +14,13 @@ export interface EventBodies {
   "thread.opened": { goal: string; participants: string[] };
   // `via` says who on the sender's side wrote it. It is the sender's own claim.
   "talk.posted": { text: string; via?: Via };
-  // `supersedes` names the contract hash this proposal replaces.
+  // Proposals are addressed by the id of the event that made them, never by
+  // contract hash alone: the same text can be proposed twice, and consent to
+  // one proposal is not consent to the other.
   "contract.proposed": { contract: Contract; supersedes?: string };
   "contract.accepted": { approval: Approval };
-  "contract.declined": { contractHash: string; reason?: string };
-  "contract.withdrawn": { contractHash: string };
+  "contract.declined": { proposalId: string; reason?: string };
+  "contract.withdrawn": { proposalId: string };
 }
 
 export type Via = "human" | "agent" | "frontdesk";
@@ -72,10 +74,10 @@ const bodies: { [T in EventType]: (b: Record<string, unknown>) => boolean } = {
     b.participants.every(isKey) &&
     new Set(b.participants).size === b.participants.length,
   "talk.posted": (b) => isStr(b.text, 1, LIMITS.text) && (onlyKeys(b, ["text"]) || (onlyKeys(b, ["text", "via"]) && VIAS.includes(b.via))),
-  "contract.proposed": (b) => (onlyKeys(b, ["contract"]) || (onlyKeys(b, ["contract", "supersedes"]) && isKey(b.supersedes))) && ok(() => parseContract(b.contract)),
+  "contract.proposed": (b) => (onlyKeys(b, ["contract"]) || (onlyKeys(b, ["contract", "supersedes"]) && isId(b.supersedes))) && ok(() => parseContract(b.contract)),
   "contract.accepted": (b) => onlyKeys(b, ["approval"]) && ok(() => parseApproval(b.approval)),
-  "contract.declined": (b) => isKey(b.contractHash) && (onlyKeys(b, ["contractHash"]) || (onlyKeys(b, ["contractHash", "reason"]) && isStr(b.reason, 1, CONTRACT_LIMITS.reason))),
-  "contract.withdrawn": (b) => onlyKeys(b, ["contractHash"]) && isKey(b.contractHash),
+  "contract.declined": (b) => isId(b.proposalId) && (onlyKeys(b, ["proposalId"]) || (onlyKeys(b, ["proposalId", "reason"]) && isStr(b.reason, 1, CONTRACT_LIMITS.reason))),
+  "contract.withdrawn": (b) => onlyKeys(b, ["proposalId"]) && isId(b.proposalId),
 };
 
 function ok(fn: () => unknown): boolean {

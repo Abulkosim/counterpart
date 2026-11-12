@@ -14,7 +14,7 @@ A signature is Ed25519 over `"counterpart/" + domain + "\n" + message`. Domains:
 DeviceCredential { v: 1, rootKey, signKey, encKey, issuedAt, expiresAt, sig }
 ```
 
-`sig` is the root key's signature over the other fields (domain `device-credential/v1`). The root key is stored locked under a passphrase (scrypt, AES-256-GCM, with the public key and parameters authenticated), so only its owner can renew a device or approve a contract. `signKey` is Ed25519, `encKey` is X25519. The device id is `"d_" + base64url(sha256(signKey || encKey)[0..16])`.
+`sig` is the root key's signature over the other fields (domain `device-credential/v1`). The root key is stored locked under a passphrase (scrypt, AES-256-GCM, with the public key and parameters authenticated), so only its owner can renew a device or approve a contract. A root key made without a passphrase can never approve: it may already have been copied. `signKey` is Ed25519, `encKey` is X25519. The device id is `"d_" + base64url(sha256(signKey || encKey)[0..16])`.
 
 The safety code two people compare is 12 decimal digits from `sha256(min(rootA, rootB) || max(rootA, rootB))`.
 
@@ -36,8 +36,8 @@ Event { id, threadId, author, authorSeq, parents[], lane, type, body, createdAt 
 
 | `contract.proposed` | act | `{ contract, supersedes? }` |
 | `contract.accepted` | act | `{ approval }` |
-| `contract.declined` | act | `{ contractHash, reason? }` |
-| `contract.withdrawn` | act | `{ contractHash }` |
+| `contract.declined` | act | `{ proposalId, reason? }` |
+| `contract.withdrawn` | act | `{ proposalId }` |
 
 Unknown types and unknown fields are rejected.
 
@@ -46,7 +46,7 @@ Unknown types and unknown fields are rejected.
 ```
 Contract { v: 1, title, text, parties: [rootKey, rootKey] (sorted), parts: [{ kind, name, content }] }
 Approval { v: 1, threadGenesis, proposalId, contractHash, parties, approver, approvedAt, sig }
-Agreement { v: 1, contract, contractHash, threadId, threadGenesis, approvals: [Approval, Approval] }
+Agreement { v: 1, contract, contractHash, proposalId, genesis, approvals: [Approval, Approval] }
 ```
 
 The contract hash is `base64url(sha256(canonical(contract)))` and covers the attached parts. Part kinds are `text`, `json-schema` and `openapi`. A `json-schema` part must parse as a JSON object; nothing else about it is checked.
@@ -55,13 +55,15 @@ An approval is the approver's **root key** signature (domain `approval/v1`) over
 
 Rules a daemon enforces:
 
-- A proposal's parties are exactly the thread's two people. Each side may make at most 20 proposals in a thread. `supersedes` must name a contract the thread has seen.
-- An acceptance carries a valid approval whose approver is the sender's root key, bound to this thread and to a proposal of that contract in it. The event lists that proposal among its parents. One approval per person per contract.
-- Only a proposer can withdraw their proposal. A decline or withdrawal must name a contract the thread has seen.
+A proposal is named by the id of the event that made it. The same text proposed twice is two proposals, and approving one is not approving the other.
 
-A contract is agreed when both people have approved the same hash. Approvals cannot be revoked. Superseding or withdrawing a proposal stops asking for approval; it does not cancel a signature already given, and if the other person signs later the contract is agreed. This is deliberate: two logs that are briefly out of step cannot disagree about whether an agreement exists.
+- A proposal's parties are exactly the thread's two people. Each side may make at most 20 proposals in a thread. `supersedes` must name a proposal the thread has seen.
+- An acceptance carries a valid approval whose approver is the sender's root key, bound to this thread and to a proposal of that contract in it. The event lists that proposal among its parents. One approval per person per proposal.
+- Only a proposer can withdraw their proposal. A decline or withdrawal must name a proposal the thread has seen.
 
-An agreement file holds the contract and both approvals. Anyone can check it without a daemon. It proves two keys approved the text, not whose keys they are.
+A contract is agreed when both people have approved the same proposal. Approvals cannot be revoked. Superseding or withdrawing a proposal stops asking for approval; it does not cancel a signature already given, and if the other person signs later the contract is agreed. This is deliberate: two logs that are briefly out of step cannot disagree about whether an agreement exists.
+
+An agreement file holds the contract, the thread's first event and both approvals. Anyone can check it without a daemon: the contract must match its hash, the first event must hash to what the approvals signed and name the same two people, and both approvals must be for the same proposal. It proves the holders of two keys approved the text. It does not prove whose keys they are or that a passphrase was typed.
 
 ## Envelope
 

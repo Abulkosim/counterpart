@@ -30,10 +30,11 @@ const MAX_PROPOSALS_PER_SIDE = 20;
 
 export type ContractStatus = "open" | "agreed" | "declined" | "withdrawn" | "superseded";
 
+// One proposal. The same text proposed twice is two of these.
 export interface ContractView {
+  proposalId: string;
   hash: string;
   contract: Contract;
-  proposalId: string;
   proposedByMe: boolean;
   proposedAt: number;
   supersedes: string | null;
@@ -119,11 +120,11 @@ export class Counterpart {
       );
       CREATE INDEX IF NOT EXISTS proposals_thread ON proposals (thread_id, contract_hash);
       CREATE TABLE IF NOT EXISTS approvals (
-        thread_id TEXT NOT NULL, contract_hash TEXT NOT NULL, approver_root TEXT NOT NULL, event_id TEXT NOT NULL, json TEXT NOT NULL,
-        PRIMARY KEY (thread_id, contract_hash, approver_root)
+        proposal_id TEXT NOT NULL, approver_root TEXT NOT NULL, thread_id TEXT NOT NULL, event_id TEXT NOT NULL, json TEXT NOT NULL,
+        PRIMARY KEY (proposal_id, approver_root)
       );
       CREATE TABLE IF NOT EXISTS contract_marks (
-        event_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, contract_hash TEXT NOT NULL, kind TEXT NOT NULL, by_root TEXT NOT NULL, reason TEXT
+        event_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, proposal_id TEXT NOT NULL, kind TEXT NOT NULL, by_root TEXT NOT NULL, reason TEXT
       );
       CREATE TABLE IF NOT EXISTS events (
         id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, author TEXT NOT NULL, author_root TEXT NOT NULL,
@@ -142,8 +143,10 @@ export class Counterpart {
     `);
   }
 
-  // With a passphrase the root key is locked and approvals are possible.
-  // Without one the identity works for messaging but cannot approve contracts.
+  // With a passphrase the root key is locked from the moment it exists, and the
+  // identity can approve contracts. Without one it can message but never
+  // approve: a root key that has sat on disk unprotected may have been copied,
+  // so locking it later would prove nothing.
   static async init(home: string, opts: { relay: string; passphrase?: string; logN?: number; now?: () => number }): Promise<Counterpart> {
     const file = join(home, "keys.json");
     if (existsSync(file)) throw new Error(`already initialised at ${home}`);
@@ -182,14 +185,6 @@ export class Counterpart {
       return unsealRoot(this.keys.rootKey, this.keys.sealedRoot, passphrase);
     }
     return this.keys.root!;
-  }
-
-  // Lock an unprotected root key under a passphrase.
-  protect(passphrase: string, logN = DEFAULT_LOG_N): void {
-    if (this.keys.sealedRoot) throw new Error("the root key is already protected");
-    const { root, ...rest } = this.keys;
-    this.keys = { ...rest, sealedRoot: sealRoot(root!, passphrase, logN) };
-    saveKeys(this.home, this.keys);
   }
 
   // Renew the device credential now. Needs the passphrase when the root key is locked.
@@ -324,73 +319,81 @@ export class Counterpart {
   // ---- contracts ----
 
   // Put a contract on the table. Anyone on my side may do this, including an
-  // agent: a proposal binds nobody.
-  async propose(threadId: string, input: { title: string; text: string; parts?: ContractPart[] }, opts: { supersedes?: string } = {}): Promise<{ hash: string; event: ThreadEvent }> {
+  // agent: a proposal binds nobody. `supersedes` is the proposal it replaces.
+  async propose(threadId: string, input: { title: string; text: string; parts?: ContractPart[] }, opts: { supersedes?: string } = {}): Promise<{ proposalId: string; hash: string; event: ThreadEvent }> {
     const t = this.thread(threadId);
     const contract = parseContract({ v: 1, title: input.title, text: input.text, parties: [this.keys.rootKey, t.contact_root].sort(), parts: input.parts ?? [] });
     const event = await this.post(threadId, "contract.proposed", opts.supersedes ? { contract, supersedes: opts.supersedes } : { contract });
-    return { hash: contractHash(contract), event };
+    return { proposalId: event.id, hash: contractHash(contract), event };
   }
 
-  // Sign my consent to one exact contract. Only the passphrase holder can do
-  // this, and it cannot be undone.
-  async approve(threadId: string, hash: string, passphrase: string): Promise<Approval> {
-    if (!this.keys.sealedRoot) throw new Error("this identity has no passphrase, so approvals from it would prove nothing. Run: cpart protect");
+  // Sign my consent to one exact proposal. `expectHash` is the hash of the text
+  // the owner was shown; if what is stored no longer matches it, nothing is
+  // signed. Only the passphrase holder can do this, and it cannot be undone.
+  async approve(threadId: string, proposalId: string, expectHash: string, passphrase: string): Promise<Approval> {
+    if (!this.keys.sealedRoot) throw new Error("this identity was made without a passphrase, so it cannot approve contracts. Create one with a passphrase to sign agreements.");
     const t = this.thread(threadId);
-    const view = this.contracts(threadId).find((c) => c.hash === hash);
-    if (!view) throw new Error(`no contract ${hash} in this thread`);
-    if (view.approvedByMe) throw new Error("you have already approved this contract");
+    const view = this.contracts(threadId).find((c) => c.proposalId === proposalId);
+    if (!view) throw new Error(`no proposal ${proposalId} in this thread`);
+    if (view.hash !== expectHash) throw new Error("the proposal is not the text you were shown. Nothing was signed.");
+    if (view.approvedByMe) throw new Error("you have already approved this proposal");
     const root = unsealRoot(this.keys.rootKey, this.keys.sealedRoot, passphrase);
-    const approval = signApproval(root, { threadGenesis: t.genesis, proposalId: view.proposalId, contractHash: hash, parties: view.contract.parties, approvedAt: this.now() });
-    await this.post(threadId, "contract.accepted", { approval }, [view.proposalId]);
+    const approval = signApproval(root, { threadGenesis: t.genesis, proposalId, contractHash: view.hash, parties: view.contract.parties, approvedAt: this.now() });
+    await this.post(threadId, "contract.accepted", { approval }, [proposalId]);
     return approval;
   }
 
-  async decline(threadId: string, hash: string, reason?: string): Promise<void> {
-    await this.post(threadId, "contract.declined", reason ? { contractHash: hash, reason } : { contractHash: hash });
+  async decline(threadId: string, proposalId: string, reason?: string): Promise<void> {
+    await this.post(threadId, "contract.declined", reason ? { proposalId, reason } : { proposalId });
   }
 
   // Stop asking for approval of something I proposed. Approvals already given stand.
-  async withdraw(threadId: string, hash: string): Promise<void> {
-    await this.post(threadId, "contract.withdrawn", { contractHash: hash });
+  async withdraw(threadId: string, proposalId: string): Promise<void> {
+    await this.post(threadId, "contract.withdrawn", { proposalId });
   }
 
   contracts(threadId: string): ContractView[] {
     const t = this.thread(threadId);
     const me = this.keys.rootKey;
     const rows = this.db.prepare("SELECT * FROM proposals WHERE thread_id = ? ORDER BY rowid").all(threadId) as unknown as ProposalRow[];
-    const approvals = this.db.prepare("SELECT contract_hash, approver_root FROM approvals WHERE thread_id = ?").all(threadId) as { contract_hash: string; approver_root: string }[];
-    const marks = this.db.prepare("SELECT contract_hash, kind, by_root, reason FROM contract_marks WHERE thread_id = ? ORDER BY rowid").all(threadId) as { contract_hash: string; kind: string; by_root: string; reason: string | null }[];
+    const approvals = this.db.prepare("SELECT proposal_id, approver_root FROM approvals WHERE thread_id = ?").all(threadId) as { proposal_id: string; approver_root: string }[];
+    const marks = this.db.prepare("SELECT proposal_id, kind, by_root, reason FROM contract_marks WHERE thread_id = ? ORDER BY rowid").all(threadId) as { proposal_id: string; kind: string; by_root: string; reason: string | null }[];
     const superseded = new Set(rows.map((r) => r.supersedes).filter(Boolean));
-    const byHash = new Map<string, ProposalRow>();
-    for (const r of rows) byHash.set(r.contract_hash, r); // the latest proposal of a contract is the one approvals attach to
-    return [...byHash.values()].map((r): ContractView => {
-      const has = (root: string): boolean => approvals.some((a) => a.contract_hash === r.contract_hash && a.approver_root === root);
-      const mine = marks.filter((m) => m.contract_hash === r.contract_hash);
+    return rows.map((r): ContractView => {
+      // Never trust the stored hash: what is shown and signed is recomputed
+      // from the text itself, so an edited database cannot pair one text with
+      // another's hash.
+      const contract = parseContract(JSON.parse(r.contract));
+      const hash = contractHash(contract);
+      if (hash !== r.contract_hash) throw new Error(`stored proposal ${r.event_id} does not match its hash; the database has been altered`);
+      const has = (root: string): boolean => approvals.some((a) => a.proposal_id === r.event_id && a.approver_root === root);
+      const mine = marks.filter((m) => m.proposal_id === r.event_id);
       const declines = mine.filter((m) => m.kind === "declined");
       const withdrawn = mine.some((m) => m.kind === "withdrawn");
       const approvedByMe = has(me);
       const approvedByThem = has(t.contact_root);
-      const status: ContractStatus = approvedByMe && approvedByThem ? "agreed" : withdrawn ? "withdrawn" : declines.length ? "declined" : superseded.has(r.contract_hash) ? "superseded" : "open";
+      const status: ContractStatus = approvedByMe && approvedByThem ? "agreed" : withdrawn ? "withdrawn" : declines.length ? "declined" : superseded.has(r.event_id) ? "superseded" : "open";
       return {
-        hash: r.contract_hash, contract: JSON.parse(r.contract) as Contract, proposalId: r.event_id, proposedByMe: r.proposer_root === me, proposedAt: r.at,
+        proposalId: r.event_id, hash, contract, proposedByMe: r.proposer_root === me, proposedAt: r.at,
         supersedes: r.supersedes, approvedByMe, approvedByThem, declinedBy: declines.map((d) => (d.by_root === me ? "me" : "them")),
         declineReason: declines.at(-1)?.reason ?? null, withdrawn, status,
       };
     });
   }
 
-  // The contract plus both signatures: everything needed to check, without
-  // this program's database, that both people approved exactly this text.
-  agreement(threadId: string, hash: string): Agreement {
-    const t = this.thread(threadId);
-    const view = this.contracts(threadId).find((c) => c.hash === hash);
-    if (!view) throw new Error(`no contract ${hash} in this thread`);
-    const rows = this.db.prepare("SELECT json FROM approvals WHERE thread_id = ? AND contract_hash = ? ORDER BY approver_root").all(threadId, hash) as { json: string }[];
+  // The contract, the thread's first event and both signatures: everything
+  // needed to check, without this program's database, that both people
+  // approved exactly this proposal.
+  agreement(threadId: string, proposalId: string): Agreement {
+    const view = this.contracts(threadId).find((c) => c.proposalId === proposalId);
+    if (!view) throw new Error(`no proposal ${proposalId} in this thread`);
+    const rows = this.db.prepare("SELECT json FROM approvals WHERE proposal_id = ? ORDER BY approver_root").all(proposalId) as { json: string }[];
     if (rows.length !== 2) throw new Error("not agreed yet: both people must approve");
-    const agreement: Agreement = { v: 1, contract: view.contract, contractHash: hash, threadId, threadGenesis: t.genesis, approvals: rows.map((r) => JSON.parse(r.json) as Approval) };
-    verifyAgreement(agreement);
-    return agreement;
+    const first = (this.db.prepare("SELECT json FROM events WHERE thread_id = ? AND author_seq = 0 AND status = 'applied'").all(threadId) as { json: string }[])
+      .map((r) => JSON.parse(r.json) as ThreadEvent)
+      .find((e) => e.type === "thread.opened");
+    if (!first) throw new Error("this thread has no opening event");
+    return verifyAgreement({ v: 1, contract: view.contract, contractHash: view.hash, proposalId, genesis: first, approvals: rows.map((r) => JSON.parse(r.json) as Approval) });
   }
 
   // What an approval in this thread must be bound to.
@@ -410,15 +413,14 @@ export class Counterpart {
     if (event.lane !== "act") return;
     const t = this.thread(event.threadId);
     const parties = [this.keys.rootKey, t.contact_root].sort();
-    const proposal = (hash: string): ProposalRow | undefined =>
-      this.db.prepare("SELECT * FROM proposals WHERE thread_id = ? AND contract_hash = ? ORDER BY rowid DESC LIMIT 1").get(event.threadId, hash) as ProposalRow | undefined;
+    const proposal = (id: string): ProposalRow | undefined => this.db.prepare("SELECT * FROM proposals WHERE event_id = ? AND thread_id = ?").get(id, event.threadId) as ProposalRow | undefined;
 
     if (event.type === "contract.proposed") {
       const body = (event as ThreadEvent<"contract.proposed">).body;
       if (body.contract.parties.join() !== parties.join()) throw new Reject("contract parties must be exactly the two people in this thread");
       const n = (this.db.prepare("SELECT COUNT(*) AS n FROM proposals WHERE thread_id = ? AND proposer_root = ?").get(event.threadId, authorRoot) as { n: number }).n;
       if (n >= MAX_PROPOSALS_PER_SIDE) throw new Reject(`a side may make at most ${MAX_PROPOSALS_PER_SIDE} proposals in a thread`);
-      if (body.supersedes && !proposal(body.supersedes)) throw new Reject("proposal supersedes a contract this thread has not seen");
+      if (body.supersedes && !proposal(body.supersedes)) throw new Reject("proposal supersedes one this thread has not seen");
     } else if (event.type === "contract.accepted") {
       let a: Approval;
       try {
@@ -429,15 +431,16 @@ export class Counterpart {
       if (a.approver !== authorRoot) throw new Reject("approval is not signed by the person who sent it");
       if (a.threadGenesis !== t.genesis) throw new Reject("approval belongs to a different thread");
       if (a.parties.join() !== parties.join()) throw new Reject("approval names different parties");
-      const p = this.db.prepare("SELECT * FROM proposals WHERE event_id = ? AND thread_id = ?").get(a.proposalId, event.threadId) as ProposalRow | undefined;
+      const p = proposal(a.proposalId);
       if (!p || p.contract_hash !== a.contractHash) throw new Reject("approval does not match a proposal in this thread");
       if (!event.parents.includes(a.proposalId)) throw new Reject("acceptance must refer to the proposal it accepts");
-      if (this.db.prepare("SELECT 1 FROM approvals WHERE thread_id = ? AND contract_hash = ? AND approver_root = ?").get(event.threadId, a.contractHash, authorRoot)) throw new Reject("this person already approved this contract");
+      if (this.db.prepare("SELECT 1 FROM approvals WHERE proposal_id = ? AND approver_root = ?").get(a.proposalId, authorRoot)) throw new Reject("this person already approved this proposal");
     } else if (event.type === "contract.declined") {
-      if (!proposal((event as ThreadEvent<"contract.declined">).body.contractHash)) throw new Reject("declines a contract this thread has not seen");
+      if (!proposal((event as ThreadEvent<"contract.declined">).body.proposalId)) throw new Reject("declines a proposal this thread has not seen");
     } else if (event.type === "contract.withdrawn") {
-      const hash = (event as ThreadEvent<"contract.withdrawn">).body.contractHash;
-      if (!this.db.prepare("SELECT 1 FROM proposals WHERE thread_id = ? AND contract_hash = ? AND proposer_root = ?").get(event.threadId, hash, authorRoot)) throw new Reject("only the proposer can withdraw a proposal");
+      const p = proposal((event as ThreadEvent<"contract.withdrawn">).body.proposalId);
+      if (!p) throw new Reject("withdraws a proposal this thread has not seen");
+      if (p.proposer_root !== authorRoot) throw new Reject("only the proposer can withdraw a proposal");
     }
   }
 
@@ -449,12 +452,12 @@ export class Counterpart {
         .run(event.id, event.threadId, contractHash(body.contract), authorRoot, body.supersedes ?? null, JSON.stringify(body.contract), event.createdAt);
     } else if (event.type === "contract.accepted") {
       const a = (event as ThreadEvent<"contract.accepted">).body.approval;
-      this.db.prepare("INSERT INTO approvals (thread_id, contract_hash, approver_root, event_id, json) VALUES (?, ?, ?, ?, ?)").run(event.threadId, a.contractHash, authorRoot, event.id, JSON.stringify(a));
+      this.db.prepare("INSERT INTO approvals (proposal_id, approver_root, thread_id, event_id, json) VALUES (?, ?, ?, ?, ?)").run(a.proposalId, authorRoot, event.threadId, event.id, JSON.stringify(a));
     } else if (event.type === "contract.declined" || event.type === "contract.withdrawn") {
-      const body = event.body as { contractHash: string; reason?: string };
+      const body = event.body as { proposalId: string; reason?: string };
       this.db
-        .prepare("INSERT INTO contract_marks (event_id, thread_id, contract_hash, kind, by_root, reason) VALUES (?, ?, ?, ?, ?, ?)")
-        .run(event.id, event.threadId, body.contractHash, event.type === "contract.declined" ? "declined" : "withdrawn", authorRoot, body.reason ?? null);
+        .prepare("INSERT INTO contract_marks (event_id, thread_id, proposal_id, kind, by_root, reason) VALUES (?, ?, ?, ?, ?, ?)")
+        .run(event.id, event.threadId, body.proposalId, event.type === "contract.declined" ? "declined" : "withdrawn", authorRoot, body.reason ?? null);
     }
   }
 

@@ -5,6 +5,7 @@ export * from "./keys.ts";
 export * from "./identity.ts";
 export * from "./contract.ts";
 export * from "./events.ts";
+export * from "./agreement.ts";
 export * from "./envelope.ts";
 export * from "./invite.ts";
 export * from "./relay-frames.ts";

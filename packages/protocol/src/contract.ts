@@ -92,32 +92,3 @@ export function verifyApproval(x: unknown): Approval {
   if (!verify(a.approver, DOMAIN, canonicalBytes(body), sig)) throw new Error("approval: bad signature");
   return a;
 }
-
-// Both signatures over one contract, with what is needed to check them offline.
-// A valid file proves these two root keys approved this text in this thread. It
-// does not prove whose keys they are: compare them with keys you already trust.
-export interface Agreement {
-  v: 1;
-  contract: Contract;
-  contractHash: string;
-  threadId: string;
-  threadGenesis: string;
-  approvals: Approval[];
-}
-
-export function verifyAgreement(x: unknown): Agreement {
-  if (!isObject(x) || !onlyKeys(x, ["v", "contract", "contractHash", "threadId", "threadGenesis", "approvals"])) throw new Error("agreement: shape");
-  if (x.v !== 1 || !isKey(x.contractHash) || !isId(x.threadId) || !isKey(x.threadGenesis)) throw new Error("agreement: fields");
-  const contract = parseContract(x.contract);
-  if (contractHash(contract) !== x.contractHash) throw new Error("agreement: the contract does not match its hash");
-  if (!Array.isArray(x.approvals) || x.approvals.length !== 2) throw new Error("agreement: needs exactly two approvals");
-  const approvals = x.approvals.map(verifyApproval);
-  for (const a of approvals) {
-    if (a.contractHash !== x.contractHash) throw new Error("agreement: an approval is for a different contract");
-    if (a.threadGenesis !== x.threadGenesis) throw new Error("agreement: an approval is from a different thread");
-    if (a.parties.join() !== contract.parties.join()) throw new Error("agreement: an approval names different parties");
-  }
-  const approvers = approvals.map((a) => a.approver).sort();
-  if (approvers.join() !== contract.parties.join()) throw new Error("agreement: the two approvals must come from the two parties");
-  return { v: 1, contract, contractHash: x.contractHash, threadId: x.threadId, threadGenesis: x.threadGenesis, approvals };
-}

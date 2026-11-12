@@ -46,8 +46,9 @@ Agree on something:
 
 ```sh
 cpart propose <thread> --title "Orders pagination" --file contract.md --part json-schema:page.schema.json
-cpart approve <thread> <hash>            # shows the text, asks for your passphrase, cannot be undone
-cpart agreement export <thread> <hash> --out agreement.json
+cpart contracts <thread>                 # lists proposals with their ids
+cpart approve <thread> <id>              # shows the text, asks for your passphrase, cannot be undone
+cpart agreement export <thread> <id> --out agreement.json
 cpart agreement verify agreement.json    # works anywhere, no database needed
 ```
 
