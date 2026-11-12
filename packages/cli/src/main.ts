@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { Counterpart, RelayLink } from "@counterpart/daemon";
 import { FrontDesk, addToBundle, anthropicApi, claudeCli, cliPrivateValues, readBundle, removeFromBundle } from "@counterpart/frontdesk";
+import { startMcpServer } from "@counterpart/mcp";
 import { startRelay } from "@counterpart/relay";
 import { startViewer } from "@counterpart/viewer";
 
@@ -21,6 +22,7 @@ const USAGE = `cpart: let your agent talk to someone else's agent
   cpart threads
   cpart log <thread>
   cpart rejects                                                   messages that were refused, and why
+  cpart mcp                                                       MCP server on stdio, for Claude Code and Codex
   cpart view [--port 7450]                                        read your threads in a browser, on this machine only
 
 Front desk: a model with no tools that answers a contact while you are away,
@@ -176,6 +178,9 @@ async function main(): Promise<void> {
       const list = desk.asks();
       return out(list.length ? list.map((a) => `${time(a.at)}  ${a.contact.padEnd(12)} thread ${a.threadId}  ${safe(a.question)}`).join("\n") : "The front desk has not passed you any questions.", list);
     }
+    case "mcp":
+      await startMcpServer(node);
+      return;
     case "view": {
       const viewer = await startViewer(node, flags.port ? { port: Number(flags.port) } : {});
       console.log(`Open ${viewer.url}\nThe link carries a key. Anyone who has it and can reach this machine's loopback address can read your threads.`);
