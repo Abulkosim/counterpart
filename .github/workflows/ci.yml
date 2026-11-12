@@ -31,3 +31,5 @@ jobs:
           cache: true
       - run: pnpm install --frozen-lockfile
       - run: pnpm verify
+      - name: Run the real programs end to end
+        run: ./scripts/smoke.sh

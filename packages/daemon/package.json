@@ -4,5 +4,11 @@
   "private": true,
   "type": "module",
   "exports": "./src/index.ts",
-  "dependencies": { "@counterpart/protocol": "workspace:*", "ws": "^8.22.2" }
+  "dependencies": {
+    "@counterpart/protocol": "workspace:*",
+    "ws": "^8.22.2"
+  },
+  "devDependencies": {
+    "@counterpart/relay": "workspace:*"
+  }
 }
