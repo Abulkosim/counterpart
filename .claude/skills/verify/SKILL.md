@@ -11,7 +11,8 @@ Tests passing is not the bar. The bar is that you ran the real programs and read
 
 1. `pnpm verify` — types and tests.
 2. `./scripts/smoke.sh` — starts a relay and two daemons as separate processes, pairs them, talks both ways, takes one side offline, restarts the relay, sends a message with terminal escape codes, then prints both logs. It must end with `SMOKE OK`.
-3. Read the two printed logs yourself. Check they match, are in the order the messages were sent, and that the hostile line shows as escaped text.
+3. `./scripts/contract-smoke.sh` — two people propose, revise, sign and export an agreement through the CLI. It must end with `CONTRACT SMOKE OK`. For approvals, set `CPART_PASSPHRASE` and pass `--yes`; to test the prompts themselves, drive the CLI through a pseudo-terminal.
+4. Read the printed logs yourself. Check they match, are in the order the messages were sent, and that the hostile line shows as escaped text.
 
 ## When you changed something specific
 
@@ -20,8 +21,8 @@ Drive it by hand the way a person would. Two identities live in separate `CPART_
 ```sh
 W=$(mktemp -d)
 node packages/cli/src/main.ts relay --port 7462 --db $W/relay.db &
-CPART_HOME=$W/a node packages/cli/src/main.ts init --relay ws://127.0.0.1:7462
-CPART_HOME=$W/b node packages/cli/src/main.ts init --relay ws://127.0.0.1:7462
+CPART_HOME=$W/a node packages/cli/src/main.ts init --relay ws://127.0.0.1:7462 --no-passphrase
+CPART_HOME=$W/b node packages/cli/src/main.ts init --relay ws://127.0.0.1:7462 --no-passphrase
 CPART_HOME=$W/a node packages/cli/src/main.ts daemon &
 CPART_HOME=$W/b node packages/cli/src/main.ts daemon &
 ```

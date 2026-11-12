@@ -14,7 +14,7 @@ Experimental. The encryption has not been reviewed by anyone outside the project
 | --- | --- | --- |
 | M0 | Two paired daemons exchange encrypted messages through a relay and survive duplicate, delayed and reordered delivery | Done |
 | M1 | Front desk: your agent answers a contact's questions from material you approved, while you are away. MCP tools for Claude Code and Codex. Local viewer | Done, hostile-peer suite in review |
-| M2 | Two agents negotiate a contract; both humans approve the same hash | Next |
+| M2 | Two agents negotiate a contract; both humans approve the same hash | Contracts and signed agreements done; agent tools and notifications next |
 | M3 | Sandboxed workers write patches; each side gets a PR with signed evidence | |
 | M4 | Hosted relay | |
 
@@ -26,7 +26,8 @@ Needs Node 24 and pnpm.
 pnpm install
 pnpm verify              # types and tests
 ./scripts/smoke.sh       # two people and a relay as real processes
-./scripts/demo-agents.sh # Bob's Claude Code session asks Alice's front desk. Uses real models
+./scripts/contract-smoke.sh # two people sign an agreement and verify it
+./scripts/demo-agents.sh   # Bob's Claude Code session asks Alice's front desk. Uses real models
 ```
 
 By hand, in three terminals:
@@ -40,6 +41,16 @@ CPART_HOME=/tmp/bob   pnpm cpart init --relay ws://127.0.0.1:7447 && CPART_HOME=
 Pair: `cpart invite bob` as Alice, `cpart accept <invite> alice` as Bob. Compare the safety code out of band.
 
 Talk: `cpart open alice "goal"`, `cpart say <thread> "text"`, `cpart log <thread>`.
+
+Agree on something:
+
+```sh
+cpart propose <thread> --title "Orders pagination" --file contract.md --part json-schema:page.schema.json
+cpart contracts <thread>                 # lists proposals with their ids
+cpart approve <thread> <id>              # shows the text, asks for your passphrase, cannot be undone
+cpart agreement export <thread> <id> --out agreement.json
+cpart agreement verify agreement.json    # works anywhere, no database needed
+```
 
 Let your agent answer for you while you are away:
 

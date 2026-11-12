@@ -56,7 +56,7 @@ Nobody handles the case that matters here: two people who do not fully trust eac
 
 Three separate things, with separate lifetimes:
 
-- A **human** has a root key. Contacts pin it. Two humans compare a short safety code out of band to confirm they have each other's real key.
+- A **human** has a root key. Contacts pin it. Two humans compare a short safety code out of band to confirm they have each other's real key. The root key is locked with a passphrase. The daemon cannot use it; only a short-lived command the human runs can, to renew a device or approve a contract.
 - A **device** has its own signing and encryption keys and a credential signed by the root key. Credentials expire after 90 days and renew themselves. Devices can be replaced without re-pairing.
 - A **grant** (from M2) is a short-lived, locally issued permission bound to a contact, a thread, an operation, a resource, an expiry and a budget.
 
@@ -69,7 +69,7 @@ A thread is a log of signed events between two people. Events reference earlier 
 Every event is in one of two lanes:
 
 - **Talk.** Free text between agents. Useful, non-binding, and always treated as untrusted. Nothing said here changes what anyone is allowed to do.
-- **Act** (from M2). Typed, signed operations: propose a contract, accept a contract by hash, request evidence, attach evidence, ask the human. Only these change state, and each is checked against grants.
+- **Act.** Typed, signed operations: propose a contract, accept it, decline it, withdraw it. Evidence comes in M3. Only these change what has been agreed, and each is checked by code.
 
 Text from a peer never becomes a file path, a command, a URL or a field of a grant.
 
@@ -86,7 +86,7 @@ Defences, in order of how much we rely on them:
 1. **Nothing to steal.** The model that reads peer text (the front desk) can see only the approved bundle. It has no file access, no tools and no conversation history. If it is completely taken over, the worst it can do is disclose the bundle, which was approved for that contact anyway.
 2. **Nothing to do.** Peer text cannot cause local effects. Effects come from act-lane operations checked by code against grants the human issued.
 3. **Sandboxed work.** When a worker implements an agreed contract, it runs on a copy of the repo with no credentials and restricted network, and its output is a patch a human reviews.
-4. **Approvals outside the model.** Accepting a contract or publishing a PR needs the human's approval in the viewer or CLI.
+4. **Approvals outside the model.** An approval is a signature by the human's root key, which is locked with their passphrase. An agent on the same machine, even one with a shell, can read the key file and cannot sign with it. This holds while the machine is honest: a keylogger or a replaced `cpart` defeats it. Agents can propose, because a proposal binds nobody.
 5. **Rendering.** What reaches a live coding session is a fixed template built from verified fields: contact name, event type, hash, counts, a local link. No peer-written text.
 6. **A hostile-peer test suite** that runs in CI. Results for the code-enforced rules and for model behaviour are reported separately, because only the first kind are guarantees.
 
@@ -102,7 +102,7 @@ Each side pays for its own model use. Before the daemon starts any model work it
 | --- | --- | --- |
 | M0 | Two paired daemons exchange encrypted messages and survive duplicate, delayed and reordered delivery | Done |
 | M1 | Front desk answers a contact's questions from an approved bundle while the human is offline. Viewer shows where each answer came from. Hostile-peer suite, first version. Slots and budgets | Done except the hostile-peer suite, which is in review |
-| M2 | Act lane: contracts proposed and accepted by hash, human approvals, notifications into live Claude Code and Codex sessions | |
+| M2 | Act lane: contracts proposed and accepted by hash, human approvals, notifications into live Claude Code and Codex sessions | Contracts, approvals and agreement files done. MCP tools, viewer and notifications next |
 | M3 | Sandboxed workers produce patches. Each side opens a PR carrying the contract hash and the other side's signed evidence. A GitHub Action checks it and rejects stale evidence | |
 | M4 | Hosted invite-only relay. Launch demo: overnight answer, human steps in, two PRs, recovery from an interrupted delivery | |
 
