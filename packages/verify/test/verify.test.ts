@@ -9,7 +9,7 @@ import { Counterpart, RelayLink } from "@counterpart/daemon";
 import { type Agreement, canonicalize as protocolCanonicalize, generateSigningKey, signApproval, verifyAgreement as protocolVerify } from "@counterpart/protocol";
 import { type Relay, startRelay } from "@counterpart/relay";
 // @ts-expect-error plain JavaScript on purpose: it is copied into other repos as one file
-import { canonicalize, checkSchema, validate, verifyAgreement, verifyTree } from "../src/verify.mjs";
+import { canonicalize, checkSchema, strictParse, validate, verifyAgreement, verifyTree } from "../src/verify.mjs";
 
 const VERIFIER = join(dirname(fileURLToPath(import.meta.url)), "../src/verify.mjs");
 const SCHEMA = JSON.stringify({ type: "object", required: ["data", "next_cursor"], properties: { data: { type: "array", maxItems: 200, items: { type: "object", required: ["id"], properties: { id: { type: "string" } } } }, next_cursor: { type: ["string", "null"] } }, additionalProperties: false }, null, 2) + "\n";
@@ -67,7 +67,7 @@ function repo(): { tree: string; trust: Buffer; write(rel: string, content: stri
   write("fixtures/page/valid/last.json", JSON.stringify({ data: [], next_cursor: null }));
   write("fixtures/page/invalid/no-cursor.json", JSON.stringify({ data: [] }));
   write("fixtures/page/invalid/extra.json", JSON.stringify({ data: [], next_cursor: null, total: 3 }));
-  const trust = Buffer.from(JSON.stringify({ v: 1, parties, bindings: [{ part: "page.schema.json", path: "schemas/page.schema.json", fixtures: { valid: "fixtures/page/valid", invalid: "fixtures/page/invalid" } }] }));
+  const trust = Buffer.from(JSON.stringify({ v: 1, parties, bindings: [{ part: "page.schema.json", path: "schemas/page.schema.json", contract: agreement.contractHash, fixtures: { valid: "fixtures/page/valid", invalid: "fixtures/page/invalid" } }] }));
   return { tree, trust, write };
 }
 const failures = (r: { checks: { ok: boolean; what: string; detail: string }[] }): string => r.checks.filter((c) => !c.ok).map((c) => `${c.what}: ${c.detail}`).join(" | ");
@@ -127,7 +127,7 @@ test("a change cannot bring its own signers, redirect a binding, or drop the agr
 
   // The tree's own copy of trust.json is ignored; only the one passed in counts.
   const selfTrust = repo();
-  selfTrust.write(".counterpart/trust.json", JSON.stringify({ v: 1, parties: ps, bindings: [{ part: "page.schema.json", path: "decoy.json" }] }));
+  selfTrust.write(".counterpart/trust.json", JSON.stringify({ v: 1, parties: ps, bindings: [{ part: "page.schema.json", path: "decoy.json", contract: "A".repeat(43) }] }));
   selfTrust.write("schemas/page.schema.json", "{}");
   assert.equal(verifyTree(selfTrust.tree, selfTrust.trust).ok, false);
 
@@ -161,7 +161,7 @@ test("symlinks, traversal and oversized files in the tree are refused, not follo
   assert.match(failures(verifyTree(a.tree, a.trust)), /symlink/);
 
   const b = repo();
-  const up = Buffer.from(JSON.stringify({ v: 1, parties, bindings: [{ part: "page.schema.json", path: "../schemas/page.schema.json" }] }));
+  const up = Buffer.from(JSON.stringify({ v: 1, parties, bindings: [{ part: "page.schema.json", path: "../schemas/page.schema.json", contract: agreement.contractHash }] }));
   assert.match(failures(verifyTree(b.tree, up)), /bad path/);
 
   const c = repo();
@@ -201,4 +201,52 @@ test("the file runs on its own from another directory, with nothing else from th
   writeFileSync(join(tree, "package.json"), JSON.stringify({ scripts: { preinstall: `touch ${marker}` } }));
   spawnSync("node", ["verify.mjs", "--tree", tree, "--trust", "trust.json"], { cwd: elsewhere, encoding: "utf8" });
   assert.equal(existsSync(marker), false);
+});
+
+test("an older agreement between the same two people cannot stand in for the pinned one", async () => {
+  const { contractHash } = await import("@counterpart/protocol");
+  const a = repo();
+  // The base branch pins a newer contract. The tree still carries the old agreement and the old schema.
+  const newer = { ...agreement.contract, text: "Version two." };
+  const pinned = Buffer.from(JSON.stringify({ ...JSON.parse(a.trust.toString()), bindings: [{ part: "page.schema.json", path: "schemas/page.schema.json", contract: contractHash(newer) }] }));
+  assert.match(failures(verifyTree(a.tree, pinned)), /pinned to is not in the tree/);
+  // A binding with no pinned contract is not a binding.
+  const unpinned = Buffer.from(JSON.stringify({ v: 1, parties, bindings: [{ part: "page.schema.json", path: "schemas/page.schema.json" }] }));
+  assert.match(failures(verifyTree(a.tree, unpinned)), /needs the hash of the contract/);
+});
+
+test("fixtures are parsed strictly: duplicate keys, inexact numbers and a byte order mark are errors", () => {
+  assert.throws(() => strictParse('{"a":1,"a":2}'), /duplicate key/);
+  assert.throws(() => strictParse("9007199254740993"), /too large to compare exactly/);
+  assert.throws(() => strictParse('{"a":1} x'), /after the value/);
+  assert.throws(() => strictParse("[1,]"), /unexpected|expected/);
+  assert.deepEqual(strictParse(' {"b":[1,2.5,-3e2,true,null,"\\u00e9"],"__proto__":{"x":1}} '), JSON.parse('{"b":[1,2.5,-300,true,null,"é"],"__proto__":{"x":1}}'));
+  assert.equal(Object.getPrototypeOf(strictParse('{"__proto__":{"polluted":1}}')), Object.prototype);
+
+  const a = repo();
+  a.write("fixtures/page/invalid/dup.json", '{"data":[],"next_cursor":null,"data":"not an array"}');
+  assert.match(failures(verifyTree(a.tree, a.trust)), /duplicate key/);
+  const b = repo();
+  b.write("fixtures/page/valid/bom.json", "\ufeff" + JSON.stringify({ data: [], next_cursor: null }));
+  assert.match(failures(verifyTree(b.tree, b.trust)), /not strict JSON/);
+});
+
+test("const and enum compare by value, not by key order or rounded numbers", () => {
+  const s = { oneOf: [{ const: { a: 1, b: 2 } }, { const: { b: 2, a: 1 } }] };
+  checkSchema(s);
+  assert.ok(validate(s, { a: 1, b: 2 }).length > 0, "both alternatives match the same value, so oneOf fails");
+  assert.deepEqual(validate({ enum: [{ x: [1, { y: null }] }] }, { x: [1, { y: null }] }), []);
+  assert.ok(validate({ const: [1, 2] }, [2, 1]).length > 0);
+});
+
+test("a schema built to make checking explode is cut off", () => {
+  let s: Record<string, unknown> = { type: "integer" };
+  for (let i = 0; i < 24; i++) s = { anyOf: [s, s] };
+  checkSchema(s);
+  assert.throws(() => verifyTreeWith(s), /more checking than this verifier allows/);
+  function verifyTreeWith(schema: unknown): void {
+    const r = verifyTree(repo().tree, repo().trust);
+    assert.equal(r.ok, true);
+    validate(schema, "not an integer");
+  }
 });

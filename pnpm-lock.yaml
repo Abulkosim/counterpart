@@ -196,6 +196,9 @@ importers:
       '@counterpart/viewer':
         specifier: workspace:*
         version: link:../viewer
+      '@counterpart/worker':
+        specifier: workspace:*
+        version: link:../worker
 
   packages/daemon:
     dependencies:
@@ -298,6 +301,15 @@ importers:
       '@counterpart/daemon':
         specifier: workspace:*
         version: link:../daemon
+      '@counterpart/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+
+  packages/worker:
+    dependencies:
+      '@counterpart/frontdesk':
+        specifier: workspace:*
+        version: link:../frontdesk
       '@counterpart/protocol':
         specifier: workspace:*
         version: link:../protocol

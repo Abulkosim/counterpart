@@ -12,6 +12,7 @@
     "@counterpart/relay": "workspace:*",
     "@counterpart/frontdesk": "workspace:*",
     "@counterpart/viewer": "workspace:*",
-    "@counterpart/mcp": "workspace:*"
+    "@counterpart/mcp": "workspace:*",
+    "@counterpart/worker": "workspace:*"
   }
 }
