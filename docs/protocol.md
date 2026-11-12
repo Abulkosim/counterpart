@@ -32,7 +32,7 @@ Event { id, threadId, author, authorSeq, parents[], lane, type, body, createdAt 
 | `contact.accepted` | control | `{}` |
 | `contact.hello` | control | `{}`. Sent after a device renews its credential, so contacts receive the new one |
 | `thread.opened` | control | `{ goal, participants: [rootKey, rootKey] }` |
-| `talk.posted` | talk | `{ text }` |
+| `talk.posted` | talk | `{ text, via? }`. `via` is `human`, `agent` or `frontdesk`: the sender's own claim about who wrote it |
 
 Unknown types and unknown fields are rejected.
 
