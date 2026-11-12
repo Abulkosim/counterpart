@@ -52,8 +52,25 @@ export function parseCredential(x: unknown): DeviceCredential {
   return { v, rootKey, signKey, encKey, issuedAt, expiresAt, sig };
 }
 
+// X25519 public keys that make every shared secret predictable. Nothing can be
+// encrypted to them, so a credential carrying one is refused.
+const WEAK_ENC_KEYS = new Set(
+  [
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "0100000000000000000000000000000000000000000000000000000000000000",
+    "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800",
+    "5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f1157",
+    "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+    "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+    "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+  ].map((h) => Buffer.from(h, "hex").toString("base64url")),
+);
+
 export function verifyCredential(x: unknown, now = Date.now()): DeviceCredential {
   const c = parseCredential(x);
+  const enc = Buffer.from(unb64u(c.encKey));
+  enc[31]! &= 0x7f; // the top bit is ignored by X25519
+  if (WEAK_ENC_KEYS.has(enc.toString("base64url"))) throw new Error("credential: unusable encryption key");
   const { sig, ...body } = c;
   if (!verify(c.rootKey, DOMAIN, canonicalBytes(body), sig)) throw new Error("credential: bad signature");
   if (c.issuedAt > now + 5 * 60_000) throw new Error("credential: issued in the future");

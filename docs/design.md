@@ -45,7 +45,7 @@ Nobody handles the case that matters here: two people who do not fully trust eac
 └───────────────────────────┘                        └───────────────────────────┘
 ```
 
-- **Relay.** A WebSocket server with a mailbox per device. It stores ciphertext until the recipient acknowledges it. It can be self-hosted. It sees who a message is for and when it expires, and nothing else.
+- **Relay.** A WebSocket server with a mailbox per device. It stores ciphertext until the recipient acknowledges it. It can be self-hosted. It cannot read messages. It does know which device sends to which, because it checks who is logging in, and it keeps that with each queued message.
 - **Daemon.** One per person. Holds keys, the event log, contacts, grants and budgets. Runs the rule checker. Talks to the relay.
 - **Front desk.** A model with no tools that answers a contact's questions using only a bundle of material the human approved for that contact. It can run while the human is away.
 - **Workers.** Sandboxed agents that write code against a copy of the repo. They produce a patch and nothing else.
@@ -88,7 +88,7 @@ Defences, in order of how much we rely on them:
 3. **Sandboxed work.** When a worker implements an agreed contract, it runs on a copy of the repo with no credentials and restricted network, and its output is a patch a human reviews.
 4. **Approvals outside the model.** An approval is a signature by the human's root key, which is locked with their passphrase. An agent on the same machine, even one with a shell, can read the key file and cannot sign with it. This holds while the machine is honest: a keylogger or a replaced `cpart` defeats it. Agents can propose, because a proposal binds nobody.
 5. **Rendering.** What reaches a live coding session is a fixed template built from verified fields: contact name, event type, hash, counts, a local link. No peer-written text.
-6. **A hostile-peer test suite** that runs in CI. Results for the code-enforced rules and for model behaviour are reported separately, because only the first kind are guarantees.
+6. **A hostile-peer test suite** that runs in CI: [gauntlet.md](gauntlet.md). Results for the code-enforced rules and for model behaviour are reported separately, because only the first kind are guarantees.
 
 Things we do not claim: that a model given peer text will resist it, or that scanning output for secrets catches everything.
 
@@ -101,7 +101,7 @@ Each side pays for its own model use. Before the daemon starts any model work it
 | | Outcome | State |
 | --- | --- | --- |
 | M0 | Two paired daemons exchange encrypted messages and survive duplicate, delayed and reordered delivery | Done |
-| M1 | Front desk answers a contact's questions from an approved bundle while the human is offline. Viewer shows where each answer came from. Hostile-peer suite, first version. Slots and budgets | Done except the hostile-peer suite, which is in review |
+| M1 | Front desk answers a contact's questions from an approved bundle while the human is offline. Viewer shows where each answer came from. Hostile-peer suite, first version. Slots and budgets | Done. The suite's model-behaviour section is still empty |
 | M2 | Act lane: contracts proposed and accepted by hash, human approvals, notifications into live Claude Code and Codex sessions | Contracts, approvals and agreement files done. MCP tools, viewer and notifications next |
 | M3 | Sandboxed workers produce patches. Each side opens a PR carrying the contract hash and the other side's signed evidence. A GitHub Action checks it and rejects stale evidence | |
 | M4 | Hosted invite-only relay. Launch demo: overnight answer, human steps in, two PRs, recovery from an interrupted delivery | |

@@ -7,6 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import WebSocket, { type ServerOptions, WebSocketServer } from "ws";
 import { Counterpart, RelayLink, type Verdict } from "@counterpart/daemon";
 import {
+  hashOf,
   type DeviceCredential, type DeviceSecrets, type EventBodies, type EventType, type KeyPair, type ThreadEvent, type Wire,
   RELAY_AUTH_DOMAIN, SUITE, b64u, canonicalBytes, canonicalize, deviceId, generateSigningKey, hpke, issueDevice, laneOf, parseCanonical,
   randomId, relayAuthMessage, seal, sign, unb64u, utf8,
@@ -71,16 +72,27 @@ export interface Forgery {
   domain?: string;
   sig?: unknown;
   credential?: unknown;
+  signedCredential?: unknown; // the credential the signature was made over, when it differs from the one sent
   inner?: (inner: Record<string, unknown>) => unknown;
   plaintext?: (canonical: string) => string | Uint8Array;
   bound?: unknown; // header used as associated data, instead of the one sent
+}
+
+// The signature covers a hash of the credential. A forged credential that
+// cannot even be hashed gets a placeholder; such a message fails earlier anyway.
+function credentialHash(c: unknown): string {
+  try {
+    return hashOf(c);
+  } catch {
+    return "unhashable";
+  }
 }
 
 export async function forge(f: Forgery): Promise<Wire> {
   const from = secretsOf(f.from);
   const to = credentialOf(f.to);
   const header = { v: 1, suite: SUITE, id: (f.event as { id?: unknown } | null)?.id, to: deviceId(to), expiresAt: f.expiresAt ?? Date.now() + HOUR, ...f.header };
-  const sig = f.sig ?? sign(f.signer ?? from.sign, f.domain ?? "event/v1", canonicalBytes(f.signed ?? { header, event: f.event }));
+  const sig = f.sig ?? sign(f.signer ?? from.sign, f.domain ?? "event/v1", canonicalBytes(f.signed ?? { header, event: f.event, credential: credentialHash(f.signedCredential ?? f.credential ?? from.credential) }));
   const base = { event: f.event, sig, credential: f.credential ?? from.credential };
   const inner = f.inner ? f.inner(base) : base;
   const text = f.plaintext ? f.plaintext(canonicalize(inner)) : canonicalize(inner);

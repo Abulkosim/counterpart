@@ -35,8 +35,16 @@ export const canonicalBytes = (value: unknown): Uint8Array => utf8(canonicalize(
 // Parse and require that the input was already canonical. Rejects duplicate keys,
 // odd whitespace and alternative encodings in one check.
 export function parseCanonical(bytes: Uint8Array): Json {
-  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  const value = JSON.parse(text) as Json;
+  // Keep a leading byte-order mark so it fails as the non-JSON it is. Errors
+  // never quote the input: it is the sender's text and ends up in logs.
+  let value: Json;
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+    value = JSON.parse(text) as Json;
+  } catch {
+    throw new Error("canonical: not valid JSON");
+  }
   if (canonicalize(value) !== text) throw new Error("canonical: input is not canonical");
   return value;
 }

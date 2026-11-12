@@ -133,22 +133,13 @@ export const envelope: Case[] = [
     attacker: "contact",
     title: "Claim another person's device as your own",
     claim: "An event signed by a device is tied to the one person whose root key vouched for it when it was signed.",
-    knownFailure: "the event signature does not cover the credential, so any root key can adopt a signed event",
-    finding: {
-      severity: "low",
-      where: "packages/protocol/src/envelope.ts:52",
-      scenario:
-        "Mallory issues a credential from her own root key for Alice's device keys, which are public. Anyone holding an event Alice signed can swap the credential and it opens as Mallory's. " +
-        "Bob then files Alice's contact.hello under Mallory and replaces Mallory's stored credential, so his next messages to Mallory are encrypted and addressed to Alice's device. " +
-        "There is no working attack today because only the recipient holds the plaintext. It becomes one when signed events are shown to third parties as evidence (M3).",
-      fix: "Sign canonical({ header, event, rootKey }) or a hash of the credential, and verify the same.",
-    },
     async run(ctx) {
       const { bob, alice } = await scene(ctx);
       const mallory = await ctx.contact(bob, "mallory");
       const adopted = mint(ctx.secrets(mallory).root, { signKey: alice.device.credential.signKey, encKey: alice.device.credential.encKey, issuedAt: Date.now() + 1000 });
       const hello = event(alice, randomId(), "contact.hello", {});
-      await ctx.refused(bob, await forge({ from: alice, to: bob, event: hello, credential: adopted }));
+      // Alice signed under her own credential. Mallory can copy that signature but cannot make a new one.
+      await ctx.refused(bob, await forge({ from: alice, to: bob, event: hello, credential: adopted, signedCredential: alice.device.credential }));
       assert.equal(deviceId(bob.contact("mallory").credential), mallory.me.device);
     },
   },
@@ -416,15 +407,6 @@ export const envelope: Case[] = [
     attacker: "stranger",
     title: "Send a contact request with an unusable encryption key",
     claim: "A message that cannot be answered is refused and recorded like any other bad message.",
-    knownFailure: "a credential with a small-order X25519 key makes receive() throw instead of refusing",
-    finding: {
-      severity: "high",
-      where: "packages/daemon/src/node.ts:333 (and packages/protocol/src/identity.ts:55, packages/daemon/src/link.ts:151)",
-      scenario:
-        "Anyone who has seen Bob's credential (a contact, anyone who was ever shown an invite, the relay) seals a contact.request whose own credential has encKey set to 32 zero bytes. " +
-        "The daemon builds the acceptance before it checks the invite token, HPKE refuses the key, and receive() throws. RelayLink treats that as its own failure: it drops the connection without acknowledging, the relay delivers the same message again, and the loop never ends. See AUT-17 for the effect on other mail.",
-      fix: "Reject credentials whose encKey is a small-order point in verifyCredential. Check the invite token before building the acceptance, and turn a failed seal into a Reject. In RelayLink, acknowledge and record a message that has failed locally more than a few times.",
-    },
     async run(ctx) {
       const bob = await ctx.person();
       const stranger = await identity();

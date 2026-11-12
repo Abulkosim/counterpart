@@ -32,15 +32,6 @@ export const parsing: Case[] = [
     attacker: "contact",
     title: "Prefix signed bytes with a byte order mark",
     claim: "Input that is not byte for byte canonical is refused.",
-    knownFailure: "parseCanonical strips a leading UTF-8 BOM before comparing, so two byte strings pass as canonical",
-    finding: {
-      severity: "low",
-      where: "packages/protocol/src/canonical.ts:38",
-      scenario:
-        "A sender puts EF BB BF in front of the sealed payload, or in front of an invite. TextDecoder drops it, the text that is left equals its canonical form, and the input is accepted. " +
-        "Nothing is forged today because signatures are checked over re-encoded values, but the rule that there is one encoding per value does not hold, and anything that later hashes received bytes will disagree with a strict peer.",
-      fix: "Decode with new TextDecoder(\"utf-8\", { fatal: true, ignoreBOM: true }) so the BOM stays in the text and fails the comparison.",
-    },
     async run(ctx) {
       const { bob, mallory, thread } = await withMallory(ctx);
       const invite = { v: 1 as const, relay: bob.relay, credential: mallory.device.credential, token: randomId(), expiresAt: Date.now() + HOUR };
@@ -337,15 +328,6 @@ export const parsing: Case[] = [
     attacker: "relay",
     title: "Respell base64 without changing the bytes",
     claim: "Keys, signatures and ciphertext have one accepted spelling each.",
-    knownFailure: "unb64u ignores the unused trailing bits, so a 43-character key has 4 spellings and an 86-character signature has 16",
-    finding: {
-      severity: "low",
-      where: "packages/protocol/src/bytes.ts:6",
-      scenario:
-        "A relay changes the last character of `enc` (or a sender the last character of `sig`, or a root key holder the spelling of a key in a credential) to another character that decodes to the same bytes. The message still opens and verifies. " +
-        "The same event now exists as several different wires and signatures, a root key has four names in the contacts table, and a relay allow-list or any future hash over signatures or wire bytes can be sidestepped or made to disagree.",
-      fix: "In unb64u, re-encode the decoded bytes and require the result to equal the input.",
-    },
     async run(ctx) {
       const { bob, alice, thread } = await scene(ctx);
       const first = await send(alice, bob, event(alice, thread, "talk.posted", { text: "one" }, 1));

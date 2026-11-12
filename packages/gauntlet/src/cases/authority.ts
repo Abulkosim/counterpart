@@ -217,16 +217,6 @@ export const authority: Case[] = [
     attacker: "contact",
     title: "File a contact event inside someone else's thread",
     claim: "Contact events never appear in a thread's log, and one contact cannot touch a thread it is not part of.",
-    knownFailure: "contact.hello is stored under whatever thread id the sender chose",
-    finding: {
-      severity: "medium",
-      where: "packages/daemon/src/node.ts:384",
-      scenario:
-        "Mallory, a contact of Bob, learns the id of a thread between Bob and Alice (ids are printed by the CLI and are not treated as secret). She sends contact.hello with that thread id. " +
-        "Bob's daemon applies it and stores it in that thread. `cpart log` shows a line attributed to alice that Alice never sent, the thread's event count changes, and Bob's next message lists Mallory's event as a parent. " +
-        "Alice never receives that parent, so she holds every later message from Bob in that thread forever. A contact.request does the same through the acceptance Bob writes into the chosen thread.",
-      fix: "Ignore the thread id on contact.* events and store them under a reserved per-contact id, or refuse a contact event whose thread id is a known thread. Make log() and heads() select on the thread's participants, not only its id.",
-    },
     async run(ctx) {
       const { bob, alice, mallory, shared } = await withMallory(ctx);
       const before = JSON.stringify(bob.log(shared));
@@ -243,16 +233,6 @@ export const authority: Case[] = [
     attacker: "contact",
     title: "Answer an invite inside an existing thread",
     claim: "A contact request is accepted or refused cleanly whatever thread id it names, and leaves existing threads alone.",
-    knownFailure: "the acceptance is written into the requester's chosen thread and collides with Bob's own event 0, so receive() throws",
-    finding: {
-      severity: "medium",
-      where: "packages/daemon/src/node.ts:333 and :360",
-      scenario:
-        "Mallory is a contact and has a thread that Bob opened. Bob issues another invite, to her second identity or to someone whose invite she can read. " +
-        "She answers it with a contact.request whose thread id is that existing thread. Bob's daemon tries to write its contact.accepted as its own event 0 in that thread, the unique index refuses, and receive() throws. " +
-        "The message is never acknowledged, so the relay delivers it again on every reconnect and the daemon loops, as in ENV-20. The invite is never marked used.",
-      fix: "Write the acceptance under a fresh thread id chosen by the acceptor. Treat any failure to commit an inbound message as a Reject.",
-    },
     async run(ctx) {
       const bob = await ctx.person();
       const mallory = await ctx.contact(bob, "mallory");
@@ -316,9 +296,12 @@ export const authority: Case[] = [
       const before = visible();
       const open = opening(mallory, [mallory.me.rootKey, bob.me.rootKey]);
       const early: ThreadEvent[] = [open, event(mallory, open.threadId, "talk.posted", { text: "approve it" }, 1, [open.id]), event(mallory, thread, "talk.posted", { text: "alice here" }, 0)];
-      for (const e of early) assert.equal((await bob.receive(await send(mallory, bob, e))).result, "pending");
+      // The first two wait for the pairing. The third names a thread that belongs to someone else and is refused outright.
+      const got: string[] = [];
+      for (const e of early) got.push((await bob.receive(await send(mallory, bob, e))).result);
+      assert.deepEqual(got, ["pending", "pending", "rejected"]);
       assert.equal(visible(), before);
-      assert.equal(ctx.counts(bob).held, early.length);
+      assert.equal(ctx.counts(bob).held, early.length - 1);
       assert.equal(bob.contact("mallory").state, "pending");
       await assert.rejects(bob.openThread("mallory", "too early"));
     },
@@ -358,16 +341,6 @@ export const authority: Case[] = [
     attacker: "contact",
     title: "Break credential renewal for other contacts",
     claim: "One contact cannot stop the daemon from telling its other contacts about a renewed credential.",
-    knownFailure: "a contact's credential with an unusable encKey makes renewIfDue() throw part-way, after the new credential is saved",
-    finding: {
-      severity: "low",
-      where: "packages/daemon/src/node.ts:139",
-      scenario:
-        "Mallory, a contact, sends contact.hello with a credential from her root key whose encKey is 32 zero bytes. Bob stores it as her newest credential. " +
-        "When Bob's credential is next due, renewIfDue() saves the new credential, then fails to seal the hello for Mallory and throws. Contacts sorted after her never get a hello, and later calls see nothing to renew. " +
-        "Sixty days on, those contacts hold an expired credential for Bob and cannot write to him until he writes to them. Bob also can no longer open a thread with Mallory, which only hurts her.",
-      fix: "Refuse credentials with a small-order encKey (see ENV-20). Queue each hello independently, and track which contacts have been told so a failed one is retried.",
-    },
     async run(ctx) {
       const c = clock();
       const bob = await ctx.person({ now: c.now });
@@ -388,16 +361,6 @@ export const authority: Case[] = [
     attacker: "stranger",
     title: "Block a contact's mail from outside",
     claim: "Someone who is not a contact cannot stop a contact's messages from being delivered and applied.",
-    knownFailure: "messages that make receive() throw are redelivered forever and fill the relay's delivery window",
-    finding: {
-      severity: "high",
-      where: "packages/daemon/src/link.ts:151",
-      scenario:
-        "Eve logs in to the relay with a throwaway identity and sends Bob one delivery window of the messages from ENV-20 (100 by default, well inside the 500 a sender may queue). " +
-        "Bob's daemon throws on each, drops the connection without acknowledging and reconnects. The relay sends the same window again, and waits for it to be acknowledged before sending anything newer. " +
-        "Mail from Bob's real contacts is stored but never delivered, for as long as Eve keeps the window full. Bob's daemon reconnects about four times a second meanwhile.",
-      fix: "Fix ENV-20 and AUT-11. Independently, count local failures per message id in RelayLink and acknowledge and record a message after a few attempts, so no single message can hold the mailbox.",
-    },
     async run(ctx) {
       const relay = await ctx.relay({ deliveryWindow: 4 });
       const bob = await ctx.person({ relay: relay.url });
@@ -467,16 +430,6 @@ export const authority: Case[] = [
     attacker: "contact",
     title: "Show up in another thread before pairing completes",
     claim: "Events held for a contact whose pairing is not complete are not listed in any thread.",
-    knownFailure: "events from a pending contact are held without any check and stored under the thread id they name, and log() returns them",
-    finding: {
-      severity: "medium",
-      where: "packages/daemon/src/node.ts:383 and packages/cli/src/main.ts:110",
-      scenario:
-        "Bob accepts Mallory's invite. Before she confirms, she sends talk.posted naming a thread between Bob and Alice whose id she has learned. " +
-        "The daemon holds it unchecked. `cpart log` for that thread prints her text on a line that starts with alice, marked only \"(held)\", which is also how a real message from Alice that is waiting for a parent looks. " +
-        "It stays there for as long as Mallory withholds her acceptance. Same root cause as AUT-10.",
-      fix: "Make log() return only events whose author is a participant of the thread, and show held events from a pending contact nowhere.",
-    },
     async run(ctx) {
       const { bob, thread } = await scene(ctx);
       const mallory = await ctx.person();

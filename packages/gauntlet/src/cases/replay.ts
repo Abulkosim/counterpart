@@ -264,7 +264,10 @@ export const replay: Case[] = [
       ];
       const visible = (): string => JSON.stringify([bob.contacts(), bob.threads(), bob.since(0, 10_000), bob.queued().length]);
       const before = visible();
-      for (const e of early) assert.equal(await result(bob, mallory, e), "pending");
+      // The one aimed at Alice's thread is refused at once; the rest wait for the pairing.
+      const got: string[] = [];
+      for (const e of early) got.push(await result(bob, mallory, e));
+      assert.deepEqual(got, ["rejected", "pending", "pending", "pending", "pending", "pending"]);
       assert.equal(visible(), before);
       assert.equal(bob.contact("mallory").state, "pending");
 

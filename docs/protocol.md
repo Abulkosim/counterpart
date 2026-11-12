@@ -74,17 +74,19 @@ Header { v: 1, suite, id, to, expiresAt }
 
 Suite `hpke-x25519-hkdfsha256-chacha20poly1305+ed25519/v1`.
 
-To send: sign `canonical({ header, event })` with the device signing key (domain `event/v1`). The plaintext is `canonical({ event, sig, credential })`. Encrypt with HPKE base mode to the recipient's `encKey`, with info `counterpart/envelope/v1` and the canonical header as associated data.
+To send: sign `canonical({ header, event, credential: hash(credential) })` with the device signing key (domain `event/v1`). The plaintext is `canonical({ event, sig, credential })`. Encrypt with HPKE base mode to the recipient's `encKey`, with info `counterpart/envelope/v1` and the canonical header as associated data.
 
 To receive: check the header is addressed to this device and not expired; decrypt; require canonical plaintext; verify the credential; check `event.id == header.id` and `event.author` is the credential's device id; verify the signature. Then decide whether the credential's root key is someone you accept messages from.
 
-Because the signature covers the header, a recipient cannot re-encrypt a signed event to a third party.
+Because the signature covers the header, a recipient cannot re-encrypt a signed event to a third party. Because it covers the credential, the same device key vouched for by another root cannot reuse it. Credentials whose encryption key is a small-order point are refused.
 
 ## Receiving rules
 
 A daemon applies an event only if all hold:
 
 - The sender's root key is an active contact, or the event is a `contact.request` carrying an unused, unexpired invite token.
+- Contact events (`contact.request`, `contact.accepted`, `contact.hello`) stand alone: sequence 0, no parents, and a thread id nothing else uses.
+- A thread belongs to one contact. An event naming it from anyone else is refused, never held.
 - The event id is new. The same id with the same content is a duplicate and is ignored. The same id with different content is refused.
 - No other event has the same thread, author and sequence number.
 - `thread.opened` is the author's event 0 with no parents, and its participants are exactly the two root keys.
@@ -104,9 +106,11 @@ relay  -> { t: "ready", device }
 client -> { t: "send", wire }
 relay  -> { t: "stored", id } | { t: "error", code, id }
 relay  -> { t: "deliver", wire }
-client -> { t: "ack", id }
+client -> { t: "ack", id, ok }                     ok: the message was accepted, not refused
 ```
 
 `relay` is the URL the client dialled. The relay accepts a login only for its own configured URL, so another relay cannot forward a challenge to its clients and log in as them. The relay stores a message until the recipient acknowledges it or it expires (seven days at most). Delivery is at least once. Sending the same message again is accepted; reusing an id for different bytes returns `conflict`. The relay sends a limited window of deliveries and sends more as they are acknowledged. Other codes: `mailbox_full`, `expired`, `ttl_too_long`, `too_large`, `bad_wire`.
 
-A client acknowledges only after it has durably recorded its decision about the message.
+A client acknowledges only after it has durably recorded its decision about the message. A message that fails locally three times is acknowledged as refused so it cannot block the ones behind it.
+
+A sender becomes known to a recipient once the recipient has accepted a message from it. Senders who are not known share a small allowance per mailbox (50 messages, 5 per sender), so throwaway identities cannot fill a mailbox. Rate limits follow the device across reconnects, and the relay holds at most 128 connections that have not logged in.

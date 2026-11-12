@@ -57,15 +57,6 @@ export const output: Case[] = [
     attacker: "contact",
     title: "Use DEL and 8-bit control characters",
     claim: "C1 control characters (U+0080 to U+009F) and DEL are escaped like the 7-bit ones.",
-    knownFailure: "the CLI escapes with JSON.stringify, which leaves U+007F to U+009F as they are",
-    finding: {
-      severity: "low",
-      where: "packages/cli/src/main.ts:39",
-      scenario:
-        "Mallory sends a message containing U+009B, the one-character form of ESC [. On a terminal that honours C1 controls (xterm and some others when so configured), `cpart log` and `cpart threads` then run her sequences: clear the screen, move the cursor, recolour or hide text, set the title. " +
-        "Most modern UTF-8 terminals ignore C1, which is why this is low.",
-      fix: "Escape by code point: everything in U+0000 to U+001F and U+007F to U+009F as \\uXXXX.",
-    },
     async run(ctx) {
       const { bob, thread } = await staged(ctx, C1);
       const out = Buffer.concat([run(ctx, bob, ["log", thread]), run(ctx, bob, ["threads"])]);
@@ -78,15 +69,6 @@ export const output: Case[] = [
     attacker: "contact",
     title: "Reorder or hide text with Unicode formatting characters",
     claim: "Bidirectional overrides, isolates, zero-width characters and Unicode line separators in peer text are shown escaped.",
-    knownFailure: "the CLI prints U+202E, U+2066 to U+2069, zero-width characters and U+2028 as they are",
-    finding: {
-      severity: "medium",
-      where: "packages/cli/src/main.ts:39",
-      scenario:
-        "Mallory sends \"I do not agree \\u202E...\" or wraps part of a message in an override so that, on a terminal that applies the bidi algorithm, the line Bob reads says something other than the bytes that were signed. " +
-        "Zero-width characters let her make two different texts look the same, and U+2028 breaks the line on terminals that honour it, which lets her start a fake log line. Bob or his agent then acts on what the screen shows.",
-      fix: "Escape the Unicode Cf category (at least U+061C, U+200B to U+200F, U+202A to U+202E, U+2060 to U+2069, U+FEFF) and U+2028/U+2029 in everything a peer wrote.",
-    },
     async run(ctx) {
       const { bob, thread } = await staged(ctx, BIDI);
       const out = Buffer.concat([run(ctx, bob, ["log", thread]), run(ctx, bob, ["threads"])]);
@@ -99,15 +81,6 @@ export const output: Case[] = [
     attacker: "contact",
     title: "Get escape codes into the list of refused messages",
     claim: "The reason shown for a refused message contains nothing the sender wrote.",
-    knownFailure: "a JSON syntax error quotes the start of the sender's payload, and that text is stored and printed raw",
-    finding: {
-      severity: "medium",
-      where: "packages/daemon/src/node.ts:325 and packages/cli/src/main.ts:118",
-      scenario:
-        "Anyone who knows Bob's encryption key (a contact, anyone who saw an invite, the relay) seals a payload that is not JSON and starts with ESC [ 2 J or another short sequence. " +
-        "JSON.parse reports `Unexpected token ..., \"<first ten characters>\"... is not valid JSON`, the daemon stores that as the reason, and `cpart rejects` and the daemon's own output print it. About ten characters of the attacker's choice run in Bob's terminal, enough to clear the screen or hide what follows.",
-      fix: "Map errors from open() to a fixed set of reasons before storing them, and pass every stored reason through the same escaping as message text when printing.",
-    },
     async run(ctx) {
       const bob = await ctx.person();
       const mallory = await ctx.contact(bob, "mallory");
@@ -123,15 +96,6 @@ export const output: Case[] = [
     attacker: "relay",
     title: "Write to the daemon's terminal from the relay",
     claim: "Nothing the relay sends is printed by the daemon without escaping.",
-    knownFailure: "the relay's error code is printed raw in `error: relay refused the login: ...`",
-    finding: {
-      severity: "low",
-      where: "packages/daemon/src/link.ts:130 and packages/cli/src/main.ts:66",
-      scenario:
-        "A hostile or compromised relay answers the login with { t: \"error\", code: \"<ESC>[2J<ESC>[1;1Hconnected to ...\" }. The daemon prints up to 64 characters of it to stderr. " +
-        "The relay can clear the terminal the daemon runs in and write a fake status line.",
-      fix: "Accept only codes matching /^[a-z_]{1,32}$/ and show anything else as \"unknown\".",
-    },
     async run(ctx) {
       const code = `${ESC}[2J${ESC}[1;1Hconnected to wss://relay.example`;
       const evil = await ctx.evilRelay((c) => c.send({ t: "error", code }));
@@ -172,15 +136,6 @@ export const output: Case[] = [
     attacker: "contact",
     title: "Backdate a message",
     claim: "The time shown beside a peer's message is the time it arrived, or is marked as the sender's claim.",
-    knownFailure: "`cpart log` prints the sender's createdAt as the time of the message, with no limit on how old it may be",
-    finding: {
-      severity: "low",
-      where: "packages/cli/src/main.ts:112",
-      scenario:
-        "Mallory sends today a message whose createdAt is two years ago: \"as agreed, the deadline is the 1st\". Only future dates are refused. " +
-        "Bob's log shows it with the old date, in the same format as every other line. A person or an agent reading the log later takes it as evidence that the statement was made then.",
-      fix: "Print receivedAt, or print both when they differ by more than the allowed clock skew.",
-    },
     async run(ctx) {
       const { bob, mallory, thread, events } = await staged(ctx, ["plain"]);
       const then = Date.UTC(2024, 0, 1, 12);

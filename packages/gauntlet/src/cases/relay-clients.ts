@@ -163,24 +163,30 @@ export const relayClients: Case[] = [
     attacker: "stranger",
     title: "Fill a mailbox with throwaway identities",
     claim: "Strangers cannot use up a mailbox so that mail from the owner's contacts is turned away.",
-    knownFailure: "the per-mailbox cap is shared by every sender, and a new sender identity costs nothing on an open relay",
-    finding: {
-      severity: "medium",
-      where: "packages/relay/src/index.ts:174",
-      scenario:
-        "Bob is offline. Eve generates ten identities and queues 500 messages for Bob from each, which is the per-sender limit. Bob's mailbox is at its 5000 cap. " +
-        "Alice's messages to Bob now get mailbox_full until Bob comes back and works through Eve's junk, and Eve can refill it. A hundred identities fill the whole relay the same way.",
-      fix: "Split each mailbox: let a device give the relay the device ids it accepts mail from, and give everyone else a small separate allowance. On a public relay also limit logins per address, or run invite-only (allowRoots).",
-    },
     async run(ctx) {
-      const relay = await ctx.relay({ maxPerSender: 5, maxPerMailbox: 20 });
+      const relay = await ctx.relay({ maxPerSender: 5, maxPerMailbox: 20, maxUnknownPerMailbox: 6, maxPerUnknownSender: 2 });
       const [alice, bob] = [await identity(), await identity()];
-      for (let i = 0; i < 4; i++) {
+      // Bob has accepted mail from Alice before, which is what makes her known to the relay.
+      const a = await ctx.login(alice.device, relay.url);
+      const first = await mail(alice, bob);
+      await stored(a, first);
+      const b = await ctx.login(bob.device, relay.url);
+      await b.next("deliver");
+      b.send({ t: "ack", id: first.header.id, ok: true });
+      await pause(50);
+      b.ws.close();
+      await pause(50);
+      let strangersStored = 0;
+      for (let i = 0; i < 8; i++) {
         const sybil = await identity();
         const s = await ctx.login(sybil.device, relay.url);
-        for (let j = 0; j < 5; j++) await stored(s, await mail(sybil, bob));
+        for (let j = 0; j < 5; j++) {
+          s.send({ t: "send", wire: await mail(sybil, bob) });
+          if ((await s.next()).t === "stored") strangersStored++;
+        }
       }
-      await stored(await ctx.login(alice.device, relay.url), await mail(alice, bob));
+      assert.equal(strangersStored, 6, "strangers share a small allowance");
+      for (let j = 0; j < 5; j++) await stored(a, await mail(alice, bob));
     },
   },
   {
@@ -279,15 +285,6 @@ export const relayClients: Case[] = [
     attacker: "stranger",
     title: "Hold open connections that never log in",
     claim: "The relay limits how many connections can sit unauthenticated at once.",
-    knownFailure: "there is no cap on unauthenticated sockets, only a ten second timer on each",
-    finding: {
-      severity: "medium",
-      where: "packages/relay/src/index.ts:117",
-      scenario:
-        "Eve opens connections and sends nothing. Each is held for ten seconds, then up to thirty more while the close handshake times out, and she reopens them as they drop. " +
-        "Nothing bounds the number per address or in total, so one machine can hold tens of thousands of sockets and their timers open, until the relay runs out of file descriptors and real clients cannot connect.",
-      fix: "Cap unauthenticated connections in total and per remote address, refuse the upgrade past the cap, and terminate (not close) on the auth timeout.",
-    },
     async run(ctx) {
       const relay = await ctx.relay();
       const n = 200;
@@ -362,15 +359,6 @@ export const relayClients: Case[] = [
     attacker: "stranger",
     title: "Reset the rate limit by reconnecting",
     claim: "The frame rate limit applies to a device, not to one connection.",
-    knownFailure: "each new connection starts with a full allowance, so logging in again resets the limit",
-    finding: {
-      severity: "low",
-      where: "packages/relay/src/index.ts:118",
-      scenario:
-        "Eve sends her burst of 100 frames, logs in again on a new socket, and sends another 100. Logging in costs one signature. " +
-        "She can keep the relay parsing, hashing and querying at many times the intended 50 frames a second from a single identity, and a few identities multiply it.",
-      fix: "Keep the token bucket per device id across connections, and add a second bucket per remote address that also covers failed logins.",
-    },
     async run(ctx) {
       const c = clock();
       const relay = await ctx.relay({ now: c.now, framesPerSecond: 10 });

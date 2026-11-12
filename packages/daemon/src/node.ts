@@ -1,4 +1,4 @@
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -98,7 +98,12 @@ export class Counterpart {
     this.home = home;
     this.keys = keys;
     this.now = now;
-    this.db = new DatabaseSync(join(home, "state.db"));
+    // The home may predate us with ordinary permissions. Everything in it is private.
+    chmodSync(home, 0o700);
+    const dbFile = join(home, "state.db");
+    closeSync(openSync(dbFile, "a", 0o600));
+    chmodSync(dbFile, 0o600);
+    this.db = new DatabaseSync(dbFile);
     this.db.exec(`
       PRAGMA journal_mode = WAL;
       PRAGMA synchronous = FULL;
@@ -197,9 +202,18 @@ export class Counterpart {
     saveKeys(this.home, this.keys);
     for (const c of this.contacts()) {
       if (c.state !== "active") continue;
-      const out = await this.build(c.credential, randomId(), "contact.hello", {}, 0, []);
-      this.tx(() => this.commitOut(out));
+      // One contact with an unusable key must not stop the others being told.
+      try {
+        const out = await this.build(c.credential, randomId(), "contact.hello", {}, 0, []);
+        this.tx(() => this.commitOut(out));
+      } catch {
+        this.reject(`could not announce a renewed credential to ${c.name}`, null);
+      }
     }
+  }
+
+  recordReject(reason: string, wireId: string | null): void {
+    this.reject(reason, wireId);
   }
 
   // Renew this device's credential when it is within 30 days of expiry, and
@@ -475,7 +489,7 @@ export class Counterpart {
   }
 
   log(threadId: string): StoredEvent[] {
-    const rows = this.db.prepare("SELECT json, mine, status, received_at, ord FROM events WHERE thread_id = ? ORDER BY ord IS NULL, ord, rowid").all(threadId) as unknown as EventRow[];
+    const rows = this.db.prepare("SELECT e.json, e.mine, e.status, e.received_at, e.ord FROM events e JOIN threads t ON t.id = e.thread_id WHERE e.thread_id = ? AND (e.mine = 1 OR e.author_root = t.contact_root) ORDER BY e.ord IS NULL, e.ord, e.rowid").all(threadId) as unknown as EventRow[];
     return rows.map(toStored);
   }
 
@@ -556,9 +570,30 @@ export class Counterpart {
       if (credential.rootKey === this.keys.rootKey) throw new Reject("message from my own identity");
       if (event.createdAt > this.now() + CLOCK_SKEW) throw new Reject("event dated in the future");
 
+      // Contact events live outside threads. One that names an existing thread,
+      // or reuses an id something else is filed under, is refused.
+      if (event.type === "contact.request" || event.type === "contact.accepted" || event.type === "contact.hello") {
+        if (event.authorSeq !== 0 || event.parents.length !== 0) throw new Reject("contact events stand alone");
+        if (this.db.prepare("SELECT 1 FROM threads WHERE id = ?").get(event.threadId) || this.db.prepare("SELECT 1 FROM events WHERE thread_id = ? AND id != ?").get(event.threadId, event.id))
+          throw new Reject("contact event reuses a thread id");
+      }
+
       // Built before the transaction so accepting a contact and queueing the
-      // reply commit together.
-      const acceptance = event.type === "contact.request" ? await this.build(credential, event.threadId, "contact.accepted", {}, 0, [event.id]) : null;
+      // reply commit together. The token is checked first so a stranger without
+      // an invite cannot make us do the work, and a reply that cannot be
+      // encrypted to them is a refusal, not a crash.
+      let acceptance: Outgoing | null = null;
+      if (event.type === "contact.request") {
+        const token = (event as ThreadEvent<"contact.request">).body.token;
+        const inv = this.db.prepare("SELECT expires_at, used_by FROM invites WHERE token = ?").get(token) as { expires_at: number; used_by: string | null } | undefined;
+        if (!inv) throw new Reject("contact request with unknown invite token");
+        if (inv.used_by && inv.used_by !== credential.rootKey) throw new Reject("invite token already used");
+        try {
+          acceptance = await this.build(credential, randomId(), "contact.accepted", {}, 0, []);
+        } catch {
+          throw new Reject("cannot encrypt a reply to the sender's key");
+        }
+      }
 
       return this.tx((): Verdict => {
         const hash = hashOf(event);
@@ -606,6 +641,10 @@ export class Counterpart {
           const threads = this.db.prepare("SELECT DISTINCT thread_id FROM events WHERE author_root = ? AND status = 'pending'").all(credential.rootKey) as { thread_id: string }[];
           return { result: "applied", event, promoted: threads.flatMap((t) => this.promote(t.thread_id)) };
         }
+        // A thread belongs to one contact. Someone else's event with its id is
+        // never held or filed there.
+        const owner = this.db.prepare("SELECT contact_root FROM threads WHERE id = ?").get(event.threadId) as { contact_root: string } | undefined;
+        if (owner && owner.contact_root !== credential.rootKey) throw new Reject("sender is not a participant of this thread");
         // The peer accepted us and wrote straight away, and the relay delivered
         // that before their acceptance. Hold it rather than lose it.
         if (contact.state !== "active") return hold();

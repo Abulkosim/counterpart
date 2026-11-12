@@ -1,6 +1,7 @@
 import { b64u, unb64u, utf8 } from "./bytes.ts";
 import { canonicalBytes, parseCanonical } from "./canonical.ts";
 import { isId, isInt, isObject, isStr, onlyKeys } from "./check.ts";
+import { hashOf } from "./contract.ts";
 import { LIMITS, type ThreadEvent, parseEvent } from "./events.ts";
 import { type DeviceCredential, type DeviceSecrets, deviceId, verifyCredential } from "./identity.ts";
 import { SUITE, hpke, sign, verify } from "./keys.ts";
@@ -49,7 +50,9 @@ export async function seal(
   const header: WireHeader = { v: 1, suite: SUITE, id: event.id, to: deviceId(to), expiresAt };
   // The signature covers the header, so a recipient cannot re-encrypt a signed
   // event to a third party and pass it off as addressed to them.
-  const sig = sign(from.sign, SIG_DOMAIN, canonicalBytes({ header, event }));
+  // It also covers the credential, so the same device key vouched for by a
+  // different root cannot reuse the signature.
+  const sig = sign(from.sign, SIG_DOMAIN, canonicalBytes({ header, event, credential: hashOf(from.credential) }));
   const plaintext = canonicalBytes({ event, sig, credential: from.credential });
   const recipientPublicKey = await hpke.kem.deserializePublicKey(unb64u(to.encKey).buffer as ArrayBuffer);
   const { enc, ct } = await hpke.seal({ recipientPublicKey, info: INFO.buffer as ArrayBuffer }, plaintext.buffer as ArrayBuffer, canonicalBytes(header).buffer as ArrayBuffer);
@@ -78,6 +81,6 @@ export async function open(wireInput: unknown, me: DeviceSecrets, now = Date.now
   const event = parseEvent(inner.event);
   if (event.id !== header.id) throw new Error("open: header and event id differ");
   if (event.author !== deviceId(credential)) throw new Error("open: author does not match credential");
-  if (!verify(credential.signKey, SIG_DOMAIN, canonicalBytes({ header, event }), inner.sig)) throw new Error("open: bad signature");
+  if (!verify(credential.signKey, SIG_DOMAIN, canonicalBytes({ header, event, credential: hashOf(credential) }), inner.sig)) throw new Error("open: bad signature");
   return { event, credential };
 }

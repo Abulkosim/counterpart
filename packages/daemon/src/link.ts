@@ -5,6 +5,9 @@ import type { Counterpart, Verdict } from "./node.ts";
 
 const MAX_BACKLOG = 256;
 
+// The relay's error codes are printed and stored. Only plain ones are kept.
+const code = (x: unknown): string => (typeof x === "string" && /^[a-z_]{1,32}$/.test(x) ? x : "unknown");
+
 export interface LinkEvents {
   ready: [];
   offline: [];
@@ -32,6 +35,7 @@ export class RelayLink extends EventEmitter<LinkEvents> {
   private inbound: Promise<void> = Promise.resolve();
   private pollMs: number;
   private backlog = 0;
+  private failures = new Map<string, number>();
   private renewer: NodeJS.Timeout | null = null;
 
   constructor(node: Counterpart, opts: { pollMs?: number } = {}) {
@@ -127,12 +131,12 @@ export class RelayLink extends EventEmitter<LinkEvents> {
         return;
       case "error":
         if (!isId(frame.id)) {
-          if (!this.ready) this.emit("error", new Error(`relay refused the login: ${String(frame.code).slice(0, 64)}`));
+          if (!this.ready) this.emit("error", new Error(`relay refused the login: ${code(frame.code)}`));
           return;
         }
         this.inflight.delete(frame.id);
         // A full mailbox clears with time; everything else will never succeed.
-        if (frame.code !== "mailbox_full") this.node.markOutbox(frame.id, "failed", String(frame.code).slice(0, 64));
+        if (frame.code !== "mailbox_full") this.node.markOutbox(frame.id, "failed", code(frame.code));
         return;
       case "deliver": {
         const wire = frame.wire as unknown;
@@ -145,13 +149,30 @@ export class RelayLink extends EventEmitter<LinkEvents> {
           try {
             const verdict = await this.node.receive(wire);
             const id = (wire as { header?: { id?: unknown } } | null)?.header?.id;
-            if (isId(id)) this.send(ws, { t: "ack", id });
+            if (isId(id)) {
+              this.send(ws, { t: "ack", id, ok: verdict.result !== "rejected" });
+              this.failures.delete(id);
+            }
             this.emit("verdict", verdict);
             if (verdict.result === "applied") for (const e of [verdict.event, ...verdict.promoted]) this.emit("event", e);
           } catch (e) {
             // Our own failure, not the peer's. Leave it unacknowledged and reconnect,
             // which makes the relay deliver it again.
             this.emit("error", e as Error);
+            // A message that keeps failing here must not block everything behind
+            // it. After three tries it is acknowledged and recorded as refused.
+            const id = (wire as { header?: { id?: unknown } } | null)?.header?.id;
+            if (isId(id)) {
+              const n = (this.failures.get(id) ?? 0) + 1;
+              this.failures.set(id, n);
+              if (this.failures.size > 1000) this.failures.delete(this.failures.keys().next().value!);
+              if (n >= 3) {
+                this.failures.delete(id);
+                this.node.recordReject("could not be processed after three tries", id);
+                this.send(ws, { t: "ack", id, ok: false });
+                return;
+              }
+            }
             ws.terminate();
           }
         });

@@ -32,7 +32,7 @@ export const storage: Case[] = [
     claim: "The key file is readable only by its owner, when first written and after every renewal.",
     async run(ctx) {
       const home = join(ctx.dir(), "fresh");
-      const init = ctx.cli(home, ["init", "--relay", "ws://127.0.0.1:9"], { umask: "000" });
+      const init = ctx.cli(home, ["init", "--relay", "ws://127.0.0.1:9", "--no-passphrase"], { umask: "000" });
       assert.equal(init.status, 0, init.stderr.toString());
       assert.equal(mode(home), 0o700);
       assert.equal(mode(join(home, "keys.json")), 0o600);
@@ -53,20 +53,11 @@ export const storage: Case[] = [
     attacker: "stranger",
     title: "Read the message log as another local user",
     claim: "Nothing in the identity directory is readable by other users, whatever the directory's own permissions were.",
-    knownFailure: "state.db is created with the process umask, and an existing home directory is not tightened",
-    finding: {
-      severity: "medium",
-      where: "packages/daemon/src/node.ts:77 and :115",
-      scenario:
-        "CPART_HOME points at a directory that already exists with ordinary permissions (made by hand, by a provisioning script, or a shared path). `cpart init` writes keys.json as 0600 but SQLite creates state.db, and later its -wal file, as 0644. " +
-        "Any other user on the machine can read every message, contact, credential and unused invite token in plaintext. With a readable invite token they can also pair as the invited person.",
-      fix: "At init and open, chmod the home directory to 0700 or refuse to run if group or others can read it. Create state.db with mode 0600 before SQLite opens it.",
-    },
     async run(ctx) {
       const home = join(ctx.dir(), "existing");
       mkdirSync(home);
       chmodSync(home, 0o755);
-      const init = ctx.cli(home, ["init", "--relay", "ws://127.0.0.1:9"], { umask: "022" });
+      const init = ctx.cli(home, ["init", "--relay", "ws://127.0.0.1:9", "--no-passphrase"], { umask: "022" });
       assert.equal(init.status, 0, init.stderr.toString());
       assert.equal(ctx.cli(home, ["invite", "carol"], { umask: "022" }).status, 0);
       assert.equal(others(join(home, "keys.json")), 0);
