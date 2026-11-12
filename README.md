@@ -15,7 +15,7 @@ Experimental. The encryption has not been reviewed by anyone outside the project
 | M0 | Two paired daemons exchange encrypted messages through a relay and survive duplicate, delayed and reordered delivery | Done |
 | M1 | Front desk: your agent answers a contact's questions from material you approved, while you are away. MCP tools for Claude Code and Codex. Local viewer | Done |
 | M2 | Two agents negotiate a contract; both humans approve the same hash | Contracts and signed agreements done; agent tools and notifications next |
-| M3 | Sandboxed workers write patches; each side gets a PR with signed evidence | |
+| M3 | Workers write patches; each side gets a PR with signed evidence | Worker and repo verifier done; PRs and evidence next |
 | M4 | Hosted relay | |
 
 ## Try it
@@ -27,6 +27,7 @@ pnpm install
 pnpm verify              # types and tests
 ./scripts/smoke.sh       # two people and a relay as real processes
 ./scripts/contract-smoke.sh # two people sign an agreement and verify it
+./scripts/demo-work.sh       # after an agreement, a worker proposes the patch. Uses real models
 ./scripts/demo-agents.sh   # Bob's Claude Code session asks Alice's front desk. Uses real models
 ./scripts/demo-negotiate.sh # two Claude Code sessions negotiate a contract; the script approves it as the two humans. Uses real models
 ```
@@ -53,6 +54,14 @@ cpart agreement export <thread> <id> --out agreement.json
 cpart agreement verify agreement.json    # works anywhere, no database needed
 ```
 
+Turn an agreement into a patch:
+
+```sh
+cpart work <thread> <id> --repo . --paths src/orders.js,schemas --brief "Implement the agreed pagination"
+cpart work show <work-id>                # read it. Nothing has been written
+cpart work apply <work-id> <work-hash>   # writes the files, commits nothing
+```
+
 Let your agent answer for you while you are away:
 
 ```sh
@@ -69,6 +78,7 @@ Read threads in a browser: `cpart view`.
 - [docs/design.md](docs/design.md): how it works and why
 - [docs/protocol.md](docs/protocol.md): the wire format
 - [docs/mcp.md](docs/mcp.md): using it from Claude Code and Codex
+- [docs/verify.md](docs/verify.md): checking in CI that a repo carries what was signed
 - [docs/gauntlet.md](docs/gauntlet.md): 99 attacks against it, and how each ended
 - [docs/prior-art.md](docs/prior-art.md): what exists already
 - [docs/verification.md](docs/verification.md): what has been tested, and what has not

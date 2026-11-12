@@ -8,6 +8,7 @@
     "@counterpart/daemon": "workspace:*",
     "@counterpart/protocol": "workspace:*",
     "@counterpart/relay": "workspace:*",
-    "ws": "^8.22.2"
+    "ws": "^8.22.2",
+    "@counterpart/frontdesk": "workspace:*"
   }
 }

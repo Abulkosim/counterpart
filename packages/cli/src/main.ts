@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
@@ -10,6 +10,7 @@ import { FrontDesk, addToBundle, anthropicApi, claudeCli, cliPrivateValues, read
 import { startMcpServer } from "@counterpart/mcp";
 import { startRelay } from "@counterpart/relay";
 import { startViewer } from "@counterpart/viewer";
+import { type WorkResult, apply as applyWork, work } from "@counterpart/worker";
 
 const USAGE = `cpart: let your agent talk to someone else's agent
 
@@ -41,6 +42,14 @@ your agent, can propose. Only you can approve, with your passphrase.
   cpart agreement export <thread> <id> [--out file]               the contract and both signatures
   cpart agreement verify <file>
 
+Work: after an agreement, a model with no tools proposes the change to your
+repo. It sees only committed files you name. Code checks every edit. Nothing
+it writes is run, and nothing is written until you apply it.
+
+  cpart work <thread> <id> --repo <path> --paths <a,b,dir> --brief <what to do> [--allow <sensitive path>]...
+  cpart work show <work-id>                                       the patch, what was refused, what to look at first
+  cpart work apply <work-id> <work-hash> [--repo <path>]          write the reviewed files. Commits nothing
+
 Front desk: a model with no tools that answers a contact while you are away,
 using only the files you put in that contact's bundle.
 
@@ -59,7 +68,7 @@ const { values: flags, positionals } = parseArgs({
   allowPositionals: true,
   options: {
     relay: { type: "string" }, port: { type: "string" }, host: { type: "string" }, db: { type: "string" },
-    home: { type: "string" }, title: { type: "string" }, file: { type: "string" }, part: { type: "string", multiple: true }, supersedes: { type: "string" },
+    home: { type: "string" }, repo: { type: "string" }, paths: { type: "string" }, brief: { type: "string" }, allow: { type: "string", multiple: true }, title: { type: "string" }, file: { type: "string" }, part: { type: "string", multiple: true }, supersedes: { type: "string" },
     out: { type: "string" }, yes: { type: "boolean" }, "no-passphrase": { type: "boolean" }, as: { type: "string" }, slots: { type: "string" }, daily: { type: "string" }, model: { type: "string" }, url: { type: "string" }, json: { type: "boolean" }, help: { type: "boolean", short: "h" },
   },
 });
@@ -276,6 +285,53 @@ async function main(): Promise<void> {
       const c = findContract(node, args[0]!, args[1]!);
       await node.withdraw(args[0]!, c.proposalId);
       return out(`Withdrew ${c.proposalId}. Approvals already given still stand.`, { proposalId: c.proposalId });
+    }
+    case "work": {
+      const dir = join(home, "work");
+      const load = (id: string): WorkResult & { id: string; repo: string } => {
+        if (!/^[A-Za-z0-9_-]{6,40}$/.test(id) || !existsSync(join(dir, `${id}.json`))) throw new Error(`no work "${id}"`);
+        return JSON.parse(readFileSync(join(dir, `${id}.json`), "utf8")) as WorkResult & { id: string; repo: string };
+      };
+      const summary = (w: WorkResult & { id: string; repo: string }): string =>
+        [
+          `Work      ${w.id}`,
+          `Repo      ${safe(w.repo)} at ${w.baseCommit.slice(0, 12)}`,
+          `Work hash ${w.workHash}  (covers the base commit and every byte to be written)`,
+          `Shown     ${w.given.length} file(s): ${w.given.map(safe).join(", ")}`,
+          `Changes   ${w.changes.length ? w.changes.map((c) => `${safe(c.path)} (${c.status})`).join(", ") : "none"}`,
+          ...(w.refused.length ? ["", "Refused by the checker:", ...w.refused.map((r) => `  ${safe(r.path)}: ${safe(r.reason)}`)] : []),
+          ...(w.flags.length ? ["", "Look at these first:", ...w.flags.map((f) => `  ${safe(f)}`)] : []),
+          ...(w.notes ? ["", "The model's own account (it may be wrong, and the agreement text may have steered it):", block(w.notes)] : []),
+        ].join("\n");
+      if (args[0] === "show") {
+        need(2, "work show <work-id>");
+        const w = load(args[1]!);
+        return out(`${summary(w)}\n\n${w.patch.split("\n").map(safe).join("\n")}\nTo write these files: cpart work apply ${w.id} ${w.workHash.slice(0, 12)}`, w);
+      }
+      if (args[0] === "apply") {
+        need(3, "work apply <work-id> <work-hash>");
+        const w = load(args[1]!);
+        if (args[2]!.length < 12 || !w.workHash.startsWith(args[2]!)) throw new Error("give at least the first 12 characters of the work hash that `cpart work show` printed");
+        applyWork(flags.repo ?? w.repo, w, w.workHash);
+        return out(`Wrote ${w.files.length} file(s) in ${flags.repo ?? w.repo}. Nothing is committed. Run your tests, then commit.`, { files: w.files.map((f) => f.path) });
+      }
+      need(2, "work <thread> <id> --repo <path> --paths <a,b> --brief <text>");
+      if (!flags.repo || !flags.paths || !flags.brief) throw new Error("usage: cpart work <thread> <id> --repo <path> --paths <a,b,dir> --brief <what to do>");
+      const t = node.threads().find((x) => x.id === args[0]);
+      if (!t) throw new Error(`no thread ${args[0]}`);
+      const c = findContract(node, t.id, args[1]!);
+      if (c.status !== "agreed") throw new Error("work starts from an agreement. Both people must approve this proposal first.");
+      const key = process.env.ANTHROPIC_API_KEY;
+      const pick = flags.model ? { model: flags.model } : {};
+      const result = await work(
+        { repo: flags.repo, paths: flags.paths.split(",").map((p) => p.trim()).filter(Boolean), brief: flags.brief, contract: c.contract, contact: t.contact, ...(flags.allow ? { allow: flags.allow } : {}) },
+        key ? anthropicApi({ apiKey: key, maxTokens: 16000, ...pick }) : claudeCli({ timeoutMs: 600_000, ...pick }),
+      );
+      const id = result.workHash.slice(0, 10);
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      const saved = { id, repo: flags.repo, ...result };
+      writeFileSync(join(dir, `${id}.json`), JSON.stringify(saved), { mode: 0o600 });
+      return out(`${summary(saved)}\n\nRead the patch before anything else: cpart work show ${id}`, saved);
     }
     case "agreement": {
       if (args[0] !== "export") throw new Error("usage: cpart agreement export <thread> <hash> [--out file] | cpart agreement verify <file>");
