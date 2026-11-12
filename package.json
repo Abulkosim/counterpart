@@ -1,0 +1,20 @@
+{
+  "name": "counterpart",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "pnpm@12.16.1",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --test --test-concurrency=1 \"packages/*/test/*.test.ts\"",
+    "vectors": "node packages/protocol/scripts/make-vectors.ts",
+    "verify": "pnpm typecheck && pnpm test",
+    "cpart": "node packages/cli/src/main.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.5.0",
+    "typescript": "^5.9.0"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "@counterpart/relay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": { "@counterpart/protocol": "workspace:*", "ws": "^8.22.2" }
+}

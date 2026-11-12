@@ -1,0 +1,8 @@
+{
+  "name": "cpart",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "cpart": "./src/main.ts" },
+  "dependencies": { "@counterpart/daemon": "workspace:*", "@counterpart/protocol": "workspace:*", "@counterpart/relay": "workspace:*" }
+}
