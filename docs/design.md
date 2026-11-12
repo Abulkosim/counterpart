@@ -103,12 +103,12 @@ Each side pays for its own model use. Before the daemon starts any model work it
 | M0 | Two paired daemons exchange encrypted messages and survive duplicate, delayed and reordered delivery | Done |
 | M1 | Front desk answers a contact's questions from an approved bundle while the human is offline. Viewer shows where each answer came from. Hostile-peer suite, first version. Slots and budgets | Done. The suite's model-behaviour section is still empty |
 | M2 | Act lane: contracts proposed and accepted by hash, human approvals, notifications into live Claude Code and Codex sessions | Contracts, approvals and agreement files done. MCP tools, viewer and notifications next |
-| M3 | Workers produce patches. Each side opens a PR carrying the agreement and the other side's signed evidence. A verifier in CI checks it and rejects stale evidence | Planned, see below |
+| M3 | Workers produce patches. Each side opens a PR carrying the agreement and the other side's signed evidence. A verifier in CI checks it and rejects stale evidence | Worker and verifier done; publishing, CI and evidence next |
 | M4 | Hosted invite-only relay. Launch demo: overnight answer, human steps in, two PRs, recovery from an interrupted delivery | |
 
 ## Plan for M3: from agreement to pull requests
 
-Worked out with Codex in a fifth design round. Not built yet.
+Worked out with Codex in a fifth design round. Built so far: the worker and its checker (`cpart work`), and the repo verifier ([verify.md](verify.md)). Not built yet: `cpart pr`, the CI workflow, evidence events.
 
 **Nothing the model writes is run on the owner's machine.** Not tests, not builds, not scripts. A sandbox cannot be verified on an arbitrary laptop, and running a test suite after applying a patch written under the influence of the other side's contract text is remote code execution. Code runs where a sandbox already exists: the repo's own CI, on hosted runners, with no secrets.
 
