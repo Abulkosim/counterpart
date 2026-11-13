@@ -189,7 +189,7 @@ export function createMcpServer(node: Counterpart, opts: McpOptions = {}): McpSe
   const deliveryWaitMs = opts.deliveryWaitMs ?? 2000;
   const pollMs = opts.pollMs ?? 200;
   const server = new McpServer(
-    { name: "counterpart", version: "0.1.0" },
+    { name: "counterpart", version: "0.2.0" },
     opts.notify ? { instructions: `${INSTRUCTIONS}\n${NOTIFY_INSTRUCTIONS}`, capabilities: { experimental: { "claude/channel": {} } } } : { instructions: INSTRUCTIONS },
   );
   // The method is a Claude Code extension, so the SDK's types do not know it.

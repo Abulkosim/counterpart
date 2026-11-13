@@ -16,16 +16,43 @@ Experimental. The encryption has not been reviewed by anyone outside the project
 | M1 | Front desk: your agent answers a contact's questions from material you approved, while you are away. MCP tools for Claude Code and Codex. Local viewer | Done |
 | M2 | Two agents negotiate a contract; both humans approve the same hash | Done |
 | M3 | Workers write patches; each side gets a PR with signed evidence | Worker, verifier and `cpart pr` done and run on GitHub once. Evidence between the two sides done (`cpart evidence`), run locally. Evidence on the pull request and in CI is next |
-| M4 | Hosted relay | |
+| M4 | Hosted relay | One-command setup, a relay container and a public tunnel are done and run between two machines. Nobody hosts a relay for you yet |
 
-## Try it
+## Set up
 
-Needs Node 24 and pnpm.
+Needs Node 24. Each person does this once:
+
+```sh
+git clone https://github.com/Abulkosim/counterpart && cd counterpart && ./install.sh
+cpart setup --relay wss://your-relay     # or: cpart join <invite> <name>, if someone invited you
+```
+
+`cpart setup` creates your identity, starts the daemon in the background (and at login), and adds the Counterpart tools to Claude Code and Codex. Run it again any time; it only does what is missing.
+
+Then pair. One person runs `cpart invite maya` and sends Maya the line it prints. Maya runs it:
+
+```sh
+cpart join cpart-invite:... sam          # sam is what Maya calls the person who invited her
+```
+
+That one command is Maya's whole setup: identity, daemon, tools, and the pairing. Both sides see a safety code; read it to each other once.
+
+Now open Claude Code or Codex in your repo and say what you want:
+
+> Ask Maya's agent what their orders API returns for an empty page, and agree on a page size.
+
+`cpart status` shows whether everything is running and what is waiting for you: a contract to read, a question your front desk could not answer.
+
+No relay yet? `cpart relay --tunnel` runs one on your machine with a public address, good for trying it together. [docs/relay.md](docs/relay.md) has the container for a permanent one.
+
+## Check it yourself
 
 ```sh
 pnpm install
 pnpm verify              # types and tests
 ./scripts/smoke.sh       # two people and a relay as real processes
+./scripts/setup-smoke.sh    # the short path above: setup, join, background daemons
+./scripts/two-machines.sh   # the same across the internet: one side in a container, relay behind a public tunnel. Needs docker and cloudflared
 ./scripts/contract-smoke.sh # two people sign an agreement and verify it
 ./scripts/evidence-smoke.sh # one tells the other what their repository holds; a changed byte shows as a mismatch
 ./scripts/demo-publish.sh    # the whole path on GitHub. Creates a private repo
@@ -36,7 +63,9 @@ pnpm verify              # types and tests
 
 There is a [demo video](demo/README.md) drawn from a recording of one real run: `cd demo && npm install && node capture.mjs && node render.mjs`.
 
-By hand, in three terminals:
+## Every command
+
+The pieces by hand, in three terminals:
 
 ```sh
 pnpm cpart relay --port 7447
@@ -46,7 +75,7 @@ CPART_HOME=/tmp/bob   pnpm cpart init --relay ws://127.0.0.1:7447 && CPART_HOME=
 
 Pair: `cpart invite bob` as Alice, `cpart accept <invite> alice` as Bob. Compare the safety code out of band.
 
-Talk: `cpart open alice "goal"`, `cpart say <thread> "text"`, `cpart log <thread>`.
+Talk: `cpart open alice "goal"`, `cpart say <thread> "text"`, `cpart log <thread>`. Wherever a command takes a thread, a contact's name means your latest thread with them: `cpart log alice`.
 
 Agree on something:
 
@@ -87,7 +116,7 @@ cpart asks dismiss 2                        # closed, nothing sent
 
 The front desk runs on the `claude` CLI, or on the Anthropic API when `ANTHROPIC_API_KEY` is set. The API path has not been run against the real API yet: `ANTHROPIC_API_KEY=... ./scripts/frontdesk-api-check.sh` does that. It does not run on Codex, which cannot be started without tools ([docs/design.md](docs/design.md#decisions-and-why)).
 
-Let your coding agent use it: add `cpart mcp` as an MCP server. It can talk, and it can propose, counter-propose, decline and withdraw contracts. It cannot approve one: only you can, with `cpart approve`. With `cpart mcp --notify`, an interactive Claude Code session is told when something arrives (never what); it is off by default and needs a development flag. See [docs/mcp.md](docs/mcp.md).
+Let your coding agent use it: `cpart setup` adds `cpart mcp` as an MCP server. It can talk, and it can propose, counter-propose, decline and withdraw contracts. It cannot approve one: only you can, with `cpart approve`. With `cpart mcp --notify`, an interactive Claude Code session is told when something arrives (never what); it is off by default and needs a development flag. See [docs/mcp.md](docs/mcp.md).
 
 Read threads, contracts and what your front desk did in a browser: `cpart view`. It only reads. Signing stays in the terminal.
 
@@ -95,6 +124,7 @@ Read threads, contracts and what your front desk did in a browser: `cpart view`.
 
 - [docs/design.md](docs/design.md): how it works and why
 - [docs/protocol.md](docs/protocol.md): the wire format
+- [docs/relay.md](docs/relay.md): running a relay
 - [docs/mcp.md](docs/mcp.md): using it from Claude Code and Codex
 - [docs/verify.md](docs/verify.md): checking in CI that a repo carries what was signed
 - [docs/gauntlet.md](docs/gauntlet.md): 112 attacks against it, and how each ended
