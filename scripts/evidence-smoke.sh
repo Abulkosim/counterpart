@@ -9,7 +9,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 WORK=$(mktemp -d)
-PORT=${PORT:-7466}
+PORT=${PORT:-7468}
 RELAY=ws://127.0.0.1:$PORT
 ALICE_PASS=alice-correct-horse
 BOB_PASS=bob-battery-staple
