@@ -94,7 +94,14 @@ export class RelayLink extends EventEmitter<LinkEvents> {
       } catch {
         return;
       }
-      this.onFrame(ws, frame);
+      // A local failure here (a locked database, say) must not end the process.
+      // Drop the socket: the relay sends again and the outbox is pumped again.
+      try {
+        this.onFrame(ws, frame);
+      } catch (e) {
+        this.emit("error", e as Error);
+        ws.terminate();
+      }
     });
     const down = () => {
       if (this.ws !== ws) return;
