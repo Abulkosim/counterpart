@@ -5,6 +5,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { ContractView, Counterpart, StoredEvent, ThreadSummary } from "@counterpart/daemon";
 import { type EventBodies, CONTRACT_LIMITS, EVIDENCE_LIMITS, LIMITS, canonicalize } from "@counterpart/protocol";
+import { type NotifyOptions, CHANNEL_METHOD, NOTIFY_INSTRUCTIONS, Notifier } from "./notify.ts";
 import { CAPS, contractEnvelope, envelope, goalEnvelope, inlineEnvelope, iso, jsonEnvelope, newBoundary, oneLine } from "./render.ts";
 
 export interface McpOptions {
@@ -12,6 +13,9 @@ export interface McpOptions {
   deliveryWaitMs?: number;
   // How often the store is polled while waiting.
   pollMs?: number;
+  // Push fixed-template notices into a live Claude Code session through its
+  // channel capability. Off unless set.
+  notify?: NotifyOptions | boolean;
 }
 
 export const INSTRUCTIONS = [
@@ -114,7 +118,7 @@ function contractLine(s: Extract<Shown, { kind: "contract" }>, contact: string, 
   }
 }
 
-function transcript(node: Counterpart, thread: ThreadSummary, after: number, messageCap: number): string {
+function transcript(node: Counterpart, thread: ThreadSummary, after: number, messageCap: number): { text: string; nextCursor: number } {
   const all = node.log(thread.id).filter((e) => e.status === "applied" && e.ord !== null && e.ord > after);
   const shown = all.map(shownOf).filter((s) => s !== null);
   const boundary = newBoundary(shown.map((s) => (s.kind === "contract" ? (s.title ?? "") : s.text)));
@@ -163,7 +167,7 @@ function transcript(node: Counterpart, thread: ThreadSummary, after: number, mes
     more ? "more: yes. Call counterpart_read_thread again with the next cursor." : "more: no",
     ...(unapproved ? [APPROVAL_NOTE] : []),
   ];
-  return lines.join("\n");
+  return { text: lines.join("\n"), nextCursor };
 }
 
 const approvedBy = (c: ContractView, contact: string): string => [c.approvedByMe ? "the human here" : null, c.approvedByThem ? contact : null].filter(Boolean).join(" and ") || "nobody";
@@ -184,7 +188,25 @@ function proposalFacts(c: ContractView, all: ContractView[], contact: string): s
 export function createMcpServer(node: Counterpart, opts: McpOptions = {}): McpServer {
   const deliveryWaitMs = opts.deliveryWaitMs ?? 2000;
   const pollMs = opts.pollMs ?? 200;
-  const server = new McpServer({ name: "counterpart", version: "0.1.0" }, { instructions: INSTRUCTIONS });
+  const server = new McpServer(
+    { name: "counterpart", version: "0.1.0" },
+    opts.notify ? { instructions: `${INSTRUCTIONS}\n${NOTIFY_INSTRUCTIONS}`, capabilities: { experimental: { "claude/channel": {} } } } : { instructions: INSTRUCTIONS },
+  );
+  // The method is a Claude Code extension, so the SDK's types do not know it.
+  // A host that did not register this server as a channel drops the notice.
+  const notifier = opts.notify
+    ? new Notifier(node, (n) => server.server.notification({ method: CHANNEL_METHOD, params: { content: n.content, meta: n.meta } } as never), opts.notify === true ? {} : opts.notify)
+    : null;
+  if (notifier) {
+    server.server.oninitialized = () => void notifier.start();
+    server.server.onclose = () => notifier.stop();
+  }
+  // What a read returned no longer needs announcing.
+  const read = (t: ThreadSummary, after: number, messageCap: number): CallToolResult => {
+    const r = transcript(node, t, after, messageCap);
+    notifier?.markRead(t.id, r.nextCursor);
+    return ok(r.text);
+  };
 
   const findThread = (id: string): ThreadSummary => {
     const t = node.threads().find((x) => x.id === id);
@@ -314,7 +336,7 @@ export function createMcpServer(node: Counterpart, opts: McpOptions = {}): McpSe
     },
     guard(({ thread, after, max_message_chars }) => {
       const t = findThread(thread);
-      return ok(transcript(node, t, after, max_message_chars));
+      return read(t, after, max_message_chars);
     }),
   );
 
@@ -355,7 +377,7 @@ export function createMcpServer(node: Counterpart, opts: McpOptions = {}): McpSe
           `No reply from ${t.contact} in thread ${t.id} within ${timeout_seconds}s.\nnext cursor: ${after}\nCall counterpart_wait_for_reply again with the same cursor to keep waiting, or tell the human there is no answer yet.`,
         );
       }
-      return ok(transcript(node, t, after, CAPS.message));
+      return read(t, after, CAPS.message);
     }),
   );
 
@@ -680,8 +702,12 @@ export function createMcpServer(node: Counterpart, opts: McpOptions = {}): McpSe
     }),
   );
 
+  if (notifier) notifierOf.set(server, notifier);
   return server;
 }
+
+// The notifier of a server made with `notify`, for tests.
+export const notifierOf = new WeakMap<McpServer, Notifier>();
 
 export async function startMcpServer(node: Counterpart, opts: McpOptions = {}): Promise<McpServer> {
   const server = createMcpServer(node, opts);

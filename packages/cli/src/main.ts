@@ -28,7 +28,8 @@ const USAGE = `cpart: let your agent talk to someone else's agent
   cpart threads
   cpart log <thread>                                              your own lines show (queued) or (at relay) until their daemon confirms
   cpart rejects                                                   messages that were refused, and why
-  cpart mcp                                                       MCP server on stdio, for Claude Code and Codex
+  cpart mcp [--notify] [--view-port 7450]                         MCP server on stdio, for Claude Code and Codex. --notify tells a
+                                                                  live Claude Code session when something arrives, never what
   cpart view [--port 7450]                                        read your threads in a browser, on this machine only
 
 Contracts: the exact text two people agree to. Anyone on your side, including
@@ -87,7 +88,7 @@ const { values: flags, positionals } = parseArgs({
   options: {
     relay: { type: "string" }, port: { type: "string" }, host: { type: "string" }, db: { type: "string" },
     home: { type: "string" }, evidence: { type: "boolean" }, head: { type: "string" }, base: { type: "string" }, label: { type: "string" }, pr: { type: "string" }, run: { type: "string" }, status: { type: "string" }, bind: { type: "string", multiple: true }, work: { type: "string" }, branch: { type: "string" }, repo: { type: "string" }, paths: { type: "string" }, brief: { type: "string" }, allow: { type: "string", multiple: true }, title: { type: "string" }, file: { type: "string" }, part: { type: "string", multiple: true }, supersedes: { type: "string" },
-    out: { type: "string" }, yes: { type: "boolean" }, all: { type: "boolean" }, "no-passphrase": { type: "boolean" }, as: { type: "string" }, slots: { type: "string" }, daily: { type: "string" }, model: { type: "string" }, url: { type: "string" }, json: { type: "boolean" }, help: { type: "boolean", short: "h" },
+    out: { type: "string" }, yes: { type: "boolean" }, all: { type: "boolean" }, notify: { type: "boolean" }, "view-port": { type: "string" }, "no-passphrase": { type: "boolean" }, as: { type: "string" }, slots: { type: "string" }, daily: { type: "string" }, model: { type: "string" }, url: { type: "string" }, json: { type: "boolean" }, help: { type: "boolean", short: "h" },
   },
 });
 const [cmd, ...args] = positionals;
@@ -620,7 +621,7 @@ async function main(): Promise<void> {
       return out(list.length ? `${list.map(row).join("\n")}\n\nThe wording came from a model that read the other side's messages. Answer with: cpart asks answer <id> <text>` : none, list);
     }
     case "mcp":
-      await startMcpServer(node);
+      await startMcpServer(node, flags.notify || process.env.CPART_NOTIFY === "1" ? { notify: { log: (l) => console.error(`counterpart mcp: ${l}`), viewerPort: Number(flags["view-port"] ?? process.env.CPART_VIEW_PORT ?? 7450) } } : {});
       return;
     case "view": {
       const viewer = await startViewer(node, flags.port ? { port: Number(flags.port) } : {});
