@@ -4,6 +4,7 @@ export * from "./check.ts";
 export * from "./keys.ts";
 export * from "./identity.ts";
 export * from "./contract.ts";
+export * from "./evidence.ts";
 export * from "./events.ts";
 export * from "./agreement.ts";
 export * from "./envelope.ts";

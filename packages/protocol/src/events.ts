@@ -1,5 +1,6 @@
 import { isId, isInt, isKey, isObject, isStr, onlyKeys } from "./check.ts";
 import { type Approval, type Contract, CONTRACT_LIMITS, parseApproval, parseContract } from "./contract.ts";
+import { type Evidence, parseEvidence } from "./evidence.ts";
 
 // One entry in a thread's log. Events form a DAG through `parents`; there is no
 // global order. `lane` separates free talk from control traffic; the act lane
@@ -27,6 +28,9 @@ export interface EventBodies {
   "contract.accepted": { approval: Approval };
   "contract.declined": { proposalId: string; reason?: string };
   "contract.withdrawn": { proposalId: string };
+  // One side's account of its own repository after publishing. A claim, not a
+  // fact: the receiver recomputes what it can from the agreed contract.
+  "evidence.posted": Evidence;
 }
 
 export type Via = "human" | "agent" | "frontdesk";
@@ -69,6 +73,7 @@ const lanes: Record<EventType, Lane> = {
   "contract.accepted": "act",
   "contract.declined": "act",
   "contract.withdrawn": "act",
+  "evidence.posted": "act",
 };
 
 const bodies: { [T in EventType]: (b: Record<string, unknown>) => boolean } = {
@@ -90,6 +95,7 @@ const bodies: { [T in EventType]: (b: Record<string, unknown>) => boolean } = {
   "contract.accepted": (b) => onlyKeys(b, ["approval"]) && ok(() => parseApproval(b.approval)),
   "contract.declined": (b) => isId(b.proposalId) && (onlyKeys(b, ["proposalId"]) || (onlyKeys(b, ["proposalId", "reason"]) && isStr(b.reason, 1, CONTRACT_LIMITS.reason))),
   "contract.withdrawn": (b) => onlyKeys(b, ["proposalId"]) && isId(b.proposalId),
+  "evidence.posted": (b) => ok(() => parseEvidence(b)),
 };
 
 const idList = (x: unknown, max: number): boolean => Array.isArray(x) && x.length >= 1 && x.length <= max && x.every(isId) && new Set(x).size === x.length;

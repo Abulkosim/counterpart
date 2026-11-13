@@ -1,10 +1,11 @@
 import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
-  type Agreement, type Approval, type Contract, type ContractPart, type DeviceCredential, type DeviceSecrets, type EventBodies, type EventType, type KeyPair,
-  type ThreadEvent, type Via, type Wire,
-  LIMITS, contractHash, decodeInvite, deviceId, encodeInvite, generateSigningKey, hashOf, humanId, issueDevice, laneOf, open, parseContract,
+  type Agreement, type Approval, type CheckedPart, type Contract, type ContractPart, type DeviceCredential, type DeviceSecrets, type EventBodies, type EventType,
+  type Evidence, type KeyPair, type ThreadEvent, type Via, type Wire,
+  EVIDENCE_STATE, LIMITS, checkEvidenceParts, contractHash, decodeInvite, deviceId, encodeInvite, generateSigningKey, hashOf, humanId, issueDevice, laneOf, open, parseContract, parseEvidence,
   randomId, renewDevice, safetyCode, seal, signApproval, verifyAgreement, verifyApproval,
 } from "@counterpart/protocol";
 import { type SealedRoot, DEFAULT_LOG_N, sealRoot, unsealRoot } from "./rootkey.ts";
@@ -43,6 +44,35 @@ interface Keys {
 }
 
 const MAX_PROPOSALS_PER_SIDE = 20;
+const MAX_EVIDENCE_PER_SIDE = 100;
+
+// The verifier this install ships. Evidence names the hash of the verifier the
+// other side ran; this is the only one we can vouch for.
+const VERIFIER_FILE = new URL("../../verify/src/verify.mjs", import.meta.url);
+let verifierHash: string | undefined;
+export const shippedVerifierHash = (): string => (verifierHash ??= createHash("sha256").update(readFileSync(VERIFIER_FILE)).digest("hex"));
+
+// One piece of evidence, split into what this machine checked against what it
+// holds and what remains the sender's claim.
+export interface EvidenceView {
+  eventId: string;
+  proposalId: string;
+  mine: boolean;
+  at: number; // when it took effect here
+  // current: the newest from that side for this proposal. stale: an older one
+  // that names a different head, base, bindings or trust policy. replaced: an
+  // older one for the same state.
+  state: "current" | "stale" | "replaced";
+  changed: ("head" | "base" | "bindings" | "policy")[]; // what differs from the current one
+  claim: Evidence;
+  checked: {
+    agreed: boolean; // the proposal is agreed here and the contract hash is the one both signed
+    verifier: "same" | "different"; // against the verifier this install ships
+    parts: CheckedPart[];
+    unreported: string[]; // signed parts the evidence says nothing about
+    partsMatch: boolean; // every reported digest is the signed part's
+  };
+}
 
 export type ContractStatus = "open" | "agreed" | "declined" | "withdrawn" | "superseded";
 
@@ -157,6 +187,10 @@ export class Counterpart {
       CREATE TABLE IF NOT EXISTS contract_marks (
         event_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, proposal_id TEXT NOT NULL, kind TEXT NOT NULL, by_root TEXT NOT NULL, reason TEXT
       );
+      CREATE TABLE IF NOT EXISTS evidence (
+        event_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, proposal_id TEXT NOT NULL, by_root TEXT NOT NULL, json TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS evidence_thread ON evidence (thread_id, proposal_id);
       CREATE TABLE IF NOT EXISTS events (
         id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, author TEXT NOT NULL, author_root TEXT NOT NULL,
         author_seq INTEGER NOT NULL, hash TEXT NOT NULL, json TEXT NOT NULL, mine INTEGER NOT NULL,
@@ -463,6 +497,45 @@ export class Counterpart {
     return { genesis: t.genesis, parties: [this.keys.rootKey, t.contact_root].sort() };
   }
 
+  // ---- evidence ----
+
+  // Tell the other side what my repository holds for an agreed proposal. The
+  // values come from code that read the repository, never from a model.
+  async postEvidence(threadId: string, evidence: Evidence): Promise<ThreadEvent<"evidence.posted">> {
+    return this.post(threadId, "evidence.posted", parseEvidence(evidence));
+  }
+
+  // Evidence in a thread, oldest first, from both sides. Per proposal and per
+  // side only the newest is current.
+  evidence(threadId: string, proposalId?: string): EvidenceView[] {
+    const me = this.keys.rootKey;
+    const contracts = this.contracts(threadId);
+    const rows = this.db
+      .prepare("SELECT v.event_id, v.proposal_id, v.by_root, v.json, e.received_at FROM evidence v JOIN events e ON e.id = v.event_id WHERE v.thread_id = ? AND e.status = 'applied' ORDER BY e.ord")
+      .all(threadId) as { event_id: string; proposal_id: string; by_root: string; json: string; received_at: number }[];
+    const items = rows.map((r) => ({ r, claim: parseEvidence(JSON.parse(r.json)) }));
+    const latest = new Map<string, Evidence>();
+    for (const { r, claim } of items) latest.set(`${r.proposal_id} ${r.by_root}`, claim);
+    const names = { head: "head", base: "base", bindingsHash: "bindings", trustPolicyHash: "policy" } as const;
+    const out = items.map(({ r, claim }): EvidenceView => {
+      const c = contracts.find((x) => x.proposalId === claim.proposalId);
+      const newest = latest.get(`${r.proposal_id} ${r.by_root}`)!;
+      const changed = EVIDENCE_STATE.filter((k) => newest[k] !== claim[k]).map((k) => names[k]);
+      const { parts, unreported } = checkEvidenceParts(claim, c?.contract ?? { v: 1, title: "", text: "", parties: [], parts: [] });
+      return {
+        eventId: r.event_id, proposalId: claim.proposalId, mine: r.by_root === me, at: r.received_at,
+        state: newest === claim ? "current" : changed.length ? "stale" : "replaced",
+        changed, claim,
+        checked: {
+          agreed: c?.status === "agreed" && c.hash === claim.contractHash,
+          verifier: claim.verifier.sha256 === shippedVerifierHash() ? "same" : "different",
+          parts, unreported, partsMatch: parts.length > 0 && parts.every((p) => p.check === "match"),
+        },
+      };
+    });
+    return proposalId ? out.filter((v) => v.proposalId === proposalId) : out;
+  }
+
   private thread(threadId: string): { contact_root: string; genesis: string } {
     const t = this.db.prepare("SELECT contact_root, genesis FROM threads WHERE id = ?").get(threadId) as { contact_root: string; genesis: string } | undefined;
     if (!t) throw new Error(`no thread ${threadId}`);
@@ -502,6 +575,17 @@ export class Counterpart {
       const p = proposal((event as ThreadEvent<"contract.withdrawn">).body.proposalId);
       if (!p) throw new Reject("withdraws a proposal this thread has not seen");
       if (p.proposer_root !== authorRoot) throw new Reject("only the proposer can withdraw a proposal");
+    } else if (event.type === "evidence.posted") {
+      // Evidence is about an agreement. Without one in this thread there is
+      // nothing to compare it with, so it is refused, not stored as a claim.
+      const body = (event as ThreadEvent<"evidence.posted">).body;
+      const p = proposal(body.proposalId);
+      if (!p) throw new Reject("evidence names a proposal this thread has not seen");
+      if (p.contract_hash !== body.contractHash) throw new Reject("evidence names a different contract than the proposal it cites");
+      const signed = (this.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE proposal_id = ? AND thread_id = ?").get(body.proposalId, event.threadId) as { n: number }).n;
+      if (signed !== 2) throw new Reject("evidence is for a proposal that is not agreed");
+      const n = (this.db.prepare("SELECT COUNT(*) AS n FROM evidence WHERE thread_id = ? AND by_root = ?").get(event.threadId, authorRoot) as { n: number }).n;
+      if (n >= MAX_EVIDENCE_PER_SIDE) throw new Reject(`a side may send at most ${MAX_EVIDENCE_PER_SIDE} pieces of evidence in a thread`);
     }
   }
 
@@ -519,6 +603,9 @@ export class Counterpart {
       this.db
         .prepare("INSERT INTO contract_marks (event_id, thread_id, proposal_id, kind, by_root, reason) VALUES (?, ?, ?, ?, ?, ?)")
         .run(event.id, event.threadId, body.proposalId, event.type === "contract.declined" ? "declined" : "withdrawn", authorRoot, body.reason ?? null);
+    } else if (event.type === "evidence.posted") {
+      const body = (event as ThreadEvent<"evidence.posted">).body;
+      this.db.prepare("INSERT INTO evidence (event_id, thread_id, proposal_id, by_root, json) VALUES (?, ?, ?, ?, ?)").run(event.id, event.threadId, body.proposalId, authorRoot, JSON.stringify(body));
     }
   }
 
