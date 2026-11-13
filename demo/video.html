@@ -85,7 +85,7 @@
   function term(title, steps) {
     const segs = [];
     for (const s of steps) {
-      if (s.wait) { segs.push({ k: "pause", d: s.wait }); continue; }
+      if (s.wait) { segs.push({ k: "pause", d: s.wait, mark: s.mark }); continue; }
       if (s.raw) { segs.push(...s.raw); continue; }
       segs.push({ k: "print", text: `${s.who ?? "$"} `, cls: "p", d: 0 });
       segs.push({ k: "type", text: s.cmd, cls: "c" });
@@ -95,11 +95,13 @@
       segs.push({ k: "pause", d: s.hold ?? 0.7 });
     }
     let at = 0;
+    const marks = {};
     for (const g of segs) {
       if (g.k === "type") g.d = clamp(g.text.length / 55, 0.35, 1.5);
       else if (g.k === "print" && g.d == null) g.d = clamp(g.text.split("\n").length * 0.05, 0.1, 1.1);
       g.at = at;
       at += g.d;
+      if (g.mark) marks[g.mark] = g.at;
     }
     const box = el("div", "term");
     box.append(el("div", "bar", esc(title)));
@@ -114,6 +116,7 @@
     };
     return {
       el: box,
+      marks,
       duration: at,
       seek(t) {
         let html = "", typing = false;
@@ -376,22 +379,38 @@
     const pr = E("pr", "alice", "cpart pr");
     const short = (l) => (l.length > 118 ? l.slice(0, 117) + "…" : l);
     const prOut = [between(pr.out, /^Commits/, /^The agreement file/).trimEnd(), "", ...between(pr.out, /^Checked here/).split("\n").map(short)].join("\n");
+    const sent = (scene) => { const e = E(scene, "alice", "cpart evidence send"); return { cmd: e.cmd, out: e.out.split("\n").filter((l) => /^Queued|^At least one/.test(l)).join("\n"), cls: "d", hold: 0.2 }; };
+    const seen = (scene) => E(scene, "bob", "cpart evidence");
+    const block = (text, n) => between(text, /^Evidence \S+ from alice's side.*current/).split("\n").slice(0, n).join("\n").replace(/, arrived [\d-]+ [\d:]+/, "");
     const A = term("Alice", [
-      { cmd: pr.cmd, out: prOut, hl: [[/^ {2}ok /gm, "ok"], [/https:\/\/github\.com\/\S+/, "m"]], hold: 2.2 },
-      { cmd: E("verify", "github").cmd, think: 1.6, out: E("verify", "github").out, hl: [[/success: .*/, "ok"]], hold: 2.2 },
+      { cmd: pr.cmd, out: prOut, hl: [[/^ {2}ok /gm, "ok"]], hold: 2 },
+      { cmd: E("verify", "github").cmd, think: 1.6, out: E("verify", "github").out, hl: [[/success: .*/, "ok"]], hold: 1.2 },
+      sent("verify"),
+      { wait: 6, mark: "first" },
       { cmd: E("tamper", "alice", "sed").cmd, hold: 0.3 },
       { cmd: E("tamper", "alice", "git commit").cmd, hold: 0.3 },
-      { cmd: E("tamper", "github").cmd, think: 1.6, out: E("tamper", "github").out, hl: [[/failure: .*/, "bad"]] },
+      { cmd: E("tamper", "github").cmd, think: 1.6, out: E("tamper", "github").out, hl: [[/failure: .*/, "bad"]], hold: 1 },
+      sent("tamper"),
+      { wait: 1, mark: "second" },
     ]);
+    const stale = seen("tamper").out.split("\n").find((l) => /STALE/.test(l)).replace(/, arrived [\d-]+ [\d:]+/, "");
+    const tidy = (t) => t.split("\n").filter((l) => !/verifier 1/.test(l)).map((l) => l.replace(/^ {4}(ok|MISMATCH) +/, "  $1  ").replace(/^ {2}Checked/, "Checked")).join("\n");
+    const hl = [[/^ {2}ok /gm, "ok"], [/MISMATCH/, "bad"], [/STALE \(head changed since\)/, "bad"]];
+    const first = { cmd: seen("verify").cmd, out: tidy(block(seen("verify").out, 5)), hl };
+    const t1 = 0.4 + A.marks.first + 0.3, t2 = 0.4 + A.marks.second + 0.3;
+    const B = term("Bob", [first, { wait: Math.max(0.1, t2 - t1 - term("", [first]).duration) }, { cmd: seen("tamper").cmd, out: `${tidy(block(seen("tamper").out, 5))}\n\n${stale}`, hl }]);
+    B.el.style.flex = "0 0 720px";
     scene({
-      chapter: "Pull request",
-      parts: [{ ...A, at: 0.4 }],
+      chapter: "Pull request and evidence",
+      parts: [{ ...A, at: 0.4 }, { ...B, at: t1 }],
       captions: [
         { at: 0.3, text: "Publishing commits the reviewed work and the signed agreement, and opens a pull request." },
-        { at: 7.4, text: "A workflow on Alice's main branch checks the pull request carries what both people signed." },
-        { at: 12.6, text: "Change one byte of the agreed schema, and the check fails." },
+        { at: 6.4, text: "A workflow on Alice's main branch checks the pull request carries what both people signed." },
+        { at: t1 - 0.6, text: "Alice's side tells Bob what her repository holds. His machine rechecks it against the contract he signed." },
+        { at: t1 + 5.6, text: "Change one byte of the agreed schema, and the check fails." },
+        { at: t2 - 0.4, text: "Bob sees the mismatch on his own machine. He does not have to take anyone's word for it." },
       ],
-      hold: 4.5,
+      hold: 6,
     });
   }
 

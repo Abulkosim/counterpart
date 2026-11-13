@@ -222,13 +222,29 @@ cpart("alice", ["repo", "init", thread, p, "--repo", REPO, "--bind", "page.schem
 g("add", "-A");
 g("commit", "-q", "-m", "chore: trust the orders pagination agreement and add the verifier");
 g("push", "-q", "origin", "main");
-console.log("\n[alice] worker running (real model, no tools)...");
-const workId = json("alice", ["work", thread, p, "--repo", REPO, "--paths", "src/orders.js,src/orders.test.js,src/db.js", "--brief", "Implement the agreed pagination in listOrders using db.ordersAfter, and update the tests."]).id;
-tape.push({ scene: "work", who: "alice", cmd: `cpart work ${T} ${p} --paths src/orders.js,src/orders.test.js,src/db.js --brief "Implement the agreed pagination"`, out: `Work ${workId}` });
-cpart("alice", ["work", "show", workId], { scene: "work", show: `cpart work show ${workId}` });
-const workHash = json("alice", ["work", "show", workId]).workHash;
-cpart("alice", ["work", "apply", workId, workHash.slice(0, 12)], { scene: "work", show: `cpart work apply ${workId} ${workHash.slice(0, 12)}` });
-sh("alice", "work", "npm test", "npm", ["test"], { cwd: REPO });
+// The worker is a model, so its patch can be wrong. Alice runs her tests; if they fail she throws
+// the patch away and asks again. How many tries it took is written to the tape.
+let workId, tries = 0;
+for (;;) {
+  tries++;
+  console.log(`\n[alice] worker running (real model, no tools), try ${tries}...`);
+  const mark = tape.length;
+  workId = json("alice", ["work", thread, p, "--repo", REPO, "--paths", "src/orders.js,src/orders.test.js,src/db.js", "--brief", "Implement the agreed pagination in listOrders using db.ordersAfter, and update the tests."]).id;
+  tape.push({ scene: "work", who: "alice", cmd: `cpart work ${T} ${p} --paths src/orders.js,src/orders.test.js,src/db.js --brief "Implement the agreed pagination"`, out: `Work ${workId}` });
+  cpart("alice", ["work", "show", workId], { scene: "work", show: `cpart work show ${workId}` });
+  const workHash = json("alice", ["work", "show", workId]).workHash;
+  cpart("alice", ["work", "apply", workId, workHash.slice(0, 12)], { scene: "work", show: `cpart work apply ${workId} ${workHash.slice(0, 12)}` });
+  const t = spawnSync("npm", ["test"], { cwd: REPO, encoding: "utf8" });
+  if (t.status === 0) {
+    tape.push({ scene: "work", who: "alice", cmd: "npm test", out: `${t.stdout}${t.stderr}`.trimEnd() });
+    break;
+  }
+  console.log(`tests failed on try ${tries}; discarding the patch\n${t.stdout.split("\n").filter((l) => /^✖/.test(l)).join("\n")}`);
+  if (tries >= 4) throw new Error("the worker's patch failed the tests four times");
+  tape.splice(mark);
+  g("checkout", "--", ".");
+  g("clean", "-fdq");
+}
 const prOut = cpart("alice", ["pr", thread, p, "--work", workId, "--yes", "--repo", REPO], { scene: "pr", show: `cpart pr ${T} ${p} --work ${workId}` });
 const prUrl = prOut.match(/https:\/\/github\.com\/\S+\/pull\/\d+/)[0];
 const pr = prUrl.split("/").pop();
@@ -237,14 +253,19 @@ async function verifyOnGitHub(want, scene) {
   const head = g("rev-parse", "HEAD");
   await sleep(5000);
   execFileSync("gh", ["workflow", "run", "counterpart-verify.yml", "-R", `${owner}/${name}`, "-f", `pr=${pr}`], { stdio: "ignore" });
-  const state = await until("status", () => {
-    const s = execFileSync("gh", ["api", `repos/${owner}/${name}/commits/${head}/statuses`, "--jq", '[.[] | select(.context == "counterpart/verify")][0] | "\\(.state): \\(.description)"'], { encoding: "utf8" }).trim();
-    return s && s !== "null: null" ? s : null;
+  const [state, run] = await until("status", () => {
+    const s = execFileSync("gh", ["api", `repos/${owner}/${name}/commits/${head}/statuses`, "--jq", '[.[] | select(.context == "counterpart/verify")][0] | "\\(.state): \\(.description)|\\(.target_url)"'], { encoding: "utf8" }).trim();
+    return s && !s.startsWith("null: null") ? s.split("|") : null;
   });
   tape.push({ scene, who: "github", cmd: `gh workflow run counterpart-verify.yml -f pr=${pr}`, out: `counterpart/verify on ${head.slice(0, 7)} -> ${state}` });
   save();
   console.log(`\ncounterpart/verify on ${head.slice(0, 7)} -> ${state}`);
   if (!state.startsWith(want)) throw new Error(`wanted ${want}`);
+  // Alice tells Bob what her repository holds. Bob's side rechecks what it can against the signed contract.
+  const had = json("bob", ["evidence", thread]).length;
+  cpart("alice", ["evidence", "send", thread, p, "--repo", REPO, "--pr", prUrl, "--run", run, "--status", want], { scene, show: `cpart evidence send ${T} ${p} --pr ${prUrl.replace(/.*\/(\w+\/[\w-]+)\/pull/, "…/pull")} --status ${want}` });
+  await until("evidence to reach bob", () => json("bob", ["evidence", thread]).length > had);
+  cpart("bob", ["evidence", thread, p], { scene, show: `cpart evidence ${T} ${p}` });
 }
 await verifyOnGitHub("success", "verify");
 
@@ -256,7 +277,7 @@ g("push", "-q", "origin", "HEAD");
 tape.push({ scene: "tamper", who: "alice", cmd: `git commit -qam "fix: allow one more item" && git push`, out: "" });
 await verifyOnGitHub("failure", "tamper");
 
-tape.push({ scene: "meta", who: "", cmd: "", out: JSON.stringify({ repo: `https://github.com/${owner}/${name}`, pr: prUrl, model: MODEL, at: new Date().toISOString() }) });
+tape.push({ scene: "meta", who: "", cmd: "", out: JSON.stringify({ repo: `https://github.com/${owner}/${name}`, pr: prUrl, model: MODEL, workerTries: tries, at: new Date().toISOString() }) });
 save();
 cleanup();
 console.log(`\nTape: ${join(OUT, "tape.json")}\nCAPTURE OK`);

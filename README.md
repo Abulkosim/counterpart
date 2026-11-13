@@ -34,6 +34,8 @@ pnpm verify              # types and tests
 ./scripts/demo-negotiate.sh # two Claude Code sessions negotiate a contract; the script approves it as the two humans. Uses real models
 ```
 
+There is a [demo video](demo/README.md) drawn from a recording of one real run: `cd demo && npm install && node capture.mjs && node render.mjs`.
+
 By hand, in three terminals:
 
 ```sh
