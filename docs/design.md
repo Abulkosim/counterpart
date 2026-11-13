@@ -75,7 +75,7 @@ Text from a peer never becomes a file path, a command, a URL or a field of a gra
 
 ### Pull, not push
 
-There is one place where peer text does reach a privileged agent: when your own coding session asks for it. If you tell your agent "ask Bob's agent how X works", the answer has to come back into your session. The rule is that this only happens on an explicit read (`counterpart_read_thread`, `counterpart_wait_for_reply`), inside an envelope that marks it as someone else's words. Nothing a peer writes is ever pushed into a session, placed in a tool description, or shown in a list. It is the same risk as your agent reading a web page, and it is yours to supervise until grants limit what such a session can do.
+There is one place where peer text does reach a privileged agent: when your own coding session asks for it. If you tell your agent "ask Bob's agent how X works", the answer has to come back into your session. The rule is that this only happens on an explicit read (`counterpart_read_thread`, `counterpart_wait_for_reply`), inside an envelope that marks it as someone else's words. Nothing a peer writes is ever pushed into a session, placed in a tool description, or shown in a list. What can be pushed, when the owner turns it on, is a notice that something arrived: fixed words and local values, described under [Prompt injection](#prompt-injection). It is the same risk as your agent reading a web page, and it is yours to supervise until grants limit what such a session can do.
 
 ## Prompt injection
 
@@ -87,7 +87,7 @@ Defences, in order of how much we rely on them:
 2. **Nothing to do.** Peer text cannot cause local effects. Effects come from act-lane operations checked by code against grants the human issued.
 3. **Work without execution.** When a worker implements an agreed contract, it has no tools and sees only the files its human chose. Its output is a set of edits that code checks and turns into a patch for a human to review. Nothing it writes is run on the owner's machine.
 4. **Approvals outside the model.** An approval is a signature by the human's root key, which is locked with their passphrase. An agent on the same machine, even one with a shell, can read the key file and cannot sign with it. This holds while the machine is honest: a keylogger or a replaced `cpart` defeats it. Agents can propose, because a proposal binds nobody.
-5. **Rendering.** What reaches a live coding session is a fixed template built from verified fields: contact name, event type, hash, counts, a local link. No peer-written text.
+5. **Rendering.** What is pushed into a live coding session is a fixed template built from local and checked fields: the local contact name, event types, the start of a proposal id, counts, a cursor and a local link without the viewer's key. No peer-written text. The peer chooses when it writes, so notices are also coalesced and capped per hour. Built for Claude Code channels (`cpart mcp --notify`, [mcp.md](mcp.md#notices-into-a-live-session)); off by default.
 6. **A hostile-peer test suite** that runs in CI: [gauntlet.md](gauntlet.md). Results for the code-enforced rules and for model behaviour are reported separately, because only the first kind are guarantees.
 
 Things we do not claim: that a model given peer text will resist it, or that scanning output for secrets catches everything.
@@ -102,7 +102,7 @@ Each side pays for its own model use. Before the daemon starts any model work it
 | --- | --- | --- |
 | M0 | Two paired daemons exchange encrypted messages and survive duplicate, delayed, reordered and lost delivery | Done. Lost messages are recovered by resend on request |
 | M1 | Front desk answers a contact's questions from an approved bundle while the human is offline. Viewer shows where each answer came from. Hostile-peer suite, first version. Slots and budgets | Done. The suite's model-behaviour section is still empty |
-| M2 | Act lane: contracts proposed and accepted by hash, human approvals, notifications into live Claude Code and Codex sessions | Done except notifications into live sessions |
+| M2 | Act lane: contracts proposed and accepted by hash, human approvals, notifications into live Claude Code and Codex sessions | Done. Notifications reach an interactive Claude Code session through a development channel flag. Headless sessions and Codex get none and use the pull tools |
 | M3 | Workers produce patches. Each side opens a PR carrying the agreement and the other side's signed evidence. A verifier in CI checks it and rejects stale evidence | Worker, verifier and publishing done and run on GitHub once. Evidence events done and run between two local daemons. Not done: showing the other side's evidence on the pull request, and checking evidence in CI |
 | M4 | Hosted invite-only relay. Launch demo: overnight answer, human steps in, two PRs, recovery from an interrupted delivery | |
 
