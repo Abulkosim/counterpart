@@ -4,9 +4,7 @@
 # passphrase are refused. No models involved.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-WORK=$(mktemp -d)
-PORT=${PORT:-7465}
-RELAY=ws://127.0.0.1:$PORT
+. scripts/smoke-lib.sh
 ALICE_PASS=alice-correct-horse
 BOB_PASS=bob-battery-staple
 
@@ -14,31 +12,17 @@ cpart() { local who=$1 pass=$2; shift 2; CPART_HOME=$WORK/$who CPART_PASSPHRASE=
 alice() { cpart alice "$ALICE_PASS" "$@"; }
 bob() { cpart bob "$BOB_PASS" "$@"; }
 field() { node -pe "JSON.parse(require('fs').readFileSync(0))$1"; }
-pids=()
-cleanup() { kill "${pids[@]}" 2>/dev/null || true; wait 2>/dev/null || true; rm -rf "$WORK"; }
-trap cleanup EXIT
-step() { printf '\n== %s\n' "$*"; }
-fail() { echo "FAIL: $*" >&2; exit 1; }
-wait_for() {
-  local what=$1; shift
-  for _ in $(seq 1 100); do if "$@" >/dev/null 2>&1; then return 0; fi; sleep 0.1; done
-  fail "timed out waiting for $what"
-}
 must_fail() {
   local what=$1; shift
   if "$@" >"$WORK/out.txt" 2>&1; then fail "$what was accepted"; fi
   echo "refused, as it should be: $(tail -1 "$WORK/out.txt")"
 }
 
-node packages/cli/src/main.ts relay --port "$PORT" --db "$WORK/relay.db" >"$WORK/relay.log" 2>&1 &
-pids+=("$!")
-wait_for "relay" curl -sf "http://127.0.0.1:$PORT/healthz"
+start_relay
 alice init --relay "$RELAY" >/dev/null
 bob init --relay "$RELAY" >/dev/null
-CPART_HOME=$WORK/alice node packages/cli/src/main.ts daemon >"$WORK/alice.log" 2>&1 &
-pids+=("$!")
-CPART_HOME=$WORK/bob node packages/cli/src/main.ts daemon >"$WORK/bob.log" 2>&1 &
-pids+=("$!")
+start_daemon alice
+start_daemon bob
 bob accept "$(alice invite bob --json | field .invite)" alice >/dev/null
 wait_for "pairing" sh -c "CPART_HOME=$WORK/alice node packages/cli/src/main.ts contacts | grep -q active"
 wait_for "pairing" sh -c "CPART_HOME=$WORK/bob node packages/cli/src/main.ts contacts | grep -q active"
