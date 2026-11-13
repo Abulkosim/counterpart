@@ -1,0 +1,13 @@
+{
+  "name": "counterpart-demo",
+  "private": true,
+  "type": "module",
+  "description": "Records the demo tape and renders the demo video. Not part of the workspace.",
+  "dependencies": {
+    "@fontsource/ibm-plex-mono": "^5.1.0",
+    "@fontsource/ibm-plex-sans": "^5.1.0",
+    "@fontsource/source-serif-4": "^5.1.0",
+    "ffmpeg-static": "5.2.0",
+    "playwright": "1.65.0"
+  }
+}
