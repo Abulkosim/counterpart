@@ -2,7 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { type IncomingMessage, type ServerResponse, createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { ContractStatus, ContractView, Counterpart, StoredEvent, ThreadSummary } from "@counterpart/daemon";
+import type { ContractStatus, ContractView, Counterpart, EvidenceView, StoredEvent, ThreadSummary } from "@counterpart/daemon";
 import { type Run, FrontDesk, readBundle } from "@counterpart/frontdesk";
 import { deviceId, humanId } from "@counterpart/protocol";
 import { type DiffLine, diffLines } from "./diff.ts";
@@ -94,6 +94,9 @@ export interface ViewerContract {
   proposals: { n: number; proposalId: string; proposedByMe: boolean }[];
   previous: { n: number; proposalId: string; proposedByMe: boolean; titleWas: string | null } | null;
   diff: { text: DiffLine[]; parts: ViewerPartDiff[] } | null;
+  // Evidence from both sides, oldest first. `claim` is the sender's word;
+  // `checked` is what this machine recomputed from the signed contract.
+  evidence: EvidenceView[];
 }
 
 export interface ViewerFrontDesk {
@@ -148,7 +151,7 @@ function toEvent(e: StoredEvent): ViewerEvent {
   const proposalId =
     e.type === "contract.proposed" ? e.id
     : e.type === "contract.accepted" ? str(body.approval?.proposalId)
-    : e.type === "contract.declined" || e.type === "contract.withdrawn" ? str(body.proposalId)
+    : e.type === "contract.declined" || e.type === "contract.withdrawn" || e.type === "evidence.posted" ? str(body.proposalId)
     : null;
   const via = e.type === "talk.posted" && (body.via === "human" || body.via === "agent" || body.via === "frontdesk") ? body.via : null;
   return { id: e.id, type: e.type, mine: e.mine, status: e.status, createdAt: e.createdAt, receivedAt: e.receivedAt, text, via, proposalId };
@@ -274,6 +277,7 @@ export async function startViewer(node: Counterpart, opts: ViewerOptions = {}): 
       proposals: list.map((p) => ({ n: p.n, proposalId: p.proposalId, proposedByMe: p.proposedByMe })),
       previous: previous ? { n: previous.n, proposalId: previous.proposalId, proposedByMe: previous.proposedByMe, titleWas: previous.title === summary.title ? null : previous.title } : null,
       diff,
+      evidence: node.evidence(threadId, proposalId),
     };
   };
 
