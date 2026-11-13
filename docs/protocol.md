@@ -40,6 +40,7 @@ Event { id, threadId, author, authorSeq, parents[], lane, type, body, createdAt 
 | `contract.accepted` | act | `{ approval }` |
 | `contract.declined` | act | `{ proposalId, reason? }` |
 | `contract.withdrawn` | act | `{ proposalId }` |
+| `evidence.posted` | act | `Evidence`. See [Evidence](#evidence) |
 
 Unknown types and unknown fields are rejected.
 
@@ -66,6 +67,43 @@ A proposal is named by the id of the event that made it. The same text proposed 
 A contract is agreed when both people have approved the same proposal. Approvals cannot be revoked. Superseding or withdrawing a proposal stops asking for approval; it does not cancel a signature already given, and if the other person signs later the contract is agreed. This is deliberate: two logs that are briefly out of step cannot disagree about whether an agreement exists.
 
 An agreement file holds the contract, the thread's first event and both approvals. Anyone can check it without a daemon: the contract must match its hash, the first event must hash to what the approvals signed and name the same two people, and both approvals must be for the same proposal. It proves the holders of two keys approved the text. It does not prove whose keys they are or that a passphrase was typed.
+
+## Evidence
+
+After publishing, a side tells the other what its repository holds for an agreed proposal.
+
+```
+Evidence {
+  v: 1, proposalId, contractHash,
+  repo,                       a label the sender chose, such as owner/name
+  pr?,                        https URL
+  head, base,                 commit ids, 40 or 64 lower-case hex
+  bindingsHash,               sha256 of the canonical bindings in the trust file on base
+  trustPolicyHash,            sha256 of the trust file's bytes on base
+  verifier: { version, sha256 },   sha256 of .counterpart/verify.mjs on base
+  parts: [{ part, path, sha256?, ok }],
+  run?: { url, status: "success" | "failure" }
+}
+```
+
+Each entry in `parts` is one binding: the contract part's name, the path it is bound to, the sha256 of the file at that path on `head`, and whether the sender found it byte-identical to the signed part. `sha256` is left out when there is no regular file there, and then `ok` must be false.
+
+Limits: `repo` is 1 to 140 characters of `A-Z a-z 0-9 . _ / -`. A URL is at most 300 characters of plain ASCII, starts with `https://`, and has no user name or password. A path is at most 300 printable ASCII characters, relative, with no `.` or `..` segment, backslash or colon. There are 1 to 32 parts, and no two share a part and a path. Hashes are 64 lower-case hex characters. The verifier version is at most 16 characters. Anything else is refused.
+
+Rules a daemon enforces:
+
+- The proposal is one this thread has seen, `contractHash` is that proposal's hash, and both people have approved it. Evidence for anything else is refused, not stored.
+- Each side may send at most 100 in a thread.
+
+Everything in evidence is the sender's claim. The receiver recomputes only what it holds:
+
+- The proposal and contract hash are an agreed contract in this thread. This is the acceptance rule above.
+- Each part's digest against the sha256 of the signed part's UTF-8 bytes: match, mismatch, no file, or no such part in the contract. The sender's `ok` is shown but decides nothing.
+- The verifier hash against the verifier the receiver's own install ships.
+
+A matching digest shows the sender named the right bytes. It does not show their repository holds them. The repository label, the commits, the two policy hashes, the pull request and the CI run are shown as the sender's claim and are never marked checked. URLs are printed as text. Nothing fetches them.
+
+Per proposal and per side, the newest evidence (in the order the receiver applied it) is current. An older one is stale if the current one names a different `head`, `base`, `bindingsHash` or `trustPolicyHash`, and otherwise replaced.
 
 ## Envelope
 

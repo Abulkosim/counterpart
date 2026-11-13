@@ -69,7 +69,7 @@ A thread is a log of signed events between two people. Events reference earlier 
 Every event is in one of two lanes:
 
 - **Talk.** Free text between agents. Useful, non-binding, and always treated as untrusted. Nothing said here changes what anyone is allowed to do.
-- **Act.** Typed, signed operations: propose a contract, accept it, decline it, withdraw it. Evidence comes in M3. Only these change what has been agreed, and each is checked by code.
+- **Act.** Typed, signed operations: propose a contract, accept it, decline it, withdraw it, and send evidence about a repository. Only these change what has been agreed or what is shown as checked, and each is checked by code.
 
 Text from a peer never becomes a file path, a command, a URL or a field of a grant.
 
@@ -103,12 +103,12 @@ Each side pays for its own model use. Before the daemon starts any model work it
 | M0 | Two paired daemons exchange encrypted messages and survive duplicate, delayed, reordered and lost delivery | Done. Lost messages are recovered by resend on request |
 | M1 | Front desk answers a contact's questions from an approved bundle while the human is offline. Viewer shows where each answer came from. Hostile-peer suite, first version. Slots and budgets | Done. The suite's model-behaviour section is still empty |
 | M2 | Act lane: contracts proposed and accepted by hash, human approvals, notifications into live Claude Code and Codex sessions | Done except notifications into live sessions |
-| M3 | Workers produce patches. Each side opens a PR carrying the agreement and the other side's signed evidence. A verifier in CI checks it and rejects stale evidence | Worker, verifier and publishing done locally; not yet run on GitHub; evidence next |
+| M3 | Workers produce patches. Each side opens a PR carrying the agreement and the other side's signed evidence. A verifier in CI checks it and rejects stale evidence | Worker, verifier and publishing done and run on GitHub once. Evidence events done and run between two local daemons. Not done: showing the other side's evidence on the pull request, and checking evidence in CI |
 | M4 | Hosted invite-only relay. Launch demo: overnight answer, human steps in, two PRs, recovery from an interrupted delivery | |
 
 ## Plan for M3: from agreement to pull requests
 
-Worked out with Codex in a fifth design round. Built so far: the worker and its checker (`cpart work`), the repo verifier ([verify.md](verify.md)), and `cpart repo init` and `cpart pr` with the CI workflow. The workflow and the push have not been run on GitHub yet. Not built: evidence events.
+Worked out with Codex in a fifth design round. Built so far: the worker and its checker (`cpart work`), the repo verifier ([verify.md](verify.md)), and `cpart repo init` and `cpart pr` with the CI workflow. Evidence events are built too (`cpart evidence`, [protocol.md](protocol.md#evidence)). Not built: putting the other side's evidence on the pull request, and a CI check that rejects stale evidence.
 
 **Nothing the model writes is run on the owner's machine.** Not tests, not builds, not scripts. A sandbox cannot be verified on an arbitrary laptop, and running a test suite after applying a patch written under the influence of the other side's contract text is remote code execution. Code runs where a sandbox already exists: the repo's own CI, on hosted runners, with no secrets.
 
@@ -119,6 +119,8 @@ Worked out with Codex in a fifth design round. Built so far: the worker and its 
 **CI checks the link between agreement and code.** A verifier, run from the protected base branch by `workflow_dispatch` against a chosen PR, reads the PR's files as data and checks: the agreement verifies; its signers and thread are the ones pinned on the base branch; each bound part of the contract is byte-identical to the file at its bound path; and fixtures in the repo, both ones that should pass and ones that should fail, behave that way against the agreed schema. A missing agreement or a deleted binding fails.
 
 **Evidence between the two sides** is an act-lane event naming immutable things: agreement, proposal, repo, head and base commits, hashes of the bindings and trust policy, verifier version, per-part results, and the CI run. The receiver recomputes what it can and shows the rest as the other side's claim. Evidence goes stale when the head, base, bindings or policy change.
+
+What the receiver can recompute is small, and that is stated wherever evidence is shown: the proposal is an agreed one in this thread, each part digest is or is not the digest of the signed part, and the verifier hash is or is not the one this install ships. The sender's values are read from committed Git objects by `cpart evidence send`, with no model involved, but the receiver cannot know that. A sender who lies can name the right digests for a repository that holds something else. Only the receiver looking at the repository, or a CI run they trust, settles that. Links in evidence are text and are never opened by Counterpart.
 
 **The demo:** two repos, one agreed schema, two reviewed patches, two PRs with passing checks and each side's evidence shown on the other's PR. Then change one byte of the schema and watch verification fail, and push a new commit and watch the old evidence go stale.
 
