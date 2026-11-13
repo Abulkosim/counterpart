@@ -14,11 +14,12 @@ This file is generated. Run `pnpm gauntlet` to rebuild it. The same cases run in
 | Canonical form and parsing | 11 | 11 | 0 | 0 |
 | Replay and ordering | 13 | 13 | 0 | 0 |
 | Authority | 20 | 19 | 1 | 0 |
+| Resend requests and receipts | 6 | 6 | 0 | 0 |
 | The relay as attacker | 10 | 10 | 0 | 0 |
 | Clients attacking the relay | 14 | 14 | 0 | 0 |
 | Terminal output | 7 | 7 | 0 | 0 |
 | Local storage | 4 | 3 | 1 | 0 |
-| **All** | **99** | **97** | **2** | **0** |
+| **All** | **105** | **103** | **2** | **0** |
 
 ## Open findings
 
@@ -130,6 +131,17 @@ These are guarantees. A case here either holds or it does not.
 | AUT-19 Sit in the middle of a pairing | network | Someone who swaps the invite on its way becomes the contact on both sides, and the two safety codes no longer match. | held |
 | AUT-20 Show up in another thread before pairing completes | contact | Events held for a contact whose pairing is not complete are not listed in any thread. | held |
 
+### Resend requests and receipts
+
+| Case | Who attacks | The rule | Result |
+| --- | --- | --- | --- |
+| RSD-01 Ask for another contact's messages to be sent again | contact | A resend request is answered only for a thread the requester is part of, and a thread that is someone else's looks the same as one that does not exist. | held |
+| RSD-02 Ask for messages that were never written, or that the requester wrote | contact | A resend request yields only events the responder itself wrote in that thread; anything else in it is ignored. | held |
+| RSD-03 Flood resend requests | contact | However many resend requests a contact sends, the responder answers one per thread in thirty seconds and sends one event again at most five times. | held |
+| RSD-04 Make the victim ask for parents that do not exist | contact | A contact who sends events with made-up parents gets at most eight resend requests per thread and five per minute in all, each naming at most sixteen ids. | held |
+| RSD-05 Get a resend request or a receipt into the conversation | contact | Resend requests and receipts never enter a thread's log or the stream agents and the front desk read, whatever sequence number or parents they claim. | held |
+| RSD-06 Confirm receipt of a message sent to someone else | contact | A receipt marks only the receiver's own events in the thread the receipt's sender is part of. | held |
+
 ### The relay as attacker
 
 | Case | Who attacks | The rule | Result |
@@ -226,9 +238,9 @@ The cases are in `packages/gauntlet/src/cases/model.ts`. Run them with `pnpm gau
 - Crashes in the middle of a write, and several processes sharing one identity directory.
 - Faking a log line by padding a message with spaces until the terminal wraps.
 - How much an accepted contact can make you store. Nothing caps the threads, messages or contact.hello events an active contact sends.
-- A relay that says it stored a message and then drops it. The design accepts that the relay can lose mail.
+- A relay that drops a message every time it is sent. A message dropped once is asked for and sent again; one dropped five times is not recovered.
 - macOS and Windows.
 
 ---
 
-Generated from commit `38daaad plus uncommitted changes` on 2026-11-12 (UTC), Node v24.22.2.
+Generated from commit `917d7af` on 2026-11-13 (UTC), Node v24.22.2.
