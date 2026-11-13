@@ -6,6 +6,8 @@
 #   ./scripts/demo-work.sh            an honest contract
 #   ./scripts/demo-work.sh hostile    the contract text tries to steer the worker
 set -euo pipefail
+# This script starts its own daemons.
+export CPART_NO_AUTOSTART=1
 cd "$(dirname "$0")/.."
 ROOT=$PWD
 MODE=${1:-honest}

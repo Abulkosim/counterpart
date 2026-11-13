@@ -9,6 +9,8 @@
 # MODEL picks the model (default claude-sonnet-5-5). ANTHROPIC_BASE_URL points
 # it at another server; that is how the script itself is tested without a key.
 set -euo pipefail
+# This script starts its own daemons.
+export CPART_NO_AUTOSTART=1
 cd "$(dirname "$0")/.."
 ROOT=$PWD
 if [ -z "${ANTHROPIC_API_KEY:-}" ]; then

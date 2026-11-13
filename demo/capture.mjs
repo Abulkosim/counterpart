@@ -27,7 +27,7 @@ const procs = [];
 const cleanup = () => procs.forEach((p) => p.kill());
 process.on("exit", cleanup);
 
-const env = (who) => ({ ...process.env, CPART_HOME: join(WORK, who), CPART_PASSPHRASE: PASS[who] });
+const env = (who) => ({ ...process.env, CPART_HOME: join(WORK, who), CPART_PASSPHRASE: PASS[who], CPART_NO_AUTOSTART: "1" });
 // Run cpart as one of the two people. `show` is what the video prints as the command.
 function cpart(who, args, { show, scene, quiet = false, cwd } = {}) {
   const r = spawnSync("node", [CLI, ...args], { env: env(who), encoding: "utf8", cwd });
@@ -99,7 +99,7 @@ cpart("alice", ["bundle", "add", "bob", join(WORK, "docs/orders-api.md")], { sce
 cpart("alice", ["desk", "on", "bob", "--as", "Alice"], { scene: "desk", show: "cpart desk on bob --as Alice" });
 
 const question = "Find out from alice's agent how GET /v2/orders paginates today, what the maximum page size is, and whether they would move to cursor pagination. Then give me a three-line summary.";
-writeFileSync(join(WORK, "mcp.json"), JSON.stringify({ mcpServers: { counterpart: { command: "node", args: [CLI, "mcp"], env: { CPART_HOME: join(WORK, "bob") } } } }));
+writeFileSync(join(WORK, "mcp.json"), JSON.stringify({ mcpServers: { counterpart: { command: "node", args: [CLI, "mcp"], env: { CPART_HOME: join(WORK, "bob"), CPART_NO_AUTOSTART: "1" } } } }));
 mkdirSync(join(WORK, "session"));
 console.log("\n[bob] asking his Claude Code session (real model)...");
 const stream = execFileSync("claude", ["-p", question, "--mcp-config", join(WORK, "mcp.json"), "--strict-mcp-config", "--tools", "", "--allowedTools", "mcp__counterpart__*", "--setting-sources", "", "--no-session-persistence", "--model", MODEL, "--output-format", "stream-json", "--verbose"], { cwd: join(WORK, "session"), encoding: "utf8", maxBuffer: 64 << 20 });

@@ -7,6 +7,8 @@
 # Then one byte changes on a new commit: the receiver shows the mismatch and
 # marks the first evidence stale.
 set -euo pipefail
+# This script starts its own daemons.
+export CPART_NO_AUTOSTART=1
 cd "$(dirname "$0")/.."
 WORK=$(mktemp -d)
 PORT=${PORT:-7468}

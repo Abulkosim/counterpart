@@ -3,6 +3,8 @@
 # approve on both sides, export, verify, and check that tampering and a wrong
 # passphrase are refused. No models involved.
 set -euo pipefail
+# This script starts its own daemons.
+export CPART_NO_AUTOSTART=1
 cd "$(dirname "$0")/.."
 . scripts/smoke-lib.sh
 ALICE_PASS=alice-correct-horse

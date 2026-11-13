@@ -391,7 +391,7 @@ export class Ctx {
 
   // Run the real CLI to completion and return exactly the bytes it printed.
   cli(home: string, args: string[], opts: { umask?: string } = {}): { stdout: Buffer; stderr: Buffer; status: number | null } {
-    const env = { ...process.env, CPART_HOME: home };
+    const env = { ...process.env, CPART_HOME: home, CPART_NO_AUTOSTART: "1" };
     const r = opts.umask
       ? spawnSync("sh", ["-c", `umask ${opts.umask}; exec "$0" "$@"`, process.execPath, CLI, ...args], { env, timeout: 20_000 })
       : spawnSync(process.execPath, [CLI, ...args], { env, timeout: 20_000 });
@@ -400,7 +400,7 @@ export class Ctx {
 
   // Start the real CLI and leave it running.
   spawnCli(home: string, args: string[]): Child {
-    const proc = spawn(process.execPath, [CLI, ...args], { env: { ...process.env, CPART_HOME: home }, stdio: ["ignore", "pipe", "pipe"] });
+    const proc = spawn(process.execPath, [CLI, ...args], { env: { ...process.env, CPART_HOME: home, CPART_NO_AUTOSTART: "1" }, stdio: ["ignore", "pipe", "pipe"] });
     const out: Buffer[] = [];
     const err: Buffer[] = [];
     proc.stdout.on("data", (d: Buffer) => out.push(d));
