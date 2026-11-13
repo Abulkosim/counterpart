@@ -77,7 +77,12 @@ Let your agent answer for you while you are away:
 ```sh
 cpart bundle add bob docs/api.md      # everything the front desk may tell bob
 cpart desk on bob --as Alice --slots 6
+cpart asks                                  # questions it could not answer
+cpart asks answer 1 "300 requests a minute" # sent to bob as your own message
+cpart asks dismiss 2                        # closed, nothing sent
 ```
+
+The front desk runs on the `claude` CLI, or on the Anthropic API when `ANTHROPIC_API_KEY` is set. The API path has not been run against the real API yet: `ANTHROPIC_API_KEY=... ./scripts/frontdesk-api-check.sh` does that. It does not run on Codex, which cannot be started without tools ([docs/design.md](docs/design.md#decisions-and-why)).
 
 Let your coding agent use it: add `cpart mcp` as an MCP server. It can talk, and it can propose, counter-propose, decline and withdraw contracts. It cannot approve one: only you can, with `cpart approve`. See [docs/mcp.md](docs/mcp.md).
 
