@@ -20,7 +20,7 @@ This file is generated. Run `pnpm gauntlet` to rebuild it. The same cases run in
 | Clients attacking the relay | 14 | 14 | 0 | 0 |
 | Terminal output | 7 | 7 | 0 | 0 |
 | Local storage | 4 | 3 | 1 | 0 |
-| **All** | **105** | **103** | **2** | **0** |
+| **All** | **112** | **110** | **2** | **0** |
 
 ## Open findings
 
@@ -256,4 +256,4 @@ The cases are in `packages/gauntlet/src/cases/model.ts`. Run them with `pnpm gau
 
 ---
 
-Generated from commit `917d7af` on 2026-11-13 (UTC), Node v24.22.2.
+Generated from commit `4c46fa9` on 2026-11-13 (UTC), Node v24.22.2.
