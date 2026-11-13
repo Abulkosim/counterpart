@@ -4,11 +4,11 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { type ContractView, Counterpart, RelayLink } from "@counterpart/daemon";
-import { type ContractPart, canonicalize, verifyAgreement } from "@counterpart/protocol";
+import { type ContractView, type EvidenceView, Counterpart, RelayLink } from "@counterpart/daemon";
+import { type ContractPart, type Evidence, canonicalize, isHttpsUrl, verifyAgreement } from "@counterpart/protocol";
 import { FrontDesk, addToBundle, anthropicApi, claudeCli, cliPrivateValues, readBundle, removeFromBundle } from "@counterpart/frontdesk";
 import { startMcpServer } from "@counterpart/mcp";
-import { type Binding, preparePublication, publish, repoInit } from "@counterpart/publish";
+import { type Binding, collectEvidence, preparePublication, publish, repoInit } from "@counterpart/publish";
 import { startRelay } from "@counterpart/relay";
 import { startViewer } from "@counterpart/viewer";
 import { type WorkResult, apply as applyWork, work } from "@counterpart/worker";
@@ -55,8 +55,16 @@ Publish: tie a repository to an agreement and open the pull request.
 
   cpart repo init <thread> <id> --repo <path> --bind <part>=<path>[,<valid fixtures dir>,<invalid fixtures dir>]...
                                                                   writes the trust file, the verifier and its workflow. Commit them to your main branch
-  cpart pr <thread> <id> --work <work-id> [--repo <path>] [--branch <name>]
-                                                                  commits the applied work and the agreement on a branch, pushes, opens a pull request
+  cpart pr <thread> <id> --work <work-id> [--repo <path>] [--branch <name>] [--evidence [--label <owner/name>]]
+                                                                  commits the applied work and the agreement on a branch, pushes, opens a pull request.
+                                                                  --evidence then tells the other side what was published
+
+Evidence: tell the other side what your repository holds for an agreed proposal.
+The values are read from committed Git objects by code. What the other side
+sends you is their claim; only what your machine could recompute is marked checked.
+
+  cpart evidence send <thread> <id> --repo <path> [--head <ref>] [--base <ref>] [--label <owner/name>] [--pr <https url>] [--run <https url> --status success|failure]
+  cpart evidence <thread> [id]                                    evidence from both sides: what was checked here, and what is only claimed
 
 Front desk: a model with no tools that answers a contact while you are away,
 using only the files you put in that contact's bundle.
@@ -78,7 +86,7 @@ const { values: flags, positionals } = parseArgs({
   allowPositionals: true,
   options: {
     relay: { type: "string" }, port: { type: "string" }, host: { type: "string" }, db: { type: "string" },
-    home: { type: "string" }, bind: { type: "string", multiple: true }, work: { type: "string" }, branch: { type: "string" }, repo: { type: "string" }, paths: { type: "string" }, brief: { type: "string" }, allow: { type: "string", multiple: true }, title: { type: "string" }, file: { type: "string" }, part: { type: "string", multiple: true }, supersedes: { type: "string" },
+    home: { type: "string" }, evidence: { type: "boolean" }, head: { type: "string" }, base: { type: "string" }, label: { type: "string" }, pr: { type: "string" }, run: { type: "string" }, status: { type: "string" }, bind: { type: "string", multiple: true }, work: { type: "string" }, branch: { type: "string" }, repo: { type: "string" }, paths: { type: "string" }, brief: { type: "string" }, allow: { type: "string", multiple: true }, title: { type: "string" }, file: { type: "string" }, part: { type: "string", multiple: true }, supersedes: { type: "string" },
     out: { type: "string" }, yes: { type: "boolean" }, all: { type: "boolean" }, "no-passphrase": { type: "boolean" }, as: { type: "string" }, slots: { type: "string" }, daily: { type: "string" }, model: { type: "string" }, url: { type: "string" }, json: { type: "boolean" }, help: { type: "boolean", short: "h" },
   },
 });
@@ -175,6 +183,42 @@ function describe(c: ContractView, contact: string): string {
     "",
     block(c.contract.text),
     ...parts,
+  ].join("\n");
+}
+
+const digest = (hex: string | null): string => (hex === null ? "no file" : `sha256 ${hex.slice(0, 16)}`);
+const CHANGED = { head: "head", base: "base", bindings: "bindings", policy: "trust policy" } as const;
+
+// One piece of evidence. Lines under "Checked here" come from comparing with
+// what this machine holds. Everything under "claim" is the sender's word.
+function describeEvidence(v: EvidenceView, contact: string): string {
+  const k = v.claim;
+  const whose = v.mine ? "your" : `${contact}'s`;
+  const mark = (ok: boolean): string => (ok ? "ok      " : "MISMATCH");
+  const partLine = (p: EvidenceView["checked"]["parts"][number]): string => {
+    const at = `${p.part} at ${safe(p.path)}`;
+    if (p.check === "match") return `    ${mark(true)}  ${at}: the digest sent is the signed part's (${digest(p.sha256)})`;
+    if (p.check === "mismatch") return `    ${mark(false)}  ${at}: the digest sent (${digest(p.sha256)}) is not the signed part's (${digest(p.signedSha256)})`;
+    if (p.check === "missing") return `    ${mark(false)}  ${at}: the sender reports no file there`;
+    return `    ${mark(false)}  ${at}: the signed contract has no part with this name`;
+  };
+  return [
+    `Evidence ${v.eventId.slice(0, 12)} from ${whose} side, ${v.mine ? "sent" : "arrived"} ${time(v.at)}: ${v.state === "current" ? "current" : v.state === "stale" ? `STALE (${v.changed.map((c) => CHANGED[c]).join(", ")} changed since)` : "replaced by a newer report for the same commits"}`,
+    "  Checked here against what you hold:",
+    `    ${mark(v.checked.agreed)}  ${v.checked.agreed ? "names a proposal and contract hash both of you signed in this thread" : "does not name an agreed proposal of this thread"}`,
+    ...v.checked.parts.map(partLine),
+    ...v.checked.unreported.map((n) => `    --------  ${n}: signed, but this evidence says nothing about it`),
+    `    ${v.checked.verifier === "same" ? "ok      " : "DIFFERS "}  verifier ${safe(k.verifier.version)} (sha256 ${k.verifier.sha256.slice(0, 16)}) ${v.checked.verifier === "same" ? "is the one this install ships" : "is not the one this install ships"}`,
+    `  ${v.mine ? "What you told them (read from your repository)" : `${contact}'s claim, not checked here`}:`,
+    `    repository    ${safe(k.repo)}`,
+    ...(k.pr ? [`    pull request  ${safe(k.pr)}`] : []),
+    `    head          ${k.head}`,
+    `    base          ${k.base}`,
+    `    bindings      sha256 ${k.bindingsHash}`,
+    `    trust policy  sha256 ${k.trustPolicyHash}`,
+    `    verifier said  ${k.parts.map((p) => `${p.part}: ${p.ok ? "ok" : "failed"}`).join(", ")}`,
+    `    CI run        ${k.run ? `${k.run.status}  ${safe(k.run.url)}` : "not given"}`,
+    ...(v.mine ? [] : ["  A matching digest shows they named the right bytes. It does not show their repository holds them. Links are text: open them yourself if you choose to."]),
   ].join("\n");
 }
 
@@ -341,7 +385,49 @@ async function main(): Promise<void> {
       if (!p.check.ok) throw new Error("this would fail verification. Nothing was committed or pushed.");
       if (!flags.yes && (await line("Type publish to commit, push and open the pull request: ")) !== "publish") throw new Error("nothing was committed or pushed.");
       const url = publish(repo, p);
-      return out(`Opened ${url}`, { url, branch: p.branch, files: p.files });
+      if (!flags.evidence) return out(`Opened ${url}\nTo tell the other side: cpart evidence send ${args[0]} ${c.proposalId} --repo ${safe(repo)} --base ${safe(p.base)} --pr ${safe(url)}`, { url, branch: p.branch, files: p.files });
+      // The commit just made, against the commit the work started from.
+      const ev = collectEvidence(repo, node.agreement(args[0]!, c.proposalId), { base: w.baseCommit, ...(flags.label ? { label: flags.label } : {}), ...(isHttpsUrl(url) ? { pr: url } : {}) });
+      const sent = await node.postEvidence(args[0]!, ev);
+      return out(`Opened ${url}\nSent evidence ${sent.id} for head ${ev.head.slice(0, 12)}. A running daemon delivers it.`, { url, branch: p.branch, files: p.files, evidence: ev, eventId: sent.id });
+    }
+    case "evidence": {
+      if (args[0] === "send") {
+        const usage = "evidence send <thread> <id> --repo <path> [--head <ref>] [--base <ref>] [--label <owner/name>] [--pr <https url>] [--run <https url> --status success|failure]";
+        need(3, usage);
+        if (!flags.repo) throw new Error(`usage: cpart ${usage}`);
+        if (flags.pr !== undefined && !isHttpsUrl(flags.pr)) throw new Error("--pr must be an https:// URL of at most 300 characters");
+        if ((flags.run === undefined) !== (flags.status === undefined)) throw new Error("--run and --status go together");
+        let run: Evidence["run"];
+        if (flags.run !== undefined) {
+          if (!isHttpsUrl(flags.run)) throw new Error("--run must be an https:// URL of at most 300 characters");
+          if (flags.status !== "success" && flags.status !== "failure") throw new Error("--status must be success or failure");
+          run = { url: flags.run, status: flags.status };
+        }
+        const c = findContract(node, args[1]!, args[2]!);
+        if (c.status !== "agreed") throw new Error("evidence is about an agreement. Both people must approve this proposal first.");
+        const ev = collectEvidence(flags.repo, node.agreement(args[1]!, c.proposalId), {
+          ...(flags.head ? { head: flags.head } : {}), ...(flags.base ? { base: flags.base } : {}), ...(flags.label ? { label: flags.label } : {}), ...(flags.pr ? { pr: flags.pr } : {}), ...(run ? { run } : {}),
+        });
+        const sent = await node.postEvidence(args[1]!, ev);
+        const mine = node.evidence(args[1]!, c.proposalId).find((v) => v.eventId === sent.id)!;
+        const t = node.threads().find((x) => x.id === args[1]);
+        return out(`${describeEvidence(mine, t?.contact ?? "them")}\n\nQueued. A running daemon delivers it.${ev.parts.every((p) => p.ok) ? "" : "\nAt least one bound file on this head is not the signed text. The other side will see that."}`, mine);
+      }
+      need(1, "evidence <thread> [id] | evidence send <thread> <id> --repo <path>");
+      const t = node.threads().find((x) => x.id === args[0]);
+      if (!t) throw new Error(`no thread ${args[0]}`);
+      const only = args[1] ? findContract(node, t.id, args[1]).proposalId : undefined;
+      const list = node.evidence(t.id, only);
+      if (!list.length) return out(only ? "No evidence for this proposal." : "No evidence in this thread.", list);
+      const titles = new Map(node.contracts(t.id).map((c) => [c.proposalId, c.contract.title]));
+      const groups = [...new Set(list.map((v) => v.proposalId))].map((id) => {
+        const mine = list.filter((v) => v.proposalId === id);
+        // Current first, then older ones newest first.
+        const ordered = [...mine.filter((v) => v.state === "current"), ...mine.filter((v) => v.state !== "current").reverse()];
+        return [`Proposal ${id}  ${safe(titles.get(id) ?? "")}`, "", ...ordered.flatMap((v) => [describeEvidence(v, t.contact), ""])].join("\n");
+      });
+      return out(groups.join("\n").trimEnd(), list);
     }
     case "work": {
       const dir = join(home, "work");
@@ -468,6 +554,7 @@ async function main(): Promise<void> {
           : e.type === "contract.accepted" ? `APPROVED proposal ${(b.approval as { proposalId: string }).proposalId.slice(0, 12)}`
           : e.type === "contract.declined" ? `declined proposal ${(b.proposalId as string).slice(0, 12)}`
           : e.type === "contract.withdrawn" ? `withdrew proposal ${(b.proposalId as string).slice(0, 12)}`
+          : e.type === "evidence.posted" ? `sent evidence for proposal ${(b.proposalId as string).slice(0, 12)}, head ${(b.head as string).slice(0, 12)}. See: cpart evidence`
           : e.type;
         // One event, one line, stamped with the time it took effect here. The
         // sender's own clock and line breaks are theirs to fake.

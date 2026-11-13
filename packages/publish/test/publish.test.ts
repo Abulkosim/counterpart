@@ -1,6 +1,7 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -9,7 +10,8 @@ import type { Model } from "@counterpart/frontdesk";
 import type { Agreement } from "@counterpart/protocol";
 import { type Relay, startRelay } from "@counterpart/relay";
 import { type WorkResult, apply, work } from "@counterpart/worker";
-import { preparePublication, repoInit } from "../src/index.ts";
+import { partDigest } from "@counterpart/protocol";
+import { collectEvidence, preparePublication, repoInit } from "../src/index.ts";
 
 const SCHEMA = '{\n  "type": "object",\n  "required": ["data", "next_cursor"],\n  "properties": { "data": { "type": "array", "maxItems": 200 }, "next_cursor": { "type": ["string", "null"] } },\n  "additionalProperties": false\n}\n';
 const HANDLER = "export function listOrders(q) {\n  return { data: [], total: 0 };\n}\n";
@@ -19,6 +21,9 @@ const dirs: string[] = [];
 const links: RelayLink[] = [];
 let relay: Relay;
 let agreement: Agreement;
+let alice: Counterpart;
+let bob: Counterpart;
+let thread: string;
 const tmp = (): string => {
   const d = mkdtempSync(join(tmpdir(), "cpart-p-"));
   dirs.push(d);
@@ -36,10 +41,10 @@ before(async () => {
     for (let i = 0; i < 400 && !cond(); i++) await new Promise((r) => setTimeout(r, 15));
     assert.ok(cond(), "timed out");
   };
-  const [alice, bob] = [await make("alice-pass-1"), await make("bob-pass-12")];
+  [alice, bob] = [await make("alice-pass-1"), await make("bob-pass-12")];
   await bob.acceptInvite(alice.createInvite("bob"), "alice");
   await until(() => alice.contacts()[0]?.state === "active" && bob.contacts()[0]?.state === "active");
-  const thread = await alice.openThread("bob", "orders pagination");
+  thread = await alice.openThread("bob", "orders pagination");
   const p = await alice.propose(thread, { title: "Orders page", text: "Follows the attached schema.", parts: [{ kind: "json-schema", name: "page.schema.json", content: SCHEMA }] });
   await until(() => bob.threads().length === 1 && bob.contracts(thread).length === 1);
   await alice.approve(thread, p.proposalId, p.hash, "alice-pass-1");
@@ -156,4 +161,93 @@ test("the trust files are never written through a symlink", async () => {
   symlinkSync(outside, join(repo, ".counterpart"));
   assert.throws(() => repoInit(repo, agreement, [{ part: "page.schema.json", path: "schemas/page.schema.json" }]), /not a plain directory/);
   assert.equal(existsSync(join(outside, "trust.json")), false);
+});
+
+test("evidence is read from committed objects: commits, trust policy, verifier and each bound part", async () => {
+  const { repo, result } = await scene();
+  const p = preparePublication(repo, agreement, result);
+  const base = g(repo, "rev-parse", "HEAD");
+  g(repo, "checkout", "-q", "-b", "change");
+  g(repo, "add", "--", ...p.files);
+  g(repo, "commit", "-q", "-m", "feat: implement");
+  const head = g(repo, "rev-parse", "HEAD");
+
+  const e = collectEvidence(repo, agreement, { pr: "https://example.invalid/alice/shop/pull/1", run: { url: "https://example.invalid/runs/1", status: "success" } });
+  const sha = (b: string | Buffer): string => createHash("sha256").update(b).digest("hex");
+  const trust = readFileSync(join(repo, ".counterpart/trust.json"));
+  assert.deepEqual(e, {
+    v: 1, proposalId: agreement.proposalId, contractHash: agreement.contractHash, repo: "alice/shop", pr: "https://example.invalid/alice/shop/pull/1", head, base,
+    bindingsHash: (JSON.parse(spawnSync("node", [join(repo, ".counterpart/verify.mjs"), "--tree", repo, "--trust", join(repo, ".counterpart/trust.json"), "--json"], { encoding: "utf8" }).stdout) as { bindingsHash: string }).bindingsHash,
+    trustPolicyHash: sha(trust),
+    verifier: { version: "1", sha256: sha(readFileSync(join(repo, ".counterpart/verify.mjs"))) },
+    parts: [{ part: "page.schema.json", path: "schemas/page.schema.json", sha256: partDigest(SCHEMA), ok: true }],
+    run: { url: "https://example.invalid/runs/1", status: "success" },
+  });
+
+  // The working tree is not consulted: an uncommitted edit changes nothing.
+  writeFileSync(join(repo, "schemas/page.schema.json"), "{}");
+  assert.deepEqual(collectEvidence(repo, agreement).parts, e.parts);
+  // A committed edit is reported as it is.
+  g(repo, "commit", "-q", "-am", "fix: break the schema");
+  assert.deepEqual(collectEvidence(repo, agreement).parts, [{ part: "page.schema.json", path: "schemas/page.schema.json", sha256: partDigest("{}"), ok: false }]);
+  assert.equal(collectEvidence(repo, agreement, { head }).parts[0]!.ok, true, "an earlier head can be named");
+  // A symlink at the bound path is not a file.
+  rmSync(join(repo, "schemas/page.schema.json"));
+  symlinkSync("../src/orders.js", join(repo, "schemas/page.schema.json"));
+  g(repo, "add", "-A");
+  g(repo, "commit", "-q", "-m", "fix: link it");
+  assert.deepEqual(collectEvidence(repo, agreement).parts, [{ part: "page.schema.json", path: "schemas/page.schema.json", ok: false }]);
+  // A deleted file likewise.
+  g(repo, "rm", "-q", "schemas/page.schema.json");
+  g(repo, "commit", "-q", "-m", "fix: drop it");
+  assert.deepEqual(collectEvidence(repo, agreement).parts, [{ part: "page.schema.json", path: "schemas/page.schema.json", ok: false }]);
+});
+
+test("evidence names the repository without sending its remote URL, and refuses refs and links it cannot stand behind", async () => {
+  const { repo } = await scene();
+  g(repo, "remote", "set-url", "origin", "https://x-access-token:SECRETTOKEN@github.com/alice/shop.git");
+  assert.equal(collectEvidence(repo, agreement).repo, "alice/shop");
+  assert.ok(!JSON.stringify(collectEvidence(repo, agreement)).includes("SECRET"));
+  g(repo, "remote", "set-url", "origin", "git@github.com:alice/shop.git");
+  assert.equal(collectEvidence(repo, agreement).repo, "alice/shop");
+  g(repo, "remote", "set-url", "origin", "/home/alice/private dir/shop.git");
+  assert.equal(collectEvidence(repo, agreement).repo, "shop");
+  g(repo, "remote", "remove", "origin");
+  assert.throws(() => collectEvidence(repo, agreement), /--label/);
+  assert.equal(collectEvidence(repo, agreement, { label: "alice/shop" }).repo, "alice/shop");
+  const opts = { label: "alice/shop" };
+  assert.throws(() => collectEvidence(repo, agreement, { ...opts, label: "alice shop" }), /repo label/);
+  assert.throws(() => collectEvidence(repo, agreement, { ...opts, head: "--upload-pack=x" }), /not a branch name or commit id/);
+  assert.throws(() => collectEvidence(repo, agreement, { ...opts, head: "nope" }), /no commit "nope"/);
+  assert.throws(() => collectEvidence(repo, agreement, { ...opts, pr: "javascript:alert(1)" }), /pull request URL/);
+  assert.throws(() => collectEvidence(repo, agreement, { ...opts, pr: "http://example.invalid/pull/1" }), /pull request URL/);
+  // A base that never ran cpart repo init has nothing to report against.
+  assert.throws(() => collectEvidence(repo, agreement, { ...opts, base: g(repo, "rev-list", "--max-parents=0", "HEAD") }), /no \.counterpart\/trust\.json/);
+});
+
+test("cpart pr --evidence publishes, then tells the other side about the commit it made", async () => {
+  const { repo, result } = await scene();
+  const remote = tmp();
+  g(remote, "init", "-q", "--bare");
+  g(repo, "remote", "set-url", "origin", remote);
+  // A stand-in for gh that opens nothing and prints the address of a pull request.
+  const bin = tmp();
+  writeFileSync(join(bin, "gh"), "#!/bin/sh\necho https://example.invalid/alice/shop/pull/1\n", { mode: 0o755 });
+  mkdirSync(join(alice.home, "work"), { recursive: true });
+  writeFileSync(join(alice.home, "work", "work123456.json"), JSON.stringify({ id: "work123456", repo, ...result }));
+  const cli = join(import.meta.dirname, "../../cli/src/main.ts");
+  const who = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com" };
+  const r = spawnSync("node", [cli, "pr", thread, agreement.proposalId, "--work", "work123456", "--yes", "--evidence", "--label", "alice/shop", "--json"], {
+    encoding: "utf8",
+    env: { ...process.env, ...who, CPART_HOME: alice.home, PATH: `${bin}:${process.env.PATH}` },
+  });
+  assert.equal(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout) as { url: string; eventId: string; evidence: { head: string; base: string; pr: string; repo: string; parts: { ok: boolean }[] } };
+  assert.equal(out.url, "https://example.invalid/alice/shop/pull/1");
+  assert.deepEqual([out.evidence.head, out.evidence.base, out.evidence.pr, out.evidence.repo], [g(repo, "rev-parse", "HEAD"), result.baseCommit, out.url, "alice/shop"]);
+  assert.deepEqual(out.evidence.parts.map((x) => x.ok), [true]);
+  assert.equal(g(remote, "rev-parse", "refs/heads/" + g(repo, "rev-parse", "--abbrev-ref", "HEAD")), out.evidence.head, "the commit named is the one pushed");
+  for (let i = 0; i < 400 && !bob.evidence(thread).some((v) => v.eventId === out.eventId); i++) await new Promise((x) => setTimeout(x, 15));
+  const seen = bob.evidence(thread).find((v) => v.eventId === out.eventId)!;
+  assert.deepEqual([seen.mine, seen.state, seen.checked.agreed, seen.checked.partsMatch, seen.checked.verifier], [false, "current", true, true, "same"]);
 });
