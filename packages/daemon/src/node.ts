@@ -15,6 +15,22 @@ const MAX_PENDING_PER_CONTACT = 200;
 const CLOCK_SKEW = 10 * 60_000;
 const MAX_REJECTS = 1000;
 
+// Asking a contact to send again what never arrived, and answering such a
+// request. Both sides limit themselves: the peer is not trusted to.
+const RESEND_AFTER = 30_000; // how long an event is held before its missing parents are asked for
+const RESEND_RETRY = 60_000; // wait before asking again in the same thread; doubles each time
+const RESEND_RETRY_MAX = 3600_000;
+const RESEND_ATTEMPTS = 8; // per thread, until something held there is applied
+const RESEND_ASKS_PER_MINUTE = 5; // requests to one contact, all threads together
+const RESEND_SERVE_EVERY = 30_000; // one answered request per contact and thread in this time
+const RESEND_SERVED_PER_10_MIN = 20; // threads answered for one contact
+const RESEND_PER_EVENT = 5; // times one event is ever sent again
+const RESEND_TTL = DAY;
+const RECEIPT_DELAY = 1000; // receipts wait this long so one can cover several events
+const RECEIPT_THREADS_PER_PASS = 20;
+
+export type Delivery = "queued" | "stored" | "received" | "failed" | "expired";
+
 // Exactly one of `root` (unprotected) and `sealedRoot` (locked with a
 // passphrase) is present.
 interface Keys {
@@ -60,6 +76,9 @@ export interface StoredEvent extends ThreadEvent {
   mine: boolean;
   status: "applied" | "pending";
   receivedAt: number;
+  // Only on my own events, and only from `log`: how far the event has got.
+  // "received" is the contact's signed claim that their daemon applied it.
+  delivery?: Delivery;
 }
 
 export interface ThreadSummary {
@@ -75,6 +94,8 @@ export type Verdict =
   | { result: "applied"; event: ThreadEvent; promoted: ThreadEvent[] }
   | { result: "pending"; event: ThreadEvent }
   | { result: "duplicate" }
+  // A resend request or a receipt. Handled, never stored in a thread's log.
+  | { result: "control"; event: ThreadEvent }
   | { result: "rejected"; reason: string };
 
 interface Outgoing {
@@ -93,11 +114,16 @@ export class Counterpart {
   private keys: Keys;
   private db: DatabaseSync;
   private now: () => number;
+  private resendAfter: number;
+  private receiptDelay: number;
 
-  private constructor(home: string, keys: Keys, now: () => number) {
+  private constructor(home: string, keys: Keys, opts: NodeOptions) {
+    const now = opts.now ?? Date.now;
     this.home = home;
     this.keys = keys;
     this.now = now;
+    this.resendAfter = opts.resendAfterMs ?? RESEND_AFTER;
+    this.receiptDelay = opts.receiptDelayMs ?? RECEIPT_DELAY;
     // The home may predate us with ordinary permissions. Everything in it is private.
     chmodSync(home, 0o700);
     const dbFile = join(home, "state.db");
@@ -145,14 +171,35 @@ export class Counterpart {
       CREATE TABLE IF NOT EXISTS rejects (
         seq INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, reason TEXT NOT NULL, wire_id TEXT
       );
+      CREATE INDEX IF NOT EXISTS events_pending ON events (status) WHERE status = 'pending';
+      CREATE TABLE IF NOT EXISTS receipts_due (
+        event_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, contact_root TEXT NOT NULL, at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS resend_asked (
+        contact_root TEXT NOT NULL, thread_id TEXT NOT NULL, last_at INTEGER NOT NULL, attempts INTEGER NOT NULL,
+        PRIMARY KEY (contact_root, thread_id)
+      );
+      CREATE TABLE IF NOT EXISTS resend_served (
+        contact_root TEXT NOT NULL, thread_id TEXT NOT NULL, last_at INTEGER NOT NULL,
+        PRIMARY KEY (contact_root, thread_id)
+      );
     `);
+    // Columns added after the first databases were made.
+    const cols = new Set((this.db.prepare("PRAGMA table_info(outbox)").all() as { name: string }[]).map((c) => c.name));
+    try {
+      if (!cols.has("received_at")) this.db.exec("ALTER TABLE outbox ADD COLUMN received_at INTEGER");
+      if (!cols.has("resends")) this.db.exec("ALTER TABLE outbox ADD COLUMN resends INTEGER NOT NULL DEFAULT 0");
+    } catch (e) {
+      // Another process opening the same home added them first.
+      if (!/duplicate column/.test((e as Error).message)) throw e;
+    }
   }
 
   // With a passphrase the root key is locked from the moment it exists, and the
   // identity can approve contracts. Without one it can message but never
   // approve: a root key that has sat on disk unprotected may have been copied,
   // so locking it later would prove nothing.
-  static async init(home: string, opts: { relay: string; passphrase?: string; logN?: number; now?: () => number }): Promise<Counterpart> {
+  static async init(home: string, opts: NodeOptions & { relay: string; passphrase?: string; logN?: number }): Promise<Counterpart> {
     const file = join(home, "keys.json");
     if (existsSync(file)) throw new Error(`already initialised at ${home}`);
     const url = new URL(opts.relay);
@@ -165,14 +212,14 @@ export class Counterpart {
       ? { v: 1, relay: opts.relay, rootKey: root.publicKey, sealedRoot: sealRoot(root, opts.passphrase, opts.logN ?? DEFAULT_LOG_N), device }
       : { v: 1, relay: opts.relay, rootKey: root.publicKey, root, device };
     saveKeys(home, keys);
-    return new Counterpart(home, keys, now);
+    return new Counterpart(home, keys, opts);
   }
 
-  static open(home: string, opts: { now?: () => number } = {}): Counterpart {
+  static open(home: string, opts: NodeOptions = {}): Counterpart {
     const file = join(home, "keys.json");
     if (!existsSync(file)) throw new Error(`no Counterpart identity at ${home}. Run: cpart init --relay <url>`);
     const keys = JSON.parse(readFileSync(file, "utf8")) as Keys;
-    return new Counterpart(home, keys, opts.now ?? Date.now);
+    return new Counterpart(home, keys, opts);
   }
 
   // True when the root key is locked with a passphrase.
@@ -489,8 +536,14 @@ export class Counterpart {
   }
 
   log(threadId: string): StoredEvent[] {
-    const rows = this.db.prepare("SELECT e.json, e.mine, e.status, e.received_at, e.ord FROM events e JOIN threads t ON t.id = e.thread_id WHERE e.thread_id = ? AND (e.mine = 1 OR e.author_root = t.contact_root) ORDER BY e.ord IS NULL, e.ord, e.rowid").all(threadId) as unknown as EventRow[];
-    return rows.map(toStored);
+    const rows = this.db
+      .prepare(
+        `SELECT e.json, e.mine, e.status, e.received_at, e.ord, o.state AS o_state, o.received_at AS o_received
+         FROM events e JOIN threads t ON t.id = e.thread_id LEFT JOIN outbox o ON o.id = e.id
+         WHERE e.thread_id = ? AND (e.mine = 1 OR e.author_root = t.contact_root) ORDER BY e.ord IS NULL, e.ord, e.rowid`,
+      )
+      .all(threadId) as unknown as (EventRow & { o_state: Delivery | null; o_received: number | null })[];
+    return rows.map((r) => (r.mine && r.o_state ? { ...toStored(r), delivery: r.o_received !== null ? "received" : r.o_state } : toStored(r)));
   }
 
   // Applied events after a cursor, in the order they took effect. A consumer
@@ -525,10 +578,10 @@ export class Counterpart {
 
   // Sealing is async and SQLite transactions are not, so an outgoing event is
   // built first and committed (log entry plus outbox row) in one transaction.
-  private async build<T extends EventType>(to: DeviceCredential, threadId: string, type: T, body: EventBodies[T], authorSeq: number, parents: string[]): Promise<Outgoing> {
+  private async build<T extends EventType>(to: DeviceCredential, threadId: string, type: T, body: EventBodies[T], authorSeq: number, parents: string[], ttl: number = LIMITS.maxTtlMs - 60_000): Promise<Outgoing> {
     const now = this.now();
     const event = { id: randomId(), threadId, author: deviceId(this.keys.device.credential), authorSeq, parents, lane: laneOf(type), type, body, createdAt: now } as ThreadEvent;
-    const expiresAt = now + LIMITS.maxTtlMs - 60_000;
+    const expiresAt = now + ttl;
     return { event, wire: await seal(event, this.keys.device, to, expiresAt), expiresAt };
   }
 
@@ -540,15 +593,145 @@ export class Counterpart {
 
   queued(): Wire[] {
     this.db.prepare("UPDATE outbox SET state = 'expired' WHERE state = 'queued' AND expires_at <= ?").run(this.now());
+    this.db.prepare(`DELETE FROM outbox WHERE state = 'expired' AND ${NOT_IN_LOG}`).run();
     return (this.db.prepare("SELECT wire FROM outbox WHERE state = 'queued' ORDER BY rowid").all() as { wire: string }[]).map((r) => JSON.parse(r.wire) as Wire);
   }
 
   markOutbox(id: string, state: "stored" | "failed", detail?: string): void {
-    this.db.prepare("UPDATE outbox SET state = ?, detail = ? WHERE id = ? AND state = 'queued'").run(state, detail ?? null, id);
+    // The relay refuses new bytes under an id it still holds. For an event sent
+    // again that means the first copy is still waiting there, which is as good.
+    if (state === "failed" && detail === "conflict" && this.db.prepare("SELECT 1 FROM outbox WHERE id = ? AND resends > 0").get(id)) state = "stored";
+    this.db.prepare("UPDATE outbox SET state = ?, detail = ? WHERE id = ? AND state = 'queued'").run(state, state === "stored" ? null : (detail ?? null), id);
+    // Resend requests and receipts are not in any log. Once sent they are done.
+    this.db.prepare(`DELETE FROM outbox WHERE id = ? AND state != 'queued' AND ${NOT_IN_LOG}`).run(id);
   }
 
+  // What the relay said about a message: queued, stored, failed or expired.
   outboxState(id: string): string | undefined {
     return (this.db.prepare("SELECT state FROM outbox WHERE id = ?").get(id) as { state: string } | undefined)?.state;
+  }
+
+  // The same, plus "received" once the contact's daemon has said it applied the event.
+  delivery(id: string): Delivery | undefined {
+    const r = this.db.prepare("SELECT state, received_at FROM outbox WHERE id = ?").get(id) as { state: Delivery; received_at: number | null } | undefined;
+    return r && (r.received_at !== null ? "received" : r.state);
+  }
+
+  // ---- resend and receipts ----
+
+  // Ask each contact for the parents of events that have been held too long.
+  // One request per thread, with a growing wait between tries and a ceiling, so
+  // a contact who names parents that do not exist gets a few small messages
+  // out of us and no more. Returns how many requests were queued.
+  async requestMissing(): Promise<number> {
+    const now = this.now();
+    this.db.prepare("DELETE FROM resend_asked WHERE last_at < ?").run(now - LIMITS.maxTtlMs);
+    const stale = this.db
+      .prepare(
+        `SELECT e.thread_id, e.author_root FROM events e JOIN contacts c ON c.root_key = e.author_root
+         WHERE e.status = 'pending' AND c.state = 'active' GROUP BY e.thread_id, e.author_root HAVING MIN(e.received_at) <= ?`,
+      )
+      .all(now - this.resendAfter) as { thread_id: string; author_root: string }[];
+    let sent = 0;
+    for (const { thread_id: threadId, author_root: root } of stale) {
+      const asked = this.db.prepare("SELECT last_at, attempts FROM resend_asked WHERE contact_root = ? AND thread_id = ?").get(root, threadId) as { last_at: number; attempts: number } | undefined;
+      if (asked && (asked.attempts >= RESEND_ATTEMPTS || now < asked.last_at + Math.min(RESEND_RETRY * 2 ** (asked.attempts - 1), RESEND_RETRY_MAX))) continue;
+      const recent = (this.db.prepare("SELECT COUNT(*) AS n FROM resend_asked WHERE contact_root = ? AND last_at > ?").get(root, now - 60_000) as { n: number }).n;
+      if (recent >= RESEND_ASKS_PER_MINUTE) continue;
+      const held = (this.db.prepare("SELECT json FROM events WHERE thread_id = ? AND author_root = ? AND status = 'pending' ORDER BY author_seq").all(threadId, root) as { json: string }[]).map((r) => JSON.parse(r.json) as ThreadEvent);
+      const have = this.db.prepare("SELECT 1 FROM events WHERE id = ? AND thread_id = ?");
+      const ids = [...new Set(held.flatMap((e) => e.parents))].filter((p) => !have.get(p, threadId)).slice(0, LIMITS.resendIds);
+      if (ids.length === 0) continue;
+      let out: Outgoing;
+      try {
+        out = await this.build(this.activeContact(root).credential, threadId, "thread.resend", { ids }, 0, [], RESEND_TTL);
+      } catch {
+        continue;
+      }
+      this.tx(() => {
+        this.db.prepare("INSERT INTO outbox (id, wire, expires_at, state) VALUES (?, ?, ?, 'queued')").run(out.event.id, JSON.stringify(out.wire), out.expiresAt);
+        this.db
+          .prepare("INSERT INTO resend_asked (contact_root, thread_id, last_at, attempts) VALUES (?, ?, ?, 1) ON CONFLICT (contact_root, thread_id) DO UPDATE SET last_at = excluded.last_at, attempts = attempts + 1")
+          .run(root, threadId, now);
+      });
+      sent++;
+    }
+    return sent;
+  }
+
+  // Tell contacts which of their events were applied here: one message per
+  // thread for up to 64 events. Returns how many receipts were queued.
+  async sendReceipts(): Promise<number> {
+    const threads = this.db
+      .prepare("SELECT thread_id, contact_root FROM receipts_due GROUP BY thread_id, contact_root HAVING MIN(at) <= ? LIMIT ?")
+      .all(this.now() - this.receiptDelay, RECEIPT_THREADS_PER_PASS) as { thread_id: string; contact_root: string }[];
+    let sent = 0;
+    for (const { thread_id: threadId, contact_root: root } of threads) {
+      const ids = (this.db.prepare("SELECT event_id FROM receipts_due WHERE thread_id = ? AND contact_root = ? ORDER BY at, rowid LIMIT ?").all(threadId, root, LIMITS.receiptIds) as { event_id: string }[]).map((r) => r.event_id);
+      let out: Outgoing;
+      try {
+        out = await this.build(this.activeContact(root).credential, threadId, "thread.received", { ids }, 0, []);
+      } catch {
+        // Their credential has expired. The receipt goes when they renew it.
+        continue;
+      }
+      this.tx(() => {
+        this.db.prepare("INSERT INTO outbox (id, wire, expires_at, state) VALUES (?, ?, ?, 'queued')").run(out.event.id, JSON.stringify(out.wire), out.expiresAt);
+        const done = this.db.prepare("DELETE FROM receipts_due WHERE event_id = ?");
+        for (const id of ids) done.run(id);
+      });
+      sent++;
+    }
+    return sent;
+  }
+
+  // A resend request or a receipt from a contact. Neither enters a log, so
+  // nothing that reads threads (a person, an agent, the front desk) sees it.
+  private async control(event: ThreadEvent<"thread.resend" | "thread.received">, credential: DeviceCredential): Promise<Verdict> {
+    if (event.authorSeq !== 0 || event.parents.length !== 0) throw new Reject("resend requests and receipts stand alone");
+    const root = credential.rootKey;
+    const ids = event.body.ids;
+    const now = this.now();
+    const found = this.tx((): ThreadEvent[] | null => {
+      const contact = this.db.prepare("SELECT * FROM contacts WHERE root_key = ?").get(root) as ContactRow | undefined;
+      if (!contact || contact.state !== "active") throw new Reject("message from an unknown sender");
+      const t = this.db.prepare("SELECT contact_root FROM threads WHERE id = ?").get(event.threadId) as { contact_root: string } | undefined;
+      // The same answer whether the thread is someone else's or does not exist.
+      if (!t || t.contact_root !== root) throw new Reject("sender is not a participant of this thread");
+      this.refreshCredential(contact, credential);
+      if (event.type === "thread.received") {
+        const mark = this.db.prepare("UPDATE outbox SET received_at = ? WHERE id = ? AND received_at IS NULL AND id IN (SELECT id FROM events WHERE thread_id = ? AND mine = 1)");
+        for (const id of ids) mark.run(now, id, event.threadId);
+        return null;
+      }
+      const last = this.db.prepare("SELECT last_at FROM resend_served WHERE contact_root = ? AND thread_id = ?").get(root, event.threadId) as { last_at: number } | undefined;
+      if (last && now - last.last_at < RESEND_SERVE_EVERY) throw new Reject("resend request ignored: asked again too soon");
+      const recent = (this.db.prepare("SELECT COUNT(*) AS n FROM resend_served WHERE contact_root = ? AND last_at > ?").get(root, now - 600_000) as { n: number }).n;
+      if (recent >= RESEND_SERVED_PER_10_MIN) throw new Reject("resend request ignored: too many from this contact");
+      // Counted even when it turns out to name nothing, so guessing ids is as slow as asking.
+      this.db.prepare("INSERT INTO resend_served (contact_root, thread_id, last_at) VALUES (?, ?, ?) ON CONFLICT (contact_root, thread_id) DO UPDATE SET last_at = excluded.last_at").run(root, event.threadId, now);
+      // Only what I wrote, in this thread, and only so many times each.
+      const mine = this.db.prepare("SELECT e.json FROM events e JOIN outbox o ON o.id = e.id WHERE e.id = ? AND e.thread_id = ? AND e.mine = 1 AND e.author = ? AND o.resends < ?");
+      return ids.flatMap((id) => {
+        const r = mine.get(id, event.threadId, deviceId(this.keys.device.credential), RESEND_PER_EVENT) as { json: string } | undefined;
+        return r ? [JSON.parse(r.json) as ThreadEvent] : [];
+      });
+    });
+    if (found === null) return { result: "control", event };
+    if (found.length === 0) throw new Reject("resend request names nothing of mine that can be sent again");
+    const to = this.contact(root).credential;
+    const expiresAt = now + LIMITS.maxTtlMs - 60_000;
+    const wires: Wire[] = [];
+    try {
+      for (const e of found) wires.push(await seal(e, this.keys.device, to, expiresAt));
+    } catch {
+      throw new Reject("cannot encrypt a reply to the sender's key");
+    }
+    this.tx(() => {
+      const again = this.db.prepare("UPDATE outbox SET wire = ?, expires_at = ?, state = 'queued', detail = NULL, resends = resends + 1 WHERE id = ? AND resends < ?");
+      for (const w of wires) again.run(JSON.stringify(w), expiresAt, w.header.id, RESEND_PER_EVENT);
+    });
+    return { result: "control", event };
   }
 
   // ---- inbound ----
@@ -569,6 +752,8 @@ export class Counterpart {
       const { event, credential } = opened;
       if (credential.rootKey === this.keys.rootKey) throw new Reject("message from my own identity");
       if (event.createdAt > this.now() + CLOCK_SKEW) throw new Reject("event dated in the future");
+
+      if (event.type === "thread.resend" || event.type === "thread.received") return await this.control(event as ThreadEvent<"thread.resend" | "thread.received">, credential);
 
       // Contact events live outside threads. One that names an existing thread,
       // or reuses an id something else is filed under, is refused.
@@ -656,6 +841,7 @@ export class Counterpart {
         if (!this.ready(event, credential.rootKey)) return hold();
         this.apply(event, credential.rootKey);
         this.insertEvent(event, credential.rootKey, false, "applied");
+        this.oweReceipt(event, credential.rootKey);
         return { result: "applied", event, promoted: this.promote(event.threadId) };
       });
     } catch (e) {
@@ -708,6 +894,7 @@ export class Counterpart {
           if (!this.ready(event, row.author_root)) continue;
           this.apply(event, row.author_root);
           this.db.prepare("UPDATE events SET status = 'applied', received_at = ?, ord = ? WHERE id = ?").run(this.now(), this.nextOrd(), event.id);
+          this.oweReceipt(event, row.author_root);
           promoted.push(event);
         } catch (e) {
           if (!(e instanceof Reject)) throw e;
@@ -717,7 +904,13 @@ export class Counterpart {
         progress = true;
       }
     }
+    // The thread moved, so whatever was missing came. Asking starts afresh.
+    if (promoted.length) this.db.prepare("DELETE FROM resend_asked WHERE thread_id = ?").run(threadId);
     return promoted;
+  }
+
+  private oweReceipt(event: ThreadEvent, authorRoot: string): void {
+    this.db.prepare("INSERT OR IGNORE INTO receipts_due (event_id, thread_id, contact_root, at) VALUES (?, ?, ?, ?)").run(event.id, event.threadId, authorRoot, this.now());
   }
 
   // A contact's device credential rotates. Their root key vouches for the new
@@ -757,6 +950,14 @@ export class Counterpart {
     }
   }
 }
+
+export interface NodeOptions {
+  now?: () => number;
+  resendAfterMs?: number; // how long an event is held before its missing parents are asked for
+  receiptDelayMs?: number; // how long a receipt waits for more events to cover
+}
+
+const NOT_IN_LOG = "NOT EXISTS (SELECT 1 FROM events e WHERE e.id = outbox.id)";
 
 interface ProposalRow {
   event_id: string;

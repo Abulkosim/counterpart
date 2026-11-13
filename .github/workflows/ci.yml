@@ -35,3 +35,5 @@ jobs:
         run: ./scripts/smoke.sh
       - name: Reach a signed agreement end to end
         run: ./scripts/contract-smoke.sh
+      - name: Lose a message and recover it by resend
+        run: ./scripts/resend-smoke.sh
