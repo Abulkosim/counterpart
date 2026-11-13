@@ -22,6 +22,8 @@ export function decodeInvite(s: string, now = Date.now()): Invite {
   const x = parseCanonical(unb64u(s.slice(PREFIX.length).trim()));
   if (!isObject(x) || !onlyKeys(x, ["v", "relay", "credential", "token", "expiresAt"])) throw new Error("invite: shape");
   if (x.v !== 1 || !isStr(x.relay, 1, 512) || !isId(x.token) || !isInt(x.expiresAt)) throw new Error("invite: fields");
+  // The address is shown to a person and stored. Nothing invisible, no spaces.
+  if (!/^[\x21-\x7e]+$/.test(x.relay)) throw new Error("invite: relay has characters that cannot be shown");
   const url = new URL(x.relay);
   if (url.protocol !== "ws:" && url.protocol !== "wss:") throw new Error("invite: relay must be ws or wss");
   if (x.expiresAt <= now) throw new Error("invite: expired");
