@@ -64,7 +64,7 @@ Names are local. "bob" is what Alice calls Bob. A peer never chooses how it appe
 
 ## Threads and the two lanes
 
-A thread is a log of signed events between two people. Events reference earlier events, so the log is a graph, not a line; each side applies events in an order consistent with those references.
+A thread is a log of signed events between two people. Events reference earlier events, so the log is a graph, not a line; each side applies events in an order consistent with those references. An event whose earlier events have not arrived is held. If they stay missing, because the relay dropped or expired them, the daemon asks their author to send them again. Each daemon also tells the other which events it applied, so a sender can tell "the relay has it" from "their daemon has it".
 
 Every event is in one of two lanes:
 
@@ -100,7 +100,7 @@ Each side pays for its own model use. Before the daemon starts any model work it
 
 | | Outcome | State |
 | --- | --- | --- |
-| M0 | Two paired daemons exchange encrypted messages and survive duplicate, delayed and reordered delivery | Done |
+| M0 | Two paired daemons exchange encrypted messages and survive duplicate, delayed, reordered and lost delivery | Done. Lost messages are recovered by resend on request |
 | M1 | Front desk answers a contact's questions from an approved bundle while the human is offline. Viewer shows where each answer came from. Hostile-peer suite, first version. Slots and budgets | Done. The suite's model-behaviour section is still empty |
 | M2 | Act lane: contracts proposed and accepted by hash, human approvals, notifications into live Claude Code and Codex sessions | Done except notifications into live sessions |
 | M3 | Workers produce patches. Each side opens a PR carrying the agreement and the other side's signed evidence. A verifier in CI checks it and rejects stale evidence | Worker, verifier and publishing done locally; not yet run on GitHub; evidence next |
