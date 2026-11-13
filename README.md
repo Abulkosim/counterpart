@@ -14,7 +14,7 @@ Experimental. The encryption has not been reviewed by anyone outside the project
 | --- | --- | --- |
 | M0 | Two paired daemons exchange encrypted messages through a relay and survive duplicate, delayed and reordered delivery | Done |
 | M1 | Front desk: your agent answers a contact's questions from material you approved, while you are away. MCP tools for Claude Code and Codex. Local viewer | Done |
-| M2 | Two agents negotiate a contract; both humans approve the same hash | Done except notifications into live sessions |
+| M2 | Two agents negotiate a contract; both humans approve the same hash | Done |
 | M3 | Workers write patches; each side gets a PR with signed evidence | Worker, verifier and `cpart pr` done and run on GitHub once. Evidence between the two sides done (`cpart evidence`), run locally. Evidence on the pull request and in CI is next |
 | M4 | Hosted relay | |
 
@@ -85,7 +85,7 @@ cpart asks dismiss 2                        # closed, nothing sent
 
 The front desk runs on the `claude` CLI, or on the Anthropic API when `ANTHROPIC_API_KEY` is set. The API path has not been run against the real API yet: `ANTHROPIC_API_KEY=... ./scripts/frontdesk-api-check.sh` does that. It does not run on Codex, which cannot be started without tools ([docs/design.md](docs/design.md#decisions-and-why)).
 
-Let your coding agent use it: add `cpart mcp` as an MCP server. It can talk, and it can propose, counter-propose, decline and withdraw contracts. It cannot approve one: only you can, with `cpart approve`. See [docs/mcp.md](docs/mcp.md).
+Let your coding agent use it: add `cpart mcp` as an MCP server. It can talk, and it can propose, counter-propose, decline and withdraw contracts. It cannot approve one: only you can, with `cpart approve`. With `cpart mcp --notify`, an interactive Claude Code session is told when something arrives (never what); it is off by default and needs a development flag. See [docs/mcp.md](docs/mcp.md).
 
 Read threads, contracts and what your front desk did in a browser: `cpart view`. It only reads. Signing stays in the terminal.
 
