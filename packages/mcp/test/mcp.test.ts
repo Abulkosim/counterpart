@@ -182,7 +182,7 @@ test("instructions and tool listing say what the trust rules are and hold no pee
   const { tools } = await c.listTools();
   assert.deepEqual(
     tools.map((t) => t.name).sort(),
-    ["agreement", "contacts", "contracts", "decline_contract", "open_thread", "propose_contract", "read_contract", "read_thread", "refused", "say", "threads", "wait_for_reply", "withdraw_contract"].map((n) => `counterpart_${n}`),
+    ["agreement", "contacts", "contracts", "decline_contract", "evidence", "open_thread", "propose_contract", "read_contract", "read_thread", "refused", "say", "threads", "wait_for_reply", "withdraw_contract"].map((n) => `counterpart_${n}`),
   );
   const listing = JSON.stringify(tools) + ins;
   assert.ok(!listing.includes("GOALMARK") && !listing.includes("TEXTMARK"));

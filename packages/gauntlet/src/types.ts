@@ -8,6 +8,7 @@ export const CATEGORIES = {
   replay: "Replay and ordering",
   authority: "Authority",
   resend: "Resend requests and receipts",
+  evidence: "Evidence",
   "hostile-relay": "The relay as attacker",
   "relay-clients": "Clients attacking the relay",
   output: "Terminal output",

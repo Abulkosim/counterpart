@@ -3,10 +3,10 @@ import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type Agreement, canonicalize, hashOf, verifyAgreement } from "@counterpart/protocol";
+import { type Agreement, type Evidence, type EvidencePart, canonicalize, hashOf, parseEvidence, verifyAgreement } from "@counterpart/protocol";
 // @ts-expect-error the verifier is plain JavaScript so it can be copied into other repos as one file
-import { verifyTree } from "@counterpart/verify";
-import type { WorkResult } from "@counterpart/worker";
+import { canonicalize as verifierCanonical, parseTrust, verifyTree } from "@counterpart/verify";
+import { type WorkResult, git, lsTree, readBlob } from "@counterpart/worker";
 
 // Publishing is the owner acting in their own repository, with their own Git
 // and GitHub login. Nothing here is given to a model. The files that tie a
@@ -226,3 +226,85 @@ export function publish(repo: string, p: Publication, opts: { title?: string } =
   return run(repo, "gh", ["pr", "create", "--base", p.base, "--head", p.branch, "--title", opts.title ?? p.title, "--body", p.body]);
 }
 
+
+export interface EvidenceOptions {
+  head?: string; // a ref or commit; default HEAD
+  base?: string; // the protected branch, or a commit on it; default main
+  label?: string; // what to call the repository; default owner/name from the origin remote
+  pr?: string;
+  run?: { url: string; status: "success" | "failure" };
+}
+
+const REF = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
+
+// owner/name from the origin URL. The URL itself is never sent: it can hold a
+// token or a local path.
+function repoLabel(repo: string): string {
+  let url = "";
+  try {
+    url = git(repo, ["config", "--get", "remote.origin.url"]).toString("utf8").trim();
+  } catch {
+    // no origin
+  }
+  const remote = /(?:^[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/]+\/|^[^/@]+@[^:/]+:)(?:.*\/)?([A-Za-z0-9][A-Za-z0-9._-]*)\/([A-Za-z0-9][A-Za-z0-9._-]*?)(?:\.git)?\/?$/.exec(url);
+  if (remote) return `${remote[1]}/${remote[2]}`;
+  const local = /([A-Za-z0-9][A-Za-z0-9._-]*?)(?:\.git)?\/?$/.exec(url);
+  if (local) return local[1]!;
+  throw new Error("cannot name this repository from its origin remote. Pass --label <owner/name>.");
+}
+
+// Read from committed objects what the other side should be told about this
+// repository: the two commits, the trust file and verifier on the base, and
+// for each bound part whether the file on the head is the signed text. Git is
+// only asked to read objects. Nothing from the working tree, and nothing a
+// model wrote, goes into the result.
+export function collectEvidence(repo: string, agreement: Agreement, opts: EvidenceOptions = {}): Evidence {
+  const a = verifyAgreement(agreement);
+  const commit = (ref: string): string => {
+    if (!REF.test(ref)) throw new Error(`"${ref}" is not a branch name or commit id`);
+    try {
+      return git(repo, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).toString("utf8").trim();
+    } catch {
+      throw new Error(`no commit "${ref}" in ${repo}`);
+    }
+  };
+  const head = commit(opts.head ?? "HEAD");
+  const baseTip = commit(opts.base ?? "main");
+  let base: string;
+  try {
+    base = git(repo, ["merge-base", baseTip, head]).toString("utf8").trim();
+  } catch {
+    throw new Error("the head and the base branch share no history");
+  }
+  const blob = (at: string, path: string): Buffer | null => {
+    const entry = lsTree(repo, at, [`:(literal)${path}`]).find((e) => e.path === path);
+    // A symlink or a submodule is not a file whose bytes can be compared.
+    return entry && entry.type === "blob" && (entry.mode === "100644" || entry.mode === "100755") ? readBlob(repo, entry.sha) : null;
+  };
+  const trustRaw = blob(base, ".counterpart/trust.json");
+  const verifier = blob(base, ".counterpart/verify.mjs");
+  if (!trustRaw || !verifier) throw new Error(`the base commit ${base.slice(0, 12)} has no .counterpart/trust.json or verify.mjs. Run cpart repo init and commit the result to your main branch first.`);
+  const trust = parseTrust(trustRaw) as { bindings: { part: string; path: string; contract: string; proposal?: string }[] };
+  const bound = trust.bindings.filter((b) => b.contract === a.contractHash && (b.proposal === undefined || b.proposal === a.proposalId));
+  if (bound.length === 0) throw new Error("the trust file on the base commit binds nothing to this contract");
+  const parts = bound.map((b): EvidencePart => {
+    const signed = a.contract.parts.find((p) => p.name === b.part);
+    const bytes = blob(head, b.path);
+    if (!bytes) return { part: b.part, path: b.path, ok: false };
+    return { part: b.part, path: b.path, sha256: sha(bytes), ok: signed !== undefined && Buffer.from(signed.content, "utf8").equals(bytes) };
+  });
+  return parseEvidence({
+    v: 1,
+    proposalId: a.proposalId,
+    contractHash: a.contractHash,
+    repo: opts.label ?? repoLabel(repo),
+    ...(opts.pr !== undefined ? { pr: opts.pr } : {}),
+    head,
+    base,
+    bindingsHash: sha(verifierCanonical(trust.bindings) as string),
+    trustPolicyHash: sha(trustRaw),
+    verifier: { version: /^export const VERIFIER_VERSION = "([A-Za-z0-9][A-Za-z0-9._-]{0,15})";$/m.exec(verifier.toString("utf8"))?.[1] ?? "unknown", sha256: sha(verifier) },
+    parts,
+    ...(opts.run ? { run: opts.run } : {}),
+  });
+}

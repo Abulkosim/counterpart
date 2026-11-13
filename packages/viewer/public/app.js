@@ -317,6 +317,7 @@ const ACTS = {
   "contract.accepted": (who) => `${who.person} signed`,
   "contract.declined": (who) => `${who.side} declined`,
   "contract.withdrawn": (who) => `${who.side} withdrew`,
+  "evidence.posted": (who) => `${who.side} sent evidence for`,
 };
 
 // A contract event: one quiet line that leads to the proposal.
@@ -589,6 +590,89 @@ function signatures(d) {
   );
 }
 
+// ---- evidence ----
+
+const CHANGED = { head: "head", base: "base", bindings: "bindings", policy: "trust policy" };
+const short = (hex) => h("span", { class: "mono", title: hex }, hex.slice(0, 16));
+
+// Words the other side chose. Shaded like all their text, and never a link:
+// an address is shown for the owner to read, not for this page to open.
+const claimed = (text, mine) => h("span", { class: mine ? "wrap mono" : "wrap theirs mono", dir: "ltr" }, visible(text));
+
+function partCheck(p, mine) {
+  const at = [" at ", claimed(p.path, mine)];
+  if (p.check === "match") return h("dd", null, "The digest sent is the signed part's: sha256 ", short(p.sha256), at);
+  if (p.check === "mismatch") return h("dd", { class: "alert" }, "Not the signed part. Sent sha256 ", short(p.sha256), ", signed sha256 ", short(p.signedSha256), at);
+  if (p.check === "missing") return h("dd", { class: "alert" }, "The sender reports no file", at);
+  return h("dd", { class: "alert" }, "The signed contract has no part with this name");
+}
+
+function evidenceOne(v, c) {
+  const k = v.claim;
+  return [
+    h("p", { class: "label" }, "Checked here against the signed contract"),
+    h("dl", { class: "facts wide" },
+      h("dt", null, "Agreement"),
+      v.checked.agreed ? h("dd", null, "Names this proposal and the contract hash both of you signed") : h("dd", { class: "alert" }, "Does not name an agreed proposal of this thread"),
+      v.checked.parts.map((p) => [h("dt", { class: "mono" }, p.part), partCheck(p, v.mine)]),
+      v.checked.unreported.map((n) => [h("dt", { class: "mono" }, n), h("dd", { class: "quiet" }, "Signed, but this evidence says nothing about it")]),
+      h("dt", null, "Verifier"),
+      h("dd", { class: v.checked.verifier === "same" ? null : "alert" },
+        v.checked.verifier === "same" ? "The one this install ships: " : "Not the one this install ships: ", `version ${k.verifier.version}, sha256 `, short(k.verifier.sha256)),
+    ),
+    h("p", { class: "label" }, v.mine ? "What you told them, read from your repository" : `${c}'s claim, not checked here`),
+    h("dl", { class: "facts wide" },
+      h("dt", null, "Repository"), h("dd", null, claimed(k.repo, v.mine)),
+      k.pr && [h("dt", null, "Pull request"), h("dd", null, claimed(k.pr, v.mine))],
+      h("dt", null, "Head commit"), h("dd", { class: "mono" }, k.head),
+      h("dt", null, "Base commit"), h("dd", { class: "mono" }, k.base),
+      h("dt", null, "Bindings"), h("dd", null, "sha256 ", short(k.bindingsHash)),
+      h("dt", null, "Trust policy"), h("dd", null, "sha256 ", short(k.trustPolicyHash)),
+      h("dt", null, v.mine ? "Your result" : "Their result"), h("dd", null, k.parts.map((p, i) => [i ? ", " : "", h("span", { class: "mono" }, p.part), p.ok ? " ok" : " failed"])),
+      h("dt", null, "CI run"), h("dd", null, k.run ? [k.run.status === "success" ? "Success " : "Failure ", claimed(k.run.url, v.mine)] : h("span", { class: "quiet" }, "Not given")),
+    ),
+  ];
+}
+
+function evidenceSide(list, mine, c) {
+  const current = list.find((v) => v.state === "current");
+  if (!current) return null;
+  const older = list.filter((v) => v !== current).reverse();
+  return h("div", { class: "evidence-side" },
+    h("h3", null, mine ? "From your side" : `From ${c}'s side`, h("span", { class: "sub" }, mine ? "Sent " : "Arrived ", stamp(current.at))),
+    evidenceOne(current, c),
+    older.length > 0 &&
+      h("div", { class: "older" },
+        h("p", { class: "label" }, `${plural(older.length, "earlier report")}, no longer current`),
+        h("ul", null, older.map((v) =>
+          h("li", null,
+            v.state === "stale" ? `Stale: ${v.changed.map((x) => CHANGED[x]).join(", ")} changed since. ` : "Replaced by a newer report for the same commits. ",
+            "Head ", h("span", { class: "mono" }, v.claim.head.slice(0, 12)), mine ? ", sent " : ", arrived ", stamp(v.at),
+            v.checked.partsMatch ? ". Its digests matched the signed parts." : ". Its digests did not match the signed parts.",
+          ))),
+      ),
+  );
+}
+
+function evidenceSection(d) {
+  const { thread: t, proposal: p, evidence } = d;
+  if (p.status !== "agreed" && evidence.length === 0) return null;
+  const theirs = evidence.filter((v) => !v.mine);
+  const mine = evidence.filter((v) => v.mine);
+  const dashed = t.id.startsWith("-") || p.proposalId.startsWith("-");
+  return h("section", { class: "part", id: "evidence" },
+    h("h2", null, "Evidence"),
+    h("p", { class: "lead" }, `What each side says its repository holds for this agreement. This machine compares what it can with the contract you both signed. Everything else is the sender's word. A matching digest shows they named the right bytes. It does not show their repository holds them.`),
+    theirs.length ? evidenceSide(theirs, false, t.contact) : h("p", { class: "note" }, `Nothing from ${t.contact}'s side yet.`),
+    mine.length
+      ? evidenceSide(mine, true, t.contact)
+      : h("div", { class: "next" },
+          h("p", null, "You have sent none. After you publish, run this in your repository:"),
+          command(dashed ? `cpart evidence send --repo . -- ${t.id} ${p.proposalId}` : `cpart evidence send ${t.id} ${p.proposalId} --repo .`),
+        ),
+  );
+}
+
 const KINDS = { text: "text", "json-schema": "JSON Schema", openapi: "OpenAPI" };
 
 function proposalView(d) {
@@ -640,6 +724,7 @@ function proposalView(d) {
       p.parts.length === 0 && h("p", { class: "note after-doc" }, "This proposal has no attachments."),
     ),
     signatures(d),
+    evidenceSection(d),
   ];
 }
 

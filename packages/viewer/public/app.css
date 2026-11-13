@@ -1102,6 +1102,44 @@ h3 .lead-name {
   color: var(--text-2);
 }
 
+/* ---- evidence ---- */
+
+.evidence-side,
+.part > .note,
+.part > .next {
+  margin-top: 24px;
+}
+
+.evidence-side + .evidence-side,
+.evidence-side + .next,
+.part > .note + .evidence-side {
+  margin-top: 40px;
+}
+
+.evidence-side .label {
+  margin: 20px 0 8px;
+}
+
+.evidence-side .facts.wide {
+  max-width: none;
+}
+
+.evidence-side .wrap.theirs {
+  display: inline-block;
+  max-width: 100%;
+}
+
+.evidence-side .quiet {
+  color: var(--text-3);
+}
+
+.older ul {
+  display: grid;
+  gap: 4px;
+  font-size: 14px;
+  color: var(--text-2);
+}
+
 /* ---- front desk ---- */
 
 .desks {

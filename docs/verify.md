@@ -51,6 +51,14 @@ Agreements, schemas and fixtures are parsed strictly: duplicate keys, a byte ord
 
 Passing means the fixtures in the repo satisfy the agreed constraints. It does not mean the code produces such payloads. That is what the repo's own tests are for.
 
+## Telling the other side
+
+`cpart evidence send <thread> <id> --repo .` reports what the verifier would see, read from committed Git objects: the head commit, the base commit (the merge base with `--base`, default `main`), the sha256 of the trust file and of `verify.mjs` on the base, the hash of the bindings, and for each binding the sha256 of the file at the bound path on the head and whether it is the signed part. `--pr`, `--run` and `--status` add a pull request and a CI run you name. `cpart pr --evidence` sends it straight after opening the pull request.
+
+It does not read the working tree, and it does not run the verifier's fixture checks. A bound path that is a symlink or is missing is reported as no file.
+
+`cpart evidence <thread>` shows evidence from both sides. The other side's is split in two. "Checked here" is what your machine recomputed from the contract you both signed: the part digests, the contract hash, and whether their verifier hash is the one your install ships. Everything else is their claim. A matching digest shows they named the right bytes, not that their repository holds them. When they send evidence for a new head, base, bindings or trust policy, the older one is marked stale. The format is in [protocol.md](protocol.md#evidence).
+
 ## What it does not do
 
 It does not run tests, install packages or execute anything from the tree. It does not check that the keys belong to who you think: compare them with `cpart whoami` on each side before putting them in the trust file.

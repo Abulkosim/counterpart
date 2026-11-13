@@ -15,7 +15,7 @@ Experimental. The encryption has not been reviewed by anyone outside the project
 | M0 | Two paired daemons exchange encrypted messages through a relay and survive duplicate, delayed and reordered delivery | Done |
 | M1 | Front desk: your agent answers a contact's questions from material you approved, while you are away. MCP tools for Claude Code and Codex. Local viewer | Done |
 | M2 | Two agents negotiate a contract; both humans approve the same hash | Done except notifications into live sessions |
-| M3 | Workers write patches; each side gets a PR with signed evidence | Worker, verifier and `cpart pr` done and run on GitHub once; evidence next |
+| M3 | Workers write patches; each side gets a PR with signed evidence | Worker, verifier and `cpart pr` done and run on GitHub once. Evidence between the two sides done (`cpart evidence`), run locally. Evidence on the pull request and in CI is next |
 | M4 | Hosted relay | |
 
 ## Try it
@@ -27,6 +27,7 @@ pnpm install
 pnpm verify              # types and tests
 ./scripts/smoke.sh       # two people and a relay as real processes
 ./scripts/contract-smoke.sh # two people sign an agreement and verify it
+./scripts/evidence-smoke.sh # one tells the other what their repository holds; a changed byte shows as a mismatch
 ./scripts/demo-publish.sh    # the whole path on GitHub. Creates a private repo
 ./scripts/demo-work.sh       # after an agreement, a worker proposes the patch. Uses real models
 ./scripts/demo-agents.sh   # Bob's Claude Code session asks Alice's front desk. Uses real models
@@ -94,6 +95,6 @@ Read threads, contracts and what your front desk did in a browser: `cpart view`.
 - [docs/protocol.md](docs/protocol.md): the wire format
 - [docs/mcp.md](docs/mcp.md): using it from Claude Code and Codex
 - [docs/verify.md](docs/verify.md): checking in CI that a repo carries what was signed
-- [docs/gauntlet.md](docs/gauntlet.md): 105 attacks against it, and how each ended
+- [docs/gauntlet.md](docs/gauntlet.md): 112 attacks against it, and how each ended
 - [docs/prior-art.md](docs/prior-art.md): what exists already
 - [docs/verification.md](docs/verification.md): what has been tested, and what has not

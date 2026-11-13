@@ -13,7 +13,8 @@ Tests passing is not the bar. The bar is that you ran the real programs and read
 2. `./scripts/smoke.sh` — starts a relay and two daemons as separate processes, pairs them, talks both ways, takes one side offline, restarts the relay, sends a message with terminal escape codes, then prints both logs. It must end with `SMOKE OK`.
 3. `./scripts/contract-smoke.sh` — two people propose, revise, sign and export an agreement through the CLI. It must end with `CONTRACT SMOKE OK`. For approvals, set `CPART_PASSPHRASE` and pass `--yes`; to test the prompts themselves, drive the CLI through a pseudo-terminal.
 4. `./scripts/resend-smoke.sh` — deletes a queued message from the relay's database while the recipient is offline, shows the next message held, then recovered by a resend. It must end with `RESEND SMOKE OK`.
-5. Read the printed logs yourself. Check they match, are in the order the messages were sent, and that the hostile line shows as escaped text.
+5. `./scripts/evidence-smoke.sh` — one of them ties a local Git repository to the agreement and sends evidence; the other sees the part checked, then a mismatch after one byte changes. It must end with `EVIDENCE SMOKE OK`.
+6. Read the printed logs yourself. Check they match, are in the order the messages were sent, and that the hostile line shows as escaped text.
 
 ## When you changed something specific
 
