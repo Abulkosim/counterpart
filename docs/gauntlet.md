@@ -15,6 +15,7 @@ This file is generated. Run `pnpm gauntlet` to rebuild it. The same cases run in
 | Replay and ordering | 13 | 13 | 0 | 0 |
 | Authority | 20 | 19 | 1 | 0 |
 | Resend requests and receipts | 6 | 6 | 0 | 0 |
+| Evidence | 7 | 7 | 0 | 0 |
 | The relay as attacker | 10 | 10 | 0 | 0 |
 | Clients attacking the relay | 14 | 14 | 0 | 0 |
 | Terminal output | 7 | 7 | 0 | 0 |
@@ -141,6 +142,18 @@ These are guarantees. A case here either holds or it does not.
 | RSD-04 Make the victim ask for parents that do not exist | contact | A contact who sends events with made-up parents gets at most eight resend requests per thread and five per minute in all, each naming at most sixteen ids. | held |
 | RSD-05 Get a resend request or a receipt into the conversation | contact | Resend requests and receipts never enter a thread's log or the stream agents and the front desk read, whatever sequence number or parents they claim. | held |
 | RSD-06 Confirm receipt of a message sent to someone else | contact | A receipt marks only the receiver's own events in the thread the receipt's sender is part of. | held |
+
+### Evidence
+
+| Case | Who attacks | The rule | Result |
+| --- | --- | --- | --- |
+| EVD-01 Claim a part is fine while naming another file's digest | contact | A digest that is not the signed part's is shown as a mismatch whatever the sender says about it, and what cannot be recomputed is never marked as checked. | held |
+| EVD-02 Send evidence for something nobody agreed | contact | Evidence is accepted only for a proposal of this thread that both people signed, with that proposal's contract hash. | held |
+| EVD-03 Put a script address, credentials or control characters in a link | contact | An address in evidence is a short https URL in plain ASCII with no credentials, or the whole event is refused. | held |
+| EVD-04 Send oversized or misshapen evidence | contact | Every field of evidence has a fixed shape and a length limit, and unknown fields are refused. | held |
+| EVD-05 Flood a thread with evidence | contact | A side can file a bounded number of pieces of evidence in a thread, and only the newest is current. | held |
+| EVD-06 File evidence about an agreement between two other people | contact | Only the two people of a thread can add evidence to it, and evidence in one thread cannot cite an agreement made in another. | held |
+| EVD-07 Bring old evidence back after the commits moved | contact | Per proposal and side only the newest evidence is current, and replaying an older one changes nothing. | held |
 
 ### The relay as attacker
 

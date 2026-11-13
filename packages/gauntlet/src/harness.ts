@@ -185,9 +185,10 @@ export const pause = (ms: number): Promise<void> => new Promise((r) => setTimeou
 export class Ctx {
   private cleanup: (() => unknown)[] = [];
 
-  async person(opts: { relay?: string; now?: () => number } = {}): Promise<Counterpart> {
+  // With a passphrase the person can approve contracts. The key derivation is kept cheap: these are tests.
+  async person(opts: { relay?: string; now?: () => number; passphrase?: string } = {}): Promise<Counterpart> {
     const home = this.dir();
-    const node = await Counterpart.init(home, { relay: opts.relay ?? PLACEHOLDER_RELAY, ...(opts.now ? { now: opts.now } : {}) });
+    const node = await Counterpart.init(home, { relay: opts.relay ?? PLACEHOLDER_RELAY, ...(opts.now ? { now: opts.now } : {}), ...(opts.passphrase ? { passphrase: opts.passphrase, logN: 14 } : {}) });
     this.cleanup.push(() => {
       try {
         node.close();
@@ -221,7 +222,7 @@ export class Ctx {
   }
 
   // A new person who is an accepted contact of `of`, filed there under `name`.
-  async contact(of: Counterpart, name: string, opts: { now?: () => number } = {}): Promise<Counterpart> {
+  async contact(of: Counterpart, name: string, opts: { now?: () => number; passphrase?: string } = {}): Promise<Counterpart> {
     const p = await this.person({ relay: of.relay, ...opts });
     await p.acceptInvite(of.createInvite(name), "them");
     await this.carry(p, of);
