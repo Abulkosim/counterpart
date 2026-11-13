@@ -32,6 +32,8 @@ Event { id, threadId, author, authorSeq, parents[], lane, type, body, createdAt 
 | `contact.accepted` | control | `{}` |
 | `contact.hello` | control | `{}`. Sent after a device renews its credential, so contacts receive the new one |
 | `thread.opened` | control | `{ goal, participants: [rootKey, rootKey] }` |
+| `thread.resend` | control | `{ ids }`, 1 to 16 event ids. Asks the other side to send those events again |
+| `thread.received` | control | `{ ids }`, 1 to 64 event ids. Says the sender's daemon applied those events |
 | `talk.posted` | talk | `{ text, via? }`. `via` is `human`, `agent` or `frontdesk`: the sender's own claim about who wrote it |
 
 | `contract.proposed` | act | `{ contract, supersedes? }` |
@@ -91,9 +93,28 @@ A daemon applies an event only if all hold:
 - No other event has the same thread, author and sequence number.
 - `thread.opened` is the author's event 0 with no parents, and its participants are exactly the two root keys.
 - Events from a contact whose acceptance has not arrived yet are held and applied when it does.
-- For other events, the thread exists, the sender is its other participant, and all parents have been applied. If the thread or a parent is missing, the event is held (up to 200 per contact) and applied when they arrive.
+- For other events, the thread exists, the sender is its other participant, and all parents have been applied. If the thread or a parent is missing, the event is held (up to 200 per contact) and applied when they arrive. Parents that stay missing are asked for: see Resend and receipts.
 
 Everything refused is recorded with a reason.
+
+## Resend and receipts
+
+`thread.resend` and `thread.received` are sealed and signed like any event and name the thread in `threadId`, but they are not part of its log. They have sequence 0 and no parents, are never stored as events, never held, and are not shown to a person, an agent or the front desk. A daemon accepts one only from an active contact who is the other participant of the named thread. A thread that belongs to someone else and a thread that does not exist get the same refusal.
+
+**Asking.** When events from a contact have been held for 30 seconds, the daemon collects the parents those held events name that it has no copy of, and sends one `thread.resend` for the thread with up to 16 of them. If an event sent again is held in turn, its missing parents are asked for next, back to `thread.opened`. The daemon asks again after 60 seconds, then doubles the wait up to an hour, and stops after 8 requests. It starts over when a held event in that thread is applied, or after seven days. It sends one contact at most 5 requests a minute over all threads. A request expires after one day.
+
+**Answering.** For each id, the daemon sends the event again only if it wrote that event itself, in the named thread. The event is unchanged (same id, same content), sealed again to the contact's current credential with a new expiry. Other ids are skipped. A request that names nothing it can send is refused. The daemon answers one request per contact and thread in 30 seconds, requests in at most 20 threads per contact in ten minutes, and sends any one event again at most 5 times ever. A request that arrives early is refused and recorded. The answer to a request is never another request.
+
+**Receipts.** About a second after applying a contact's thread events, a daemon sends one `thread.received` per thread listing up to 64 of them. Contact events, resend requests, receipts, duplicates and held events are not receipted. On receipt, the sender marks its own events in that thread as received. Other ids are ignored. An event's delivery state is then one of:
+
+| State | Meaning |
+| --- | --- |
+| `queued` | Not yet accepted by the relay |
+| `stored` | The relay accepted it. Nothing is known about the recipient |
+| `received` | The recipient's daemon signed a receipt for it |
+| `failed`, `expired` | The relay refused it, or it expired before it could be sent |
+
+`received` is the contact's claim. It means their daemon applied the event, not that a person or agent read it. A contact can withhold receipts, so `stored` does not prove the event was not applied.
 
 ## Relay
 

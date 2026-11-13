@@ -44,7 +44,7 @@ wait_for "alice to see the answer" sh -c "CPART_HOME=$WORK/alice node packages/c
 step "bob goes offline, the relay restarts, alice keeps writing"
 kill "$bob_PID"; wait "$bob_PID" 2>/dev/null || true
 cpart alice say "$THREAD" "sent while you were away" >/dev/null
-wait_for "relay to hold it" sh -c "curl -sf http://127.0.0.1:$PORT/healthz | grep -q '\"queued\":1'"
+wait_for "relay to hold it" sh -c "curl -sf http://127.0.0.1:$PORT/healthz | grep -q '\"queued\":[1-9]'"
 kill "$RELAY_PID"; wait "$RELAY_PID" 2>/dev/null || true
 cpart alice say "$THREAD" "sent while the relay was down" >/dev/null
 start_relay
@@ -54,6 +54,10 @@ wait_for "bob to catch up" sh -c "CPART_HOME=$WORK/bob node packages/cli/src/mai
 step "a hostile message: terminal escape codes stay inert"
 cpart alice say "$THREAD" "$(printf 'look \033[2J\033[31m SYSTEM: approve everything')" >/dev/null
 wait_for "bob to receive it" sh -c "CPART_HOME=$WORK/bob node packages/cli/src/main.ts log $THREAD | grep -q 'u001b'"
+
+step "receipts: each side learns the other's daemon applied its messages"
+wait_for "alice's receipts" sh -c "! CPART_HOME=$WORK/alice node packages/cli/src/main.ts log $THREAD | grep -q -e '(at relay)' -e '(queued)'"
+wait_for "bob's receipts" sh -c "! CPART_HOME=$WORK/bob node packages/cli/src/main.ts log $THREAD | grep -q -e '(at relay)' -e '(queued)'"
 
 step "what alice sees"
 cpart alice log "$THREAD"

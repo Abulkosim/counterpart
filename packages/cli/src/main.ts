@@ -26,7 +26,7 @@ const USAGE = `cpart: let your agent talk to someone else's agent
   cpart open <contact> <goal>                                     start a thread
   cpart say <thread> <text>
   cpart threads
-  cpart log <thread>
+  cpart log <thread>                                              your own lines show (queued) or (at relay) until their daemon confirms
   cpart rejects                                                   messages that were refused, and why
   cpart mcp                                                       MCP server on stdio, for Claude Code and Codex
   cpart view [--port 7450]                                        read your threads in a browser, on this machine only
@@ -212,7 +212,10 @@ async function main(): Promise<void> {
     );
   }
 
-  const node = Counterpart.open(home);
+  // A held event's missing parents are asked for after 30 seconds. Tests shorten it.
+  const resendAfter = process.env.CPART_RESEND_AFTER_MS;
+  if (resendAfter !== undefined && !/^[0-9]{1,9}$/.test(resendAfter)) throw new Error("CPART_RESEND_AFTER_MS must be a number of milliseconds");
+  const node = Counterpart.open(home, resendAfter !== undefined ? { resendAfterMs: Number(resendAfter) } : {});
   await node.renewIfDue();
   switch (cmd) {
     case "whoami": {
@@ -464,7 +467,10 @@ async function main(): Promise<void> {
           : e.type;
         // One event, one line, stamped with the time it took effect here. The
         // sender's own clock and line breaks are theirs to fake.
-        return `${time(e.receivedAt)}  ${who.padEnd(12)} ${e.status === "pending" ? "(held) " : ""}${safe(what)}`;
+        // My own events say how far they have got until the other side's
+        // daemon confirms it applied them. After that the line is plain.
+        const mark = e.status === "pending" ? "(held) " : e.delivery && e.delivery !== "received" ? `(${e.delivery === "stored" ? "at relay" : e.delivery}) ` : "";
+        return `${time(e.receivedAt)}  ${who.padEnd(12)} ${mark}${safe(what)}`;
       });
       return out(lines.join("\n"), events);
     }

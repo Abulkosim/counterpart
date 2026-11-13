@@ -74,7 +74,8 @@ A cursor is an event's `ord`, the local order in which events took effect. Pass 
 
 After a write the server watches the outbox for about two seconds and reports one of:
 
-- `the relay has stored it for bob`: it left your machine. It does not mean bob's agent has read it.
+- `bob's daemon says it has received it`: bob's daemon applied it and sent a signed receipt. It does not mean bob or bob's agent has read it. Receipts take about a second, so this usually shows only for older messages.
+- `the relay has stored it for bob`: it left your machine. Nothing is known yet about bob's side.
 - `still queued on this machine`: the daemon is probably not running.
 - `the relay refused it`.
 

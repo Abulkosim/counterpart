@@ -117,7 +117,7 @@ export function render(outcomes: Outcome[], commit: string, date: string): strin
     "- Crashes in the middle of a write, and several processes sharing one identity directory.",
     "- Faking a log line by padding a message with spaces until the terminal wraps.",
     "- How much an accepted contact can make you store. Nothing caps the threads, messages or contact.hello events an active contact sends.",
-    "- A relay that says it stored a message and then drops it. The design accepts that the relay can lose mail.",
+    "- A relay that drops a message every time it is sent. A message dropped once is asked for and sent again; one dropped five times is not recovered.",
     "- macOS and Windows.",
     "",
   );

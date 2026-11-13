@@ -110,6 +110,15 @@ test("events are validated strictly", () => {
   assert.throws(() => parseEvent({ ...e, type: "exec.run" }), /unknown type/);
   assert.throws(() => parseEvent({ ...e, lane: "control" }), /lane/);
   assert.throws(() => parseEvent({ ...e, body: { text: "x", path: "/etc/passwd" } }), /body/);
+  for (const [type, max] of [["thread.resend", 16], ["thread.received", 64]] as const) {
+    const c = { ...e, lane: "control", type, body: { ids: [randomId()] } };
+    assert.ok(parseEvent(c));
+    assert.ok(parseEvent({ ...c, body: { ids: Array.from({ length: max }, () => randomId()) } }));
+    assert.throws(() => parseEvent({ ...c, lane: "talk" }), /lane/);
+    for (const ids of [[], Array.from({ length: max + 1 }, () => randomId()), [c.body.ids[0], c.body.ids[0]], ["x"], "x", undefined])
+      assert.throws(() => parseEvent({ ...c, body: { ids } }), /body/);
+    assert.throws(() => parseEvent({ ...c, body: { ids: c.body.ids, text: "hello" } }), /body/);
+  }
   assert.throws(() => parseEvent({ ...e, body: { text: "" } }), /body/);
   assert.throws(() => parseEvent({ ...e, type: "constructor" }), /unknown type/);
   assert.throws(() => parseEvent({ ...e, extra: true }), /shape/);

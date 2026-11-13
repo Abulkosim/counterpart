@@ -12,6 +12,12 @@ export interface EventBodies {
   // Carries nothing. Its envelope delivers the sender's renewed device credential.
   "contact.hello": Record<string, never>;
   "thread.opened": { goal: string; participants: string[] };
+  // Asks the other side to send again events it authored in this thread that
+  // never arrived here. Not part of the thread's log: sequence 0, no parents.
+  "thread.resend": { ids: string[] };
+  // Says which of the other side's events in this thread were applied here.
+  // Not part of the log either. It is the sender's claim, nothing more.
+  "thread.received": { ids: string[] };
   // `via` says who on the sender's side wrote it. It is the sender's own claim.
   "talk.posted": { text: string; via?: Via };
   // Proposals are addressed by the id of the event that made them, never by
@@ -45,6 +51,8 @@ export const LIMITS = {
   text: 16000,
   parents: 16,
   participants: 8,
+  resendIds: 16,
+  receiptIds: 64,
   wireBytes: 256 * 1024,
   maxTtlMs: 7 * 24 * 3600 * 1000,
 } as const;
@@ -54,6 +62,8 @@ const lanes: Record<EventType, Lane> = {
   "contact.accepted": "control",
   "contact.hello": "control",
   "thread.opened": "control",
+  "thread.resend": "control",
+  "thread.received": "control",
   "talk.posted": "talk",
   "contract.proposed": "act",
   "contract.accepted": "act",
@@ -73,12 +83,16 @@ const bodies: { [T in EventType]: (b: Record<string, unknown>) => boolean } = {
     b.participants.length <= LIMITS.participants &&
     b.participants.every(isKey) &&
     new Set(b.participants).size === b.participants.length,
+  "thread.resend": (b) => onlyKeys(b, ["ids"]) && idList(b.ids, LIMITS.resendIds),
+  "thread.received": (b) => onlyKeys(b, ["ids"]) && idList(b.ids, LIMITS.receiptIds),
   "talk.posted": (b) => isStr(b.text, 1, LIMITS.text) && (onlyKeys(b, ["text"]) || (onlyKeys(b, ["text", "via"]) && VIAS.includes(b.via))),
   "contract.proposed": (b) => (onlyKeys(b, ["contract"]) || (onlyKeys(b, ["contract", "supersedes"]) && isId(b.supersedes))) && ok(() => parseContract(b.contract)),
   "contract.accepted": (b) => onlyKeys(b, ["approval"]) && ok(() => parseApproval(b.approval)),
   "contract.declined": (b) => isId(b.proposalId) && (onlyKeys(b, ["proposalId"]) || (onlyKeys(b, ["proposalId", "reason"]) && isStr(b.reason, 1, CONTRACT_LIMITS.reason))),
   "contract.withdrawn": (b) => onlyKeys(b, ["proposalId"]) && isId(b.proposalId),
 };
+
+const idList = (x: unknown, max: number): boolean => Array.isArray(x) && x.length >= 1 && x.length <= max && x.every(isId) && new Set(x).size === x.length;
 
 function ok(fn: () => unknown): boolean {
   try {

@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Counterpart, RelayLink } from "@counterpart/daemon";
+import { type ThreadEvent, laneOf, randomId, seal } from "@counterpart/protocol";
 import { type Relay, startRelay } from "@counterpart/relay";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -364,4 +365,22 @@ test("the API adapter sends exactly the system prompt and the thread, with no to
   } finally {
     server.close();
   }
+});
+
+test("resend requests and receipts never reach the model", async () => {
+  const model = scripted("should not be used");
+  const { alice, bob, desk } = await setup(model);
+  const thread = await bob.openThread("alice", "bob asks alice");
+  await until("alice has the thread", () => alice.threads().length === 1);
+  const opened = alice.log(thread)[0]!.id;
+  const before = alice.since(0, 1000).length;
+  for (const type of ["thread.resend", "thread.received"] as const) {
+    const event = { id: randomId(), threadId: thread, author: bob.me.device, authorSeq: 0, parents: [], lane: laneOf(type), type, body: { ids: [opened] }, createdAt: Date.now() } as ThreadEvent;
+    const v = await alice.receive(await seal(event, bob.device, alice.device.credential, Date.now() + 60_000));
+    assert.notEqual(v.result, "applied");
+  }
+  await desk.tick();
+  assert.equal(model.calls.length, 0);
+  assert.equal(alice.since(0, 1000).length, before);
+  assert.deepEqual(desk.runs(), []);
 });

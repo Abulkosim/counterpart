@@ -192,12 +192,14 @@ export function createMcpServer(node: Counterpart, opts: McpOptions = {}): McpSe
   // from the outbox, so all we can do is watch its state for a moment.
   const delivery = async (eventId: string, contact: string, signal: AbortSignal): Promise<string> => {
     const end = Date.now() + deliveryWaitMs;
-    let state = node.outboxState(eventId) ?? "unknown";
+    let state = node.delivery(eventId) ?? "unknown";
     while (state === "queued" && Date.now() < end && !signal.aborted) {
       await sleep(Math.min(100, pollMs), undefined, { signal }).catch(() => {});
-      state = node.outboxState(eventId) ?? "unknown";
+      state = node.delivery(eventId) ?? "unknown";
     }
-    return state === "stored"
+    return state === "received"
+      ? `Delivery: ${contact}'s daemon says it has received it.`
+      : state === "stored"
         ? `Delivery: the relay has stored it for ${contact}.`
         : state === "queued"
           ? `Delivery: still queued on this machine after ${deliveryWaitMs / 1000}s. The Counterpart daemon is probably not running, so nothing has left this machine. It will be sent once the human runs: cpart daemon`

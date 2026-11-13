@@ -37,6 +37,7 @@ export class RelayLink extends EventEmitter<LinkEvents> {
   private backlog = 0;
   private failures = new Map<string, number>();
   private renewer: NodeJS.Timeout | null = null;
+  private tending = false;
 
   constructor(node: Counterpart, opts: { pollMs?: number } = {}) {
     super();
@@ -47,7 +48,10 @@ export class RelayLink extends EventEmitter<LinkEvents> {
   start(): this {
     this.stopped = false;
     this.connect();
-    this.poller = setInterval(() => this.pump(), this.pollMs);
+    this.poller = setInterval(() => {
+      this.tend();
+      this.pump();
+    }, this.pollMs);
     // A long-running daemon must renew its credential too, not only at start.
     this.renewer = setInterval(() => void this.node.renewIfDue().catch((e: Error) => this.emit("error", e)), 3600_000);
     this.renewer.unref();
@@ -179,6 +183,24 @@ export class RelayLink extends EventEmitter<LinkEvents> {
         return;
       }
     }
+  }
+
+  // Queue receipts for what was applied and requests for what is missing. Runs
+  // in line with deliveries so it never interleaves with one being decided.
+  private tend(): void {
+    if (!this.ready || this.tending) return;
+    this.tending = true;
+    this.inbound = this.inbound.then(async () => {
+      try {
+        if (this.stopped) return;
+        await this.node.sendReceipts();
+        await this.node.requestMissing();
+      } catch (e) {
+        this.emit("error", e as Error);
+      } finally {
+        this.tending = false;
+      }
+    });
   }
 
   // Send anything queued that is not already awaiting confirmation.
