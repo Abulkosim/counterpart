@@ -160,10 +160,13 @@ export class Counterpart {
     closeSync(openSync(dbFile, "a", 0o600));
     chmodSync(dbFile, 0o600);
     this.db = new DatabaseSync(dbFile);
+    // The timeout is set first. Another process opening or closing this file holds
+    // a lock for a moment, and without a timeout the next line fails with
+    // "database is locked" instead of waiting.
     this.db.exec(`
+      PRAGMA busy_timeout = 5000;
       PRAGMA journal_mode = WAL;
       PRAGMA synchronous = FULL;
-      PRAGMA busy_timeout = 5000;
       CREATE TABLE IF NOT EXISTS contacts (
         root_key TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, credential TEXT NOT NULL,
         relay TEXT NOT NULL, state TEXT NOT NULL, created_at INTEGER NOT NULL

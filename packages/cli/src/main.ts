@@ -640,6 +640,15 @@ async function main(): Promise<void> {
   }
 }
 
+// Anything that escapes main() is a bug. Say which command hit it and keep the
+// stack, so a failure that happens once can still be traced.
+for (const kind of ["uncaughtException", "unhandledRejection"] as const) {
+  process.on(kind, (e: unknown) => {
+    console.error(`cpart ${cmd ?? ""}: ${kind} (pid ${process.pid}, home ${home})\n${e instanceof Error ? (e.stack ?? e.message) : String(e)}`);
+    process.exit(70);
+  });
+}
+
 main().catch((e: Error) => {
   console.error(`cpart: ${e.message}`);
   process.exit(1);

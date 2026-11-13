@@ -71,6 +71,7 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
 
   const db = new DatabaseSync(opts.dbPath ?? ":memory:");
   db.exec(`
+    PRAGMA busy_timeout = 5000;
     PRAGMA journal_mode = WAL;
     PRAGMA synchronous = FULL;
     CREATE TABLE IF NOT EXISTS mailbox (
@@ -248,10 +249,23 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
   const sweeper = setInterval(() => q.sweep.run(now()), 60_000);
   sweeper.unref();
 
-  await new Promise<void>((resolve, reject) => {
-    http.once("error", reject);
-    http.listen(opts.port ?? 0, opts.host ?? "127.0.0.1", resolve);
-  });
+  // ws repeats the HTTP server's errors on itself. With nobody listening there,
+  // a port that is already taken killed the process with an uncaught exception.
+  wss.on("error", (e) => log(`server error: ${e.message}`));
+  try {
+    await new Promise<void>((resolve, reject) => {
+      http.once("error", reject);
+      http.listen(opts.port ?? 0, opts.host ?? "127.0.0.1", () => {
+        http.off("error", reject);
+        resolve();
+      });
+    });
+  } catch (e) {
+    clearInterval(sweeper);
+    db.close();
+    const err = e as NodeJS.ErrnoException;
+    throw err.code === "EADDRINUSE" ? new Error(`port ${opts.port} on ${opts.host ?? "127.0.0.1"} is already in use. Stop what is using it or pick another with --port`) : err;
+  }
   const port = (http.address() as AddressInfo).port;
   url = opts.publicUrl ?? `ws://${opts.host ?? "127.0.0.1"}:${port}`;
   log(`relay listening on ${url}`);

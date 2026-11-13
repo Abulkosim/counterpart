@@ -189,3 +189,9 @@ test("a long backlog is delivered a window at a time and one sender cannot fill 
     await small.close();
   }
 });
+
+test("a port that is already taken is a plain error, not a crash", async () => {
+  await assert.rejects(startRelay({ port: relay.port }), /already in use/);
+  // The first relay is untouched.
+  assert.equal(((await (await fetch(`http://127.0.0.1:${relay.port}/healthz`)).json()) as { ok: boolean }).ok, true);
+});
