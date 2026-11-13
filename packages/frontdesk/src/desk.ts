@@ -74,9 +74,9 @@ export class FrontDesk {
     this.now = opts.now ?? Date.now;
     this.db = new DatabaseSync(join(node.home, "frontdesk.db"));
     this.db.exec(`
+      PRAGMA busy_timeout = 5000;
       PRAGMA journal_mode = WAL;
       PRAGMA synchronous = FULL;
-      PRAGMA busy_timeout = 5000;
       CREATE TABLE IF NOT EXISTS desks (
         contact_root TEXT PRIMARY KEY, enabled INTEGER NOT NULL, owner TEXT NOT NULL,
         slots_per_thread INTEGER NOT NULL, slots_per_day INTEGER NOT NULL

@@ -1,5 +1,6 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -267,4 +268,31 @@ test("a consumer with a cursor sees every applied event exactly once, in order",
   }
   assert.deepEqual(seen, ["contact.request", "contact.accepted", "thread.opened", "talk.posted", "talk.posted", "talk.posted"]);
   assert.deepEqual(bob.since(cursor), []);
+});
+
+test("several processes can open and close the same identity at the same moment", async () => {
+  const node = await person();
+  node.close();
+  // Opening first and closing last both take a brief exclusive lock. Before the
+  // busy timeout was set first, about one open in a hundred failed here.
+  const src = `
+    import { Counterpart } from ${JSON.stringify(new URL("../src/index.ts", import.meta.url).href)};
+    let bad = 0;
+    for (let i = 0; i < 150; i++) {
+      try { const n = Counterpart.open(${JSON.stringify(node.home)}); n.contacts(); if (i % 7 === 0) n.createInvite("c" + process.pid + "-" + i); n.close(); }
+      catch (e) { bad++; console.error(e.message); }
+    }
+    process.exit(bad ? 1 : 0);`;
+  const runs = await Promise.all(
+    [0, 1, 2, 3].map(
+      () =>
+        new Promise<{ code: number | null; err: string }>((resolve) => {
+          const p = spawn(process.execPath, ["--no-warnings", "--input-type=module", "-e", src], { stdio: ["ignore", "ignore", "pipe"] });
+          let err = "";
+          p.stderr.on("data", (d: Buffer) => (err += d.toString()));
+          p.on("exit", (code) => resolve({ code, err }));
+        }),
+    ),
+  );
+  assert.deepEqual(runs, [0, 1, 2, 3].map(() => ({ code: 0, err: "" })));
 });
