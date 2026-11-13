@@ -31,6 +31,9 @@ export interface Ask {
   contact: string;
   threadId: string;
   question: string;
+  // "answered" also covers the owner writing in the thread after the question.
+  state: "open" | "answered" | "dismissed";
+  closedAt: number | null;
 }
 
 const REPLY_CHARS = 6000;
@@ -58,6 +61,8 @@ export class FrontDesk {
   private running: Promise<void> = Promise.resolve();
   private forbidden: string[];
   onError: (e: Error) => void = () => {};
+  // Called after each run is recorded, so the daemon can log it.
+  onRun: (run: { outcome: Run["outcome"]; contact: string; threadId: string; detail: string | null }) => void = () => {};
 
   // `forbidden` are exact strings that must never appear in a reply, such as
   // values the model runtime adds to its own context. A reply containing one is
@@ -92,6 +97,9 @@ export class FrontDesk {
         id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, contact_root TEXT NOT NULL, thread_id TEXT NOT NULL, question TEXT NOT NULL
       );
     `);
+    // Columns added after the table first shipped.
+    const cols = (this.db.prepare("PRAGMA table_info(asks)").all() as unknown as { name: string }[]).map((c) => c.name);
+    if (!cols.includes("closed_at")) this.db.exec("ALTER TABLE asks ADD COLUMN closed_at INTEGER; ALTER TABLE asks ADD COLUMN closed_how TEXT;");
   }
 
   close(): void {
@@ -136,11 +144,48 @@ export class FrontDesk {
     }));
   }
 
+  // A question is open until the owner answers or dismisses it, or writes in
+  // that thread themselves after it was asked.
   asks(limit = 50): Ask[] {
     const names = new Map(this.node.contacts().map((c) => [c.rootKey, c.name]));
-    return (this.db.prepare("SELECT * FROM asks ORDER BY id DESC LIMIT ?").all(limit) as unknown as { id: number; at: number; contact_root: string; thread_id: string; question: string }[]).map((r) => ({
+    const lastOwnerWord = new Map<string, number>();
+    const ownerWroteAfter = (threadId: string, at: number): boolean => {
+      if (!lastOwnerWord.has(threadId)) {
+        const own = this.node.log(threadId).filter((e) => e.mine && e.type === "talk.posted" && (e.body as { via?: string }).via !== "frontdesk");
+        lastOwnerWord.set(threadId, own.at(-1)?.createdAt ?? 0);
+      }
+      return lastOwnerWord.get(threadId)! > at;
+    };
+    return (this.db.prepare("SELECT * FROM asks ORDER BY id DESC LIMIT ?").all(limit) as unknown as AskRow[]).map((r) => ({
       id: r.id, at: r.at, contact: names.get(r.contact_root) ?? "?", threadId: r.thread_id, question: r.question,
+      state: r.closed_how ?? (ownerWroteAfter(r.thread_id, r.at) ? "answered" : "open"),
+      closedAt: r.closed_at,
     }));
+  }
+
+  // Only ever called by the owner. With text, the text goes to the contact as
+  // the owner's own message first; the question is closed once that is recorded.
+  async answerAsk(id: number, text?: string): Promise<Ask> {
+    const ask = this.openAsk(id);
+    if (text !== undefined) await this.node.say(ask.threadId, text, "human");
+    return this.closeAsk(ask, "answered");
+  }
+
+  dismissAsk(id: number): Ask {
+    return this.closeAsk(this.openAsk(id), "dismissed");
+  }
+
+  private openAsk(id: number): Ask {
+    const ask = Number.isSafeInteger(id) ? this.asks(1_000_000).find((a) => a.id === id) : undefined;
+    if (!ask) throw new Error(`no question ${id}. See: cpart asks --all`);
+    if (ask.state !== "open") throw new Error(`question ${id} is already ${ask.state}`);
+    return ask;
+  }
+
+  private closeAsk(ask: Ask, how: "answered" | "dismissed"): Ask {
+    const at = this.now();
+    this.db.prepare("UPDATE asks SET closed_at = ?, closed_how = ? WHERE id = ? AND closed_how IS NULL").run(at, how, ask.id);
+    return { ...ask, state: how, closedAt: at };
   }
 
   // ---- the loop ----
@@ -222,6 +267,7 @@ export class FrontDesk {
       this.db
         .prepare("INSERT INTO runs (at, contact_root, thread_id, outcome, bundle_hash, files, reply_event_id, ms, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .run(started, contact.rootKey, threadId, outcome, extra.bundleHash ?? null, JSON.stringify(extra.files ?? []), extra.replyEventId ?? null, this.now() - started, extra.detail ?? null);
+      this.onRun({ outcome, contact: contact.name, threadId, detail: extra.detail ?? null });
     };
     const post = async (text: string): Promise<string> => {
       this.db.prepare("UPDATE thread_use SET posting_ord = ? WHERE thread_id = ?").run(inputOrd, threadId);
@@ -319,6 +365,15 @@ export class FrontDesk {
   }
 }
 
+interface AskRow {
+  id: number;
+  at: number;
+  contact_root: string;
+  thread_id: string;
+  question: string;
+  closed_at: number | null;
+  closed_how: "answered" | "dismissed" | null;
+}
 interface DeskRow {
   enabled: number;
   owner: string;

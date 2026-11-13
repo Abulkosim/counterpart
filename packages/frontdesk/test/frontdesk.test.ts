@@ -7,6 +7,7 @@ import { Counterpart, RelayLink } from "@counterpart/daemon";
 import { type ThreadEvent, laneOf, randomId, seal } from "@counterpart/protocol";
 import { type Relay, startRelay } from "@counterpart/relay";
 import { createServer } from "node:http";
+import { DatabaseSync } from "node:sqlite";
 import type { AddressInfo } from "node:net";
 import { type Model, type ModelRequest, FrontDesk, addToBundle, anthropicApi, readBundle, removeFromBundle, userPrompt } from "../src/index.ts";
 
@@ -346,24 +347,49 @@ test("a message cannot pose as another speaker in the prompt", () => {
   assert.deepEqual(JSON.parse(lines[1]!), { from: "bob", text: forged });
 });
 
-test("the API adapter sends exactly the system prompt and the thread, with no tools", async () => {
-  let seen: { headers: Record<string, unknown>; body: Record<string, unknown> } | null = null;
+// A local stand-in for the Messages API. The real API is not called in tests.
+async function fakeApi(reply: (body: Record<string, unknown>) => { status?: number; json?: unknown; raw?: string; delayMs?: number }) {
+  const seen: { url: string; method: string; headers: Record<string, unknown>; body: Record<string, unknown> }[] = [];
   const server = createServer((req, res) => {
     let raw = "";
     req.on("data", (d) => (raw += d));
     req.on("end", () => {
-      seen = { headers: req.headers, body: JSON.parse(raw) };
-      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ content: [{ type: "text", text: "hello" }] }));
+      const body = JSON.parse(raw) as Record<string, unknown>;
+      seen.push({ url: req.url!, method: req.method!, headers: req.headers, body });
+      const r = reply(body);
+      setTimeout(() => res.writeHead(r.status ?? 200, { "content-type": "application/json" }).end(r.raw ?? JSON.stringify(r.json)), r.delayMs ?? 0);
     });
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-  try {
-    const model = anthropicApi({ apiKey: "k", baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, model: "m" });
-    assert.equal(await model({ system: "SYS", prompt: "PROMPT" }), "hello");
-    assert.deepEqual(seen!.body, { model: "m", max_tokens: 2000, system: "SYS", messages: [{ role: "user", content: "PROMPT" }] });
-    assert.equal(seen!.headers["x-api-key"], "k");
-  } finally {
+  stops.push(() => {
+    server.closeAllConnections();
     server.close();
+  });
+  return { seen, baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}` };
+}
+
+test("the API adapter sends exactly the system prompt and the thread, with no tools", async () => {
+  const api = await fakeApi(() => ({ json: { content: [{ type: "text", text: "hel" }, { type: "text", text: "lo" }], stop_reason: "end_turn" } }));
+  const model = anthropicApi({ apiKey: "k", baseUrl: api.baseUrl, model: "m" });
+  assert.equal(await model({ system: "SYS", prompt: "PROMPT" }), "hello");
+  assert.equal(api.seen.length, 1);
+  const { url, method, headers, body } = api.seen[0]!;
+  assert.equal(`${method} ${url}`, "POST /v1/messages");
+  assert.deepEqual(body, { model: "m", max_tokens: 2000, system: "SYS", messages: [{ role: "user", content: "PROMPT" }] });
+  for (const k of ["tools", "tool_choice", "mcp_servers", "container"]) assert.ok(!(k in body), `request declares ${k}`);
+  assert.equal(headers["x-api-key"], "k");
+  assert.equal(headers["anthropic-version"], "2023-06-01");
+  assert.equal(headers["anthropic-beta"], undefined);
+});
+
+test("the API adapter refuses a response that holds anything but text", async () => {
+  for (const content of [
+    [{ type: "text", text: "ok" }, { type: "tool_use", id: "t1", name: "bash", input: { command: "id" } }],
+    [{ type: "server_tool_use", id: "t2", name: "web_search", input: {} }],
+    [{ type: "text" }],
+  ]) {
+    const api = await fakeApi(() => ({ json: { content } }));
+    await assert.rejects(anthropicApi({ apiKey: "k", baseUrl: api.baseUrl })({ system: "S", prompt: "P" }), /other than text/);
   }
 });
 
@@ -383,4 +409,97 @@ test("resend requests and receipts never reach the model", async () => {
   assert.equal(model.calls.length, 0);
   assert.equal(alice.since(0, 1000).length, before);
   assert.deepEqual(desk.runs(), []);
+});
+
+test("the API adapter fails on an error status, an empty answer, a non-JSON body and a timeout, without echoing the body", async () => {
+  const cases: [Parameters<typeof fakeApi>[0], RegExp][] = [
+    [() => ({ status: 401, json: { error: { message: "invalid x-api-key SECRET-ECHO" } } }), /^model API returned 401$/],
+    [() => ({ status: 529, json: { error: { message: "overloaded" } } }), /^model API returned 529$/],
+    [() => ({ json: { content: [] } }), /no text/],
+    [() => ({ json: {} }), /no text/],
+    [() => ({ raw: "<html>gateway</html>" }), /JSON|Unexpected/],
+    [() => ({ json: { content: [{ type: "text", text: "late" }] }, delayMs: 400 }), /timeout|aborted/i],
+  ];
+  for (const [reply, expected] of cases) {
+    const api = await fakeApi(reply);
+    await assert.rejects(anthropicApi({ apiKey: "k", baseUrl: api.baseUrl, timeoutMs: 150 })({ system: "S", prompt: "P" }), (e: Error) => expected.test(e.message) && !e.message.includes("SECRET-ECHO"));
+  }
+});
+
+test("the front desk answers through the API adapter end to end, and a failed call spends the slot", async () => {
+  let n = 0;
+  const api = await fakeApi(() => (++n === 1 ? { json: { content: [{ type: "text", text: "Cursor pagination (from api.md)." }] } } : { status: 500, json: {} }));
+  const { alice, bob, desk, ask } = await setup(anthropicApi({ apiKey: "k", baseUrl: api.baseUrl }));
+  const thread = await bob.openThread("alice", "q");
+  await ask(thread, "how does it paginate?");
+  assert.equal(texts(alice, thread).at(-1), "Cursor pagination (from api.md).");
+  assert.match(String(api.seen[0]!.body.system), /=== file: api\.md ===/);
+  await ask(thread, "and again?");
+  assert.deepEqual(desk.runs().map((r) => [r.outcome, r.detail]), [["failed", "model API returned 500"], ["answered", null]]);
+  assert.equal(texts(alice, thread).length, 3);
+});
+
+test("the owner marks a question answered with a reply, and it goes out as the owner's own message", async () => {
+  const model = scripted("Not covered.\nASK_HUMAN: What are the rate limits?");
+  const { alice, bob, desk, ask } = await setup(model);
+  const thread = await bob.openThread("alice", "q");
+  await ask(thread, "what are the rate limits?");
+  const [q] = desk.asks();
+  assert.equal(q!.state, "open");
+  assert.equal(q!.closedAt, null);
+  const done = await desk.answerAsk(q!.id, "300 requests a minute.");
+  assert.equal(done.state, "answered");
+  const sent = alice.log(thread).at(-1)!;
+  assert.deepEqual([sent.mine, sent.body], [true, { text: "300 requests a minute.", via: "human" }]);
+  await until("bob gets the answer", () => texts(bob, thread).at(-1) === "300 requests a minute.");
+  assert.deepEqual(desk.asks().map((a) => [a.id, a.state, a.closedAt !== null]), [[q!.id, "answered", true]]);
+  await assert.rejects(desk.answerAsk(q!.id, "again"), /already answered/);
+  assert.throws(() => desk.dismissAsk(q!.id), /already answered/);
+  assert.equal(texts(alice, thread).filter((t) => t === "again").length, 0);
+  // The owner's answer is not something for the desk to answer.
+  await desk.tick();
+  assert.equal(model.calls.length, 1);
+});
+
+test("a question can be marked answered without sending anything, or dismissed", async () => {
+  const model = scripted("ASK_HUMAN: First?", "ASK_HUMAN: Second?");
+  const { alice, bob, desk, ask } = await setup(model);
+  const thread = await bob.openThread("alice", "q");
+  await ask(thread, "one");
+  await ask(thread, "two");
+  const [second, first] = desk.asks();
+  const before = alice.log(thread).length;
+  assert.equal((await desk.answerAsk(first!.id)).state, "answered");
+  assert.equal(desk.dismissAsk(second!.id).state, "dismissed");
+  assert.equal(alice.log(thread).length, before, "nothing was sent");
+  assert.deepEqual(desk.asks().map((a) => [a.question, a.state]), [["Second?", "dismissed"], ["First?", "answered"]]);
+  await assert.rejects(desk.answerAsk(999), /no question 999/);
+  await assert.rejects(desk.answerAsk(1.5), /no question/);
+});
+
+test("writing in the thread closes its open questions, and a failed send leaves the question open", async () => {
+  const model = scripted("ASK_HUMAN: Q?");
+  const { alice, bob, desk, ask } = await setup(model);
+  const thread = await bob.openThread("alice", "q");
+  await ask(thread, "one");
+  const [q] = desk.asks();
+  await assert.rejects(desk.answerAsk(q!.id, "x".repeat(20_000)));
+  assert.equal(desk.asks()[0]!.state, "open");
+  await new Promise((r) => setTimeout(r, 5));
+  await alice.say(thread, "It is 300.");
+  assert.equal(desk.asks()[0]!.state, "answered");
+  await assert.rejects(desk.answerAsk(q!.id), /already answered/);
+});
+
+test("a front desk database made before questions could be closed is upgraded in place", async () => {
+  const { alice } = await setup(scripted("x"));
+  const root = alice.contacts()[0]!.rootKey;
+  const db = new DatabaseSync(join(alice.home, "frontdesk.db"));
+  db.exec("DROP TABLE asks; CREATE TABLE asks (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, contact_root TEXT NOT NULL, thread_id TEXT NOT NULL, question TEXT NOT NULL)");
+  db.prepare("INSERT INTO asks (at, contact_root, thread_id, question) VALUES (1, ?, 'nothread', 'Old?')").run(root);
+  db.close();
+  const again = new FrontDesk(alice, scripted("x"));
+  stops.push(() => again.close());
+  assert.deepEqual(again.asks().map((a) => [a.question, a.state, a.contact]), [["Old?", "open", "bob"]]);
+  assert.equal(again.dismissAsk(again.asks()[0]!.id).state, "dismissed");
 });

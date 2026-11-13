@@ -68,7 +68,9 @@ using only the files you put in that contact's bundle.
   cpart desk off <contact>
   cpart desk status
   cpart desk refill <thread>                                      allow more replies in a thread
-  cpart asks                                                      questions the front desk passed to you
+  cpart asks [--all]                                              questions the front desk passed to you that are still open
+  cpart asks answer <id> [text]                                   mark one answered. With text, send it to the contact as your own message
+  cpart asks dismiss <id>                                         close one without answering
 
 Identity lives in $CPART_HOME (default ~/.counterpart). Add --json for machine output.`;
 
@@ -77,7 +79,7 @@ const { values: flags, positionals } = parseArgs({
   options: {
     relay: { type: "string" }, port: { type: "string" }, host: { type: "string" }, db: { type: "string" },
     home: { type: "string" }, bind: { type: "string", multiple: true }, work: { type: "string" }, branch: { type: "string" }, repo: { type: "string" }, paths: { type: "string" }, brief: { type: "string" }, allow: { type: "string", multiple: true }, title: { type: "string" }, file: { type: "string" }, part: { type: "string", multiple: true }, supersedes: { type: "string" },
-    out: { type: "string" }, yes: { type: "boolean" }, "no-passphrase": { type: "boolean" }, as: { type: "string" }, slots: { type: "string" }, daily: { type: "string" }, model: { type: "string" }, url: { type: "string" }, json: { type: "boolean" }, help: { type: "boolean", short: "h" },
+    out: { type: "string" }, yes: { type: "boolean" }, all: { type: "boolean" }, "no-passphrase": { type: "boolean" }, as: { type: "string" }, slots: { type: "string" }, daily: { type: "string" }, model: { type: "string" }, url: { type: "string" }, json: { type: "boolean" }, help: { type: "boolean", short: "h" },
   },
 });
 const [cmd, ...args] = positionals;
@@ -412,8 +414,10 @@ async function main(): Promise<void> {
       // own, which are filtered out of replies.
       const key = process.env.ANTHROPIC_API_KEY;
       const pick = flags.model ? { model: flags.model } : {};
-      const desk = key ? new FrontDesk(node, anthropicApi({ apiKey: key, ...pick })) : new FrontDesk(node, claudeCli(pick), { forbidden: cliPrivateValues() });
+      const base = process.env.ANTHROPIC_BASE_URL ? { baseUrl: process.env.ANTHROPIC_BASE_URL } : {};
+      const desk = key ? new FrontDesk(node, anthropicApi({ apiKey: key, ...base, ...pick })) : new FrontDesk(node, claudeCli(pick), { forbidden: cliPrivateValues() });
       desk.onError = (e) => console.error(`front desk: ${e.message}`);
+      desk.onRun = (r) => console.log(`front desk ${r.outcome} for ${r.contact} in thread ${r.threadId}${r.detail ? `: ${safe(r.detail)}` : ""}`);
       desk.start();
       const stop = () => void Promise.all([link.stop(), desk.stop()]).then(() => process.exit(0));
       process.on("SIGINT", stop);
@@ -509,8 +513,24 @@ async function main(): Promise<void> {
     }
     case "asks": {
       const desk = new FrontDesk(node, async () => "");
-      const list = desk.asks();
-      return out(list.length ? list.map((a) => `${time(a.at)}  ${a.contact.padEnd(12)} thread ${a.threadId}  ${safe(a.question)}`).join("\n") : "The front desk has not passed you any questions.", list);
+      if (args[0] === "answer" || args[0] === "dismiss") {
+        need(2, `asks ${args[0]} <id>${args[0] === "answer" ? " [text]" : ""}`);
+        if (!/^[0-9]{1,15}$/.test(args[1]!)) throw new Error("give the number `cpart asks` prints in its first column");
+        const text = args.slice(2).join(" ").trim();
+        if (args[0] === "dismiss") {
+          if (text) throw new Error("dismiss sends nothing. To reply, use: cpart asks answer <id> <text>");
+          const a = desk.dismissAsk(Number(args[1]));
+          return out(`Question ${a.id} dismissed. Nothing was sent to ${a.contact}.`, a);
+        }
+        const a = await desk.answerAsk(Number(args[1]), text || undefined);
+        return out(text ? `Question ${a.id} answered. Your message to ${a.contact} is queued in thread ${a.threadId}.` : `Question ${a.id} marked answered. Nothing was sent to ${a.contact}.`, a);
+      }
+      if (args[0]) throw new Error("usage: cpart asks [--all] | cpart asks answer <id> [text] | cpart asks dismiss <id>");
+      const all = desk.asks(200);
+      const list = flags.all ? all : all.filter((a) => a.state === "open");
+      const row = (a: (typeof all)[number]): string => `${String(a.id).padStart(3)}  ${time(a.at)}  ${a.contact.padEnd(12)} ${flags.all ? a.state.padEnd(10) : ""}thread ${a.threadId}  ${safe(a.question)}`;
+      const none = all.length ? "No open questions. See the closed ones with: cpart asks --all" : "The front desk has not passed you any questions.";
+      return out(list.length ? `${list.map(row).join("\n")}\n\nThe wording came from a model that read the other side's messages. Answer with: cpart asks answer <id> <text>` : none, list);
     }
     case "mcp":
       await startMcpServer(node);

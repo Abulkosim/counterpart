@@ -161,7 +161,7 @@ test("needs-you lists what waits for the owner, each with where to find it", asy
   assert.deepEqual(sign[0], { kind: "sign", at: sign[0]!.at, threadId: paging, contact: "bob", proposalId: second.proposalId, n: 2, title: HOSTILE_TITLE, proposedByMe: false, approvedByThem: true, status: "open" });
   const asks = o.needs.filter((n) => n.kind === "ask");
   assert.equal(asks.length, 1);
-  assert.deepEqual(asks[0], { kind: "ask", at: asks[0]!.at, threadId: helpdesk, contact: "bob", question: HOSTILE_ASK });
+  assert.deepEqual(asks[0], { kind: "ask", id: asks[0]!.id, at: asks[0]!.at, threadId: helpdesk, contact: "bob", question: HOSTILE_ASK });
   assert.equal(o.needs.filter((n) => n.kind === "waiting").length, 0);
 });
 

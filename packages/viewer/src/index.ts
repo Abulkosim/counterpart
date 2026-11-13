@@ -59,7 +59,7 @@ export interface ViewerThreadSummary extends ThreadSummary {
 
 export type ViewerNeed =
   | { kind: "sign" | "waiting"; at: number; threadId: string; contact: string; proposalId: string; n: number; title: string; proposedByMe: boolean; approvedByThem: boolean; status: ContractStatus }
-  | { kind: "ask"; at: number; threadId: string; contact: string; question: string };
+  | { kind: "ask"; id: number; at: number; threadId: string; contact: string; question: string };
 
 export interface ViewerOverview {
   me: { human: string; device: string; relay: string; rootKey: string; home: string; protected: boolean; credentialExpiresAt: number };
@@ -204,18 +204,10 @@ export async function startViewer(node: Counterpart, opts: ViewerOptions = {}): 
     }
   };
 
-  // A question stays open until the owner writes in that thread themselves.
-  const openAsks = (): ViewerNeed[] => {
-    const answered = new Map<string, number>();
-    const lastOwnerWord = (threadId: string): number => {
-      if (!answered.has(threadId)) {
-        const own = node.log(threadId).filter((e) => e.mine && e.type === "talk.posted" && (e.body as { via?: string }).via !== "frontdesk");
-        answered.set(threadId, own.at(-1)?.createdAt ?? 0);
-      }
-      return answered.get(threadId)!;
-    };
-    return desk.asks(200).filter((a) => lastOwnerWord(a.threadId) <= a.at).map((a) => ({ kind: "ask", at: a.at, threadId: a.threadId, contact: a.contact, question: a.question }));
-  };
+  // Open means not answered, not dismissed, and the owner has not written in
+  // that thread since. The front desk's own record decides.
+  const openAsks = (): ViewerNeed[] =>
+    desk.asks(200).filter((a) => a.state === "open").map((a) => ({ kind: "ask", id: a.id, at: a.at, threadId: a.threadId, contact: a.contact, question: a.question }));
 
   const overview = (): ViewerOverview => {
     const needs: ViewerNeed[] = [];
