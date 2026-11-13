@@ -5,6 +5,8 @@
 # Bob holds the message that depends on it, asks Alice for the missing one,
 # and Alice sends it again.
 set -euo pipefail
+# This script starts its own daemons.
+export CPART_NO_AUTOSTART=1
 cd "$(dirname "$0")/.."
 WORK=$(mktemp -d)
 PORT=${PORT:-7463}

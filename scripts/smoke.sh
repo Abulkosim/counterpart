@@ -2,6 +2,8 @@
 # Runs the real CLI as two people against a real relay process, including a
 # recipient that is offline and a relay that restarts. Prints what each side sees.
 set -euo pipefail
+# This script starts its own daemons.
+export CPART_NO_AUTOSTART=1
 cd "$(dirname "$0")/.."
 . scripts/smoke-lib.sh
 cpart() { local who=$1; shift; CPART_HOME=$WORK/$who node packages/cli/src/main.ts "$@"; }

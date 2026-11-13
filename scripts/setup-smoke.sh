@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# The short path, as two new people would take it: `cpart setup` on one side,
+# `cpart join` on the other, background daemons, then a message addressed by
+# contact name. Stand-ins for `claude` and `codex` record what setup asked of
+# them; nothing is written to your real agent settings.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+source scripts/smoke-lib.sh
+unset CPART_NO_AUTOSTART
+export CPART_NO_BOOT=1 CPART_PASSPHRASE="correct horse battery"
+
+mkdir -p "$WORK/bin"
+for agent in claude codex; do
+  cat >"$WORK/bin/$agent" <<EOF
+#!/bin/sh
+case "\$1 \$2" in
+  "--version ") echo fake ;;
+  "mcp get") cat "$WORK/$agent.added" 2>/dev/null ;;
+  "mcp add") echo "\$*" >"$WORK/$agent.added" ;;
+  *) exit 2 ;;
+esac
+EOF
+  chmod +x "$WORK/bin/$agent"
+done
+export PATH="$WORK/bin:$PATH"
+cpart() { local who=$1; shift; CPART_HOME="$WORK/$who" node packages/cli/src/main.ts "$@"; }
+stop_all() { cpart alice down >/dev/null 2>&1 || true; cpart bob down >/dev/null 2>&1 || true; }
+trap 'stop_all; cleanup' EXIT
+
+step "a relay"
+start_relay
+
+step "nothing is created when no relay answers"
+if cpart alice setup --relay ws://127.0.0.1:1 >"$WORK/dead.out" 2>&1; then fail "setup accepted a dead relay"; fi
+grep -q "no relay answers" "$WORK/dead.out"
+[ ! -e "$WORK/alice/keys.json" ] || fail "an identity was created for a dead relay"
+
+step "alice: cpart setup"
+cpart alice setup --relay "$RELAY" | tee "$WORK/alice.setup"
+grep -q "^ok  identity .* created" "$WORK/alice.setup"
+grep -q "^ok  daemon started, connected" "$WORK/alice.setup"
+grep -q "^ok  Claude Code now has" "$WORK/alice.setup"
+grep -q "^ok  Codex now has" "$WORK/alice.setup"
+grep -q "mcp add --scope user counterpart --env CPART_HOME=$WORK/alice -- .* mcp$" "$WORK/claude.added" || fail "claude was not given the server: $(cat "$WORK/claude.added")"
+
+step "running it again changes nothing"
+cpart alice setup | tee "$WORK/alice.again"
+grep -q "^ok  daemon running, connected" "$WORK/alice.again"
+grep -q "^ok  Claude Code already has" "$WORK/alice.again"
+
+step "an address with anything after the host is refused"
+if cpart carol setup --relay "$RELAY/x#y" >"$WORK/frag.out" 2>&1; then fail "setup took an address with a fragment"; fi
+grep -q "nothing after it but a path" "$WORK/frag.out"
+[ ! -e "$WORK/carol/keys.json" ] || fail "an identity was created for a bad address"
+
+step "three daemons started at once: one wins"
+cpart alice down >/dev/null
+for i in 1 2 3; do CPART_HOME="$WORK/alice" node packages/cli/src/main.ts daemon >"$WORK/race$i.log" 2>&1 & pids+=("$!"); done
+wait_for "two of them to give up" sh -c "[ \$(cat '$WORK'/race?.log | grep -c 'already running') -eq 2 ]"
+[ "$(cat "$WORK"/race?.log | grep -c '^connected')" -le 1 ] || fail "more than one daemon connected"
+cpart alice down >/dev/null
+cpart alice up >/dev/null
+
+step "a second daemon for the same home is refused"
+if cpart alice daemon >"$WORK/second.out" 2>&1; then fail "a second daemon started"; fi
+grep -q "already running" "$WORK/second.out"
+
+step "alice invites bob; bob joins with one command and no identity"
+JOIN=$(cpart alice invite bob | grep -o 'cpart-invite:[A-Za-z0-9_-]*')
+# An invite that names a relay on this machine needs a person to say yes.
+if cpart bob join "$JOIN" alice </dev/null >"$WORK/bob.refused" 2>&1; then fail "join used a local relay without asking"; fi
+[ ! -e "$WORK/bob/keys.json" ] || fail "an identity was created before the person agreed"
+cpart bob join "$JOIN" alice --yes | tee "$WORK/bob.join"
+grep -q "Claude Code already has a server named counterpart for another identity" "$WORK/bob.join" || fail "bob was not told the agent tools belong to alice's identity"
+grep -q "^ok  identity .* created" "$WORK/bob.join"
+grep -q "^Paired with alice" "$WORK/bob.join"
+A=$(cpart alice contacts --json | node -pe 'JSON.parse(require("fs").readFileSync(0,"utf8"))[0].safetyCode')
+B=$(cpart bob contacts --json | node -pe 'JSON.parse(require("fs").readFileSync(0,"utf8"))[0].safetyCode')
+[ "$A" = "$B" ] || fail "safety codes differ: $A and $B"
+
+step "bob talks to alice by name"
+cpart bob open alice "agree on pagination" >/dev/null
+cpart bob say alice "hello from bob" >/dev/null
+wait_for "alice to receive bob's message" sh -c "CPART_HOME='$WORK/alice' node packages/cli/src/main.ts log bob | grep -q 'hello from bob'"
+cpart alice say bob "hello back" >/dev/null
+wait_for "bob to receive the reply" sh -c "CPART_HOME='$WORK/bob' node packages/cli/src/main.ts log alice | grep -q 'hello back'"
+cpart bob log alice
+
+step "status on both sides"
+cpart alice status | tee "$WORK/alice.status"
+grep -q "^Daemon    running, connected" "$WORK/alice.status"
+grep -q "^Contacts  bob" "$WORK/alice.status"
+grep -q "Claude Code: has the tools" "$WORK/alice.status"
+
+step "cpart down"
+cpart alice down
+cpart alice status | grep -q "^Daemon    NOT running" || fail "status did not notice the daemon stopped"
+cpart bob down
+
+step "an agent session that finds no daemon starts one"
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' | timeout 20 env CPART_HOME="$WORK/alice" node packages/cli/src/main.ts mcp >"$WORK/mcp.out" || true
+grep -q '"name":"counterpart"' "$WORK/mcp.out" || fail "the MCP server did not answer: $(cat "$WORK/mcp.out")"
+cpart alice status | grep -q "^Daemon    running, connected" || fail "the MCP server did not start the daemon"
+cpart alice down >/dev/null
+
+echo
+echo "SETUP SMOKE OK"

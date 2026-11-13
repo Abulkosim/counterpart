@@ -5,6 +5,8 @@
 #
 #   ./scripts/demo-agents.sh ["question for bob's agent to get answered"]
 set -euo pipefail
+# This script starts its own daemons.
+export CPART_NO_AUTOSTART=1
 cd "$(dirname "$0")/.."
 ROOT=$PWD
 WORK=$(mktemp -d)
@@ -46,7 +48,7 @@ cpart alice bundle add bob "$WORK/docs/orders-api.md" >/dev/null
 cpart alice desk on bob --as Alice >/dev/null
 
 cat >"$WORK/mcp.json" <<JSON
-{ "mcpServers": { "counterpart": { "command": "node", "args": ["$ROOT/packages/cli/src/main.ts", "mcp"], "env": { "CPART_HOME": "$WORK/bob" } } } }
+{ "mcpServers": { "counterpart": { "command": "node", "args": ["$ROOT/packages/cli/src/main.ts", "mcp"], "env": { "CPART_HOME": "$WORK/bob", "CPART_NO_AUTOSTART": "1" } } } }
 JSON
 
 echo "== Bob asks his agent:"

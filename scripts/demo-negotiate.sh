@@ -14,6 +14,8 @@
 #   KEEP=1 ./scripts/demo-negotiate.sh    # keep the work directory and the session transcripts
 #   ALICE_BRIEF="..." BOB_BRIEF="..." ./scripts/demo-negotiate.sh
 set -euo pipefail
+# This script starts its own daemons.
+export CPART_NO_AUTOSTART=1
 cd "$(dirname "$0")/.."
 ROOT=$PWD
 WORK=$(mktemp -d)
@@ -57,7 +59,7 @@ for who in alice bob; do
   CPART_HOME=$WORK/$who node packages/cli/src/main.ts daemon >"$WORK/$who.log" 2>&1 &
   pids+=("$!")
   cat >"$WORK/$who.mcp.json" <<JSON
-{ "mcpServers": { "counterpart": { "command": "node", "args": ["$ROOT/packages/cli/src/main.ts", "mcp"], "env": { "CPART_HOME": "$WORK/$who" } } } }
+{ "mcpServers": { "counterpart": { "command": "node", "args": ["$ROOT/packages/cli/src/main.ts", "mcp"], "env": { "CPART_HOME": "$WORK/$who", "CPART_NO_AUTOSTART": "1" } } } }
 JSON
 done
 cpart bob accept "$(cpart alice invite bob --json | field .invite)" alice >/dev/null

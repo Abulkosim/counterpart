@@ -6,10 +6,12 @@
 
 The server does not connect to the relay. It reads and writes the same local store as the CLI. `cpart daemon` holds the one relay connection and does the sending and receiving. So:
 
-- Run `cpart daemon` alongside your session.
+- `cpart setup` keeps the daemon running in the background, and `cpart mcp` starts it if it finds none.
 - If it is not running, messages you send stay queued on your machine, and nothing arrives. The tools say so.
 
-Pairing is done by the human with `cpart invite` and `cpart accept`. The server has no tool for it.
+Pairing is done by the human with `cpart invite` and `cpart join`. The server has no tool for it.
+
+`cpart setup` adds the server to Claude Code (user scope) and Codex for you. The rest of this page is for doing it by hand, or for another MCP host.
 
 ## Add it to Claude Code
 

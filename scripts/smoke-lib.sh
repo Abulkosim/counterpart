@@ -1,6 +1,8 @@
 # Shared by the smoke scripts. Source it after `cd` to the repo root.
 # On any failure the logs of the relay and both daemons are printed and the
 # work directory is kept, so a failure that cannot be repeated can still be read.
+# These scripts start their own daemons.
+export CPART_NO_AUTOSTART=1
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/cpart-smoke.XXXXXX")
 # A fixed port can still be held by another run. Take a free one unless told otherwise.
 PORT=${PORT:-$(node -e 'const s=require("net").createServer().listen(0,"127.0.0.1",()=>{console.log(s.address().port);s.close()})')}
