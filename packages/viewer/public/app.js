@@ -236,7 +236,7 @@ function needsView(o) {
     h("a", { class: "row", href: threadHref(n.threadId) },
       h("span", { class: "cell about" },
         h("span", { class: "wrap theirs", dir: "auto" }, visible(n.question)),
-        h("span", { class: "sub" }, `Asked by your front desk while answering ${n.contact}`),
+        h("span", { class: "sub" }, `Asked by your front desk while answering ${n.contact}. In a terminal: `, h("span", { class: "mono" }, `cpart asks answer ${n.id} "your answer"`)),
       ),
       h("span", { class: "cell num last" }, stamp(n.at)),
     );
@@ -250,7 +250,7 @@ function needsView(o) {
 
   return page("Needs you", null,
     group("To sign", "Open proposals you have not signed. Read the whole text first. A signature cannot be undone.", sign.map(proposalRow)),
-    group("Questions from your front desk", "Your front desk could not answer these from what you shared. It wrote each question after reading the other side's messages, so treat the wording as theirs. Answer in the thread.", asks.map(askRow)),
+    group("Questions from your front desk", "Your front desk could not answer these from what you shared. It wrote each question after reading the other side's messages, so treat the wording as theirs. Answer or dismiss each one in a terminal with cpart asks. Writing in the thread yourself also closes it.", asks.map(askRow)),
     group("Signed by you, not by them", "Nothing to do. Your signature stands, and the contract is agreed the moment they sign.", waiting.map(proposalRow)),
     h("p", { class: "note" }, h("span", { class: "theirs sample" }, "Shaded"), " text was written or shaped by the other side."),
   );

@@ -118,7 +118,12 @@ export interface AnthropicApiOptions {
 }
 
 // Calls the Messages API directly. The model's context is exactly the system
-// prompt and the thread, with nothing added, and no tools are declared.
+// prompt and the thread, with nothing added, and no tools are declared. A
+// response that holds anything but text is refused: with no tools declared
+// there should be none, and if there is the answer is not trusted.
+//
+// Tested against a local fake server only. `scripts/frontdesk-api-check.sh`
+// runs it against the real API when the owner has a key.
 export function anthropicApi(opts: AnthropicApiOptions): Model {
   return async ({ system, prompt }) => {
     const res = await fetch(`${opts.baseUrl ?? "https://api.anthropic.com"}/v1/messages`, {
@@ -128,8 +133,10 @@ export function anthropicApi(opts: AnthropicApiOptions): Model {
       signal: AbortSignal.timeout(opts.timeoutMs ?? 180_000),
     });
     if (!res.ok) throw new Error(`model API returned ${res.status}`);
-    const body = (await res.json()) as { content?: { type: string; text?: string }[] };
-    const text = (body.content ?? []).filter((c) => c.type === "text" && typeof c.text === "string").map((c) => c.text).join("");
+    const body = (await res.json()) as { content?: { type?: string; text?: string }[] };
+    const content = Array.isArray(body?.content) ? body.content : [];
+    if (content.some((c) => c?.type !== "text" || typeof c.text !== "string")) throw new Error("model API returned something other than text; refusing its output");
+    const text = content.map((c) => c.text).join("");
     if (!text) throw new Error("model API returned no text");
     return text;
   };
