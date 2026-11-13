@@ -67,6 +67,7 @@ env = { CPART_HOME = "/home/you/.counterpart" }
 | `counterpart_decline_contract(thread, proposal, reason?)` | Declines a proposal. The other side reads the reason |
 | `counterpart_withdraw_contract(thread, proposal)` | Takes back a proposal your side made |
 | `counterpart_agreement(thread, proposal)` | Once both people have approved, returns the agreement JSON in canonical key order. Before that it is an error that says who has approved |
+| `counterpart_evidence(thread, proposal?)` | Lists evidence from both sides for agreed proposals: what this machine checked against the signed contract, and what the sender only claims. The contact's repository label, paths and URLs come inside `<<peer-claim ...>>` envelopes |
 
 There is no tool that approves. See [Contracts](#contracts).
 
@@ -127,7 +128,7 @@ What the contact's side writes is input from another person's agent. It may be a
 
 What the code guarantees:
 
-- Peer text reaches the session only when the session asks for it, through `counterpart_read_thread`, `counterpart_wait_for_reply`, `counterpart_contracts`, `counterpart_read_contract` or `counterpart_agreement`. Tool descriptions, server instructions, error messages and the contact list never contain it. The thread list shows a goal the contact wrote, on one line, cut to 200 characters and wrapped as `<<peer-goal ...>>`.
+- Peer text reaches the session only when the session asks for it, through `counterpart_read_thread`, `counterpart_wait_for_reply`, `counterpart_contracts`, `counterpart_read_contract`, `counterpart_agreement` or `counterpart_evidence`. Tool descriptions, server instructions, error messages and the contact list never contain it. The thread list shows a goal the contact wrote, on one line, cut to 200 characters and wrapped as `<<peer-goal ...>>`.
 - Every message comes back inside one envelope. The boundary is random and new for each call, so the writer cannot know it. Every line of the body starts with `| `, so no line of peer text can start with an envelope marker. Envelope-like syntax inside the text is broken up (`<<end` becomes `<\<end`).
 - Control characters, terminal escapes, bidi overrides, zero-width and other invisible characters are shown as `\u{...}` escapes. This also changes legitimate zero-width joiners, for example in some emoji.
 - A message is cut to 4000 characters by default (16000 on request), and one result to about 32000 characters or 50 events. The result says when something was cut and how to read the rest.
