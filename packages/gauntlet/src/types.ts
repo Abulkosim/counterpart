@@ -11,6 +11,7 @@ export const CATEGORIES = {
   evidence: "Evidence",
   "hostile-relay": "The relay as attacker",
   "relay-clients": "Clients attacking the relay",
+  "relay-change": "Relay changes",
   output: "Terminal output",
   storage: "Local storage",
 } as const;
