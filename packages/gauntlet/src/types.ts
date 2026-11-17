@@ -13,6 +13,7 @@ export const CATEGORIES = {
   "relay-clients": "Clients attacking the relay",
   output: "Terminal output",
   storage: "Local storage",
+  outbound: "What leaves the machine",
 } as const;
 
 export type Category = keyof typeof CATEGORIES;
