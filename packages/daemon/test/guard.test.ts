@@ -1,6 +1,6 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -196,14 +196,78 @@ test("CPART_GUARD=off sends, says so every time, and records what it would have 
 });
 
 test("held ids, and a race to release", async () => {
-  const { alice, thread } = await pair({ env: { ORDERS_SERVICE_TOKEN: TOKEN }, cwd: null });
+  const { alice, thread } = await pair({ env: { ORDERS_SERVICE_TOKEN: TOKEN }, cwd: null }, PASS);
   await assert.rejects(alice.say(thread, TOKEN), HeldError);
   const id = alice.guard.held()[0]!.id;
   assert.throws(() => alice.guard.find("ab"), /first 4 or more/);
   assert.throws(() => alice.guard.find("zzzz"), /no held message/);
-  const results = await Promise.allSettled([alice.releaseHeld(id), alice.releaseHeld(id)]);
+  const results = await Promise.allSettled([alice.releaseHeld(id, PASS), alice.releaseHeld(id, PASS)]);
   assert.equal(results.filter((r) => r.status === "fulfilled").length, 1);
   assert.equal(alice.log(thread).filter((e) => e.type === "talk.posted").length, 1);
+  assert.equal(alice.guard.held(true)[0]!.state, "released");
+});
+
+test("an identity without a passphrase cannot release", async () => {
+  const { alice, thread } = await pair({ env: { ORDERS_SERVICE_TOKEN: TOKEN }, cwd: null });
+  await assert.rejects(alice.say(thread, TOKEN), HeldError);
+  await assert.rejects(alice.releaseHeld(alice.guard.held()[0]!.id), /without a passphrase/);
+  assert.equal(alice.guard.counts().held, 1);
+});
+
+test("two halves sent at the same moment: the second is held", async () => {
+  const { alice, bob, thread, carry } = await pair({ env: { ORDERS_SERVICE_TOKEN: TOKEN }, cwd: null });
+  const [a, b] = [TOKEN.slice(0, 8), TOKEN.slice(8, 16)];
+  const r = await Promise.allSettled([alice.say(thread, `one: ${a}`), alice.say(thread, `two: ${b}`)]);
+  assert.deepEqual(r.map((x) => x.status).sort(), ["fulfilled", "rejected"]);
+  await carry();
+  assert.equal(bobTexts(bob, thread).length, 1);
+  assert.equal(alice.guard.counts().held, 1);
+});
+
+test("what Codex found: composed encodings, encoded pieces, capability URLs, limits, invite tokens", async () => {
+  const hook = "https://hooks.example.test/invoke/Qm7Xr2Lp9Vt4Zc8Nb3Kw6Hy1";
+  const { alice, thread } = await pair({ env: { ORDERS_SERVICE_TOKEN: TOKEN, SERVICE_WEBHOOK: hook, AUTH_URL: "https://auth.example.com/login" }, cwd: null });
+  const b64 = (s: string): string => Buffer.from(s).toString("base64");
+  // Reversed base64.
+  await assert.rejects(alice.say(thread, [...b64(TOKEN)].reverse().join("")), /env-secret/);
+  // Four pieces of seven, each base64 and sent alone: the second piece completes enough.
+  const q = TOKEN.match(/.{1,7}/g)!;
+  await alice.say(thread, `piece: ${b64(q[0]!)}`);
+  await assert.rejects(alice.say(thread, `piece: ${b64(q[1]!)}`), /env-secret/);
+  // A secret-named URL with a key in its path, and the key alone. A URL with no key in it is not a secret.
+  await assert.rejects(alice.say(thread, `post to ${hook}`), /env-secret/);
+  await assert.rejects(alice.say(thread, "the id is Qm7Xr2Lp9Vt4Zc8Nb3Kw6Hy1"), /env-secret/);
+  await alice.say(thread, "log in at https://auth.example.com/login");
+  // Too much encoded text to read is held, not sent half-checked.
+  const many = Array.from({ length: 700 }, (_, i) => b64(`harmless note number ${i}`)).join(" ");
+  await assert.rejects(alice.say(thread, many.slice(0, 16000)), /too-much-to-check/);
+  // A huge run of character codes does not crash the check.
+  // (It is then refused for its length, as before.)
+  await assert.rejects(alice.say(thread, "65 ".repeat(200_000)), (e: Error) => !(e instanceof RangeError) && /bad talk.posted body|held/.test(e.message));
+  assert.doesNotThrow(() => alice.guard.check({ text: "65 ".repeat(300_000) }));
+});
+
+test("an invite whose token was made from a secret is not accepted", async () => {
+  const relay = "ws://127.0.0.1:9";
+  const inviter = await Counterpart.init(dir(), { relay, guard: { env: {}, cwd: null } });
+  const me = await Counterpart.init(dir(), { relay, guard: { env: { ORDERS_SERVICE_TOKEN: TOKEN }, cwd: null } });
+  const real = JSON.parse(Buffer.from(inviter.createInvite("me").replace(/^cpart-invite:/, ""), "base64url").toString()) as Record<string, unknown>;
+  const forged = `cpart-invite:${Buffer.from(JSON.stringify({ ...real, token: TOKEN })).toString("base64url")}`;
+  await assert.rejects(me.acceptInvite(forged, "them"), /looks like it carries a secret/);
+  assert.equal(me.contacts().length, 0);
+  assert.equal(me.queued().length, 0);
+});
+
+test("a never-share file is kept by its real path, and a missing one is reported", async () => {
+  const d = dir();
+  const real = join(d, "notes.md");
+  writeFileSync(real, "Their CFO said the renewal is worth 1.4 million and they are talking to a competitor.\n");
+  symlinkSync(real, join(d, "link.md"));
+  const { alice } = await pair({ env: {}, cwd: null });
+  assert.equal(alice.guard.addPath("never-share", join(d, "link.md")), real);
+  assert.deepEqual(alice.guard.problems(), []);
+  rmSync(real);
+  assert.match(alice.guard.problems()[0]!, /cannot be read/);
 });
 
 test("a large message is checked in reasonable time", async () => {

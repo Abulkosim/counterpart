@@ -121,17 +121,15 @@ async function typed(prompt: string, hidden: boolean): Promise<string> {
   }
 }
 
-// The owner, at this terminal: their passphrase, or with none, a typed word.
-async function owner(node: Counterpart, word: string): Promise<string | undefined> {
+// The owner, at this terminal, typing their passphrase. An identity without
+// one cannot do this: nothing would tell its owner from an agent that can
+// drive a terminal.
+async function owner(node: Counterpart): Promise<string> {
+  if (!node.protected) throw new Error("this identity was made without a passphrase, so nothing here can tell you from an agent. Held messages cannot be released and protections cannot be removed. Nothing was sent or changed.");
   if (!process.stdin.isTTY) throw new Error("this needs you at a terminal, typing. It does not read CPART_PASSPHRASE. Nothing was sent or changed.");
-  if (node.protected) {
-    const p = await typed("Your passphrase: ", true);
-    node.checkPassphrase(p);
-    return p;
-  }
-  process.stderr.write("This identity has no passphrase, so this only checks that someone is typing here.\n");
-  if ((await typed(`Type ${word} to go on: `, false)).trim() !== word) throw new Error("that was not it. Nothing was sent or changed.");
-  return undefined;
+  const p = await typed("Your passphrase: ", true);
+  node.checkPassphrase(p);
+  return p;
 }
 
 export async function guardCommand(cmd: string, kit: Kit): Promise<void> {
@@ -155,9 +153,10 @@ export async function guardCommand(cmd: string, kit: Kit): Promise<void> {
 
   if (cmd === "release") {
     if (!args[0]) throw new Error("usage: cpart release <id>");
+    if (!node.protected) throw new Error("this identity was made without a passphrase, so nothing here can tell you from an agent, and held messages cannot be released. Drop it with cpart drop, and send what you meant in words that do not carry the secret.");
     if (!process.stdin.isTTY) throw new Error("cpart release needs you at a terminal, typing. It does not read CPART_PASSPHRASE. Nothing was sent.");
     const h = g.find(args[0]);
-    if (h.state !== "held") throw new Error(`${h.id} is ${h.state}, not held. Nothing was sent.`);
+    if (h.state !== "held" && h.state !== "releasing") throw new Error(`${h.id} is ${h.state}, not held. Nothing was sent.`);
     const name = contactName(node, h.contactRoot);
     const lines = [
       `Held ${h.id} at ${time(h.at)}: ${h.type} to ${name}${h.threadId ? ` in thread ${h.threadId}` : " (it opens a new thread)"}`,
@@ -176,7 +175,7 @@ export async function guardCommand(cmd: string, kit: Kit): Promise<void> {
     }
     lines.push(`Releasing sends all of the above to ${name}, exactly as shown. It cannot be called back.`);
     console.error(lines.join("\n"));
-    const passphrase = await owner(node, "send");
+    const passphrase = await owner(node);
     const r = await node.releaseHeld(h.id, passphrase);
     return out(`Sent ${h.id} as event ${r.eventId} in thread ${r.threadId}. A running daemon delivers it.`, { id: h.id, eventId: r.eventId, threadId: r.threadId });
   }
@@ -196,8 +195,9 @@ export async function guardCommand(cmd: string, kit: Kit): Promise<void> {
         "          sender's repository and in these, and text from these never-share files.",
         `Repos     ${repos.length ? repos.map(safe).join(", ") : "none added (cpart guard repo add <path>)"}`,
         `Never-share ${files.length ? files.map(safe).join(", ") : "none (cpart guard never-share add <file>)"}`,
+        ...g.problems().map((p) => `NOT CHECKED ${safe(p)}`),
       ].join("\n"),
-      { off: g.off, ...c, repos, neverShare: files },
+      { off: g.off, ...c, repos, neverShare: files, problems: g.problems() },
     );
   }
   if ((what !== "repo" && what !== "never-share") || (verb !== "add" && verb !== "remove") || !path) throw new Error(`usage:\n${GUARD_USAGE}`);
@@ -207,7 +207,7 @@ export async function guardCommand(cmd: string, kit: Kit): Promise<void> {
   }
   // Taking a protection away is the owner's call, the same as releasing.
   if (!g.paths(what).some((p) => p === path || p.endsWith(`/${path}`))) throw new Error(`${safe(path)} is not on the list. See: cpart guard`);
-  await owner(node, "remove");
+  await owner(node);
   const gone = g.removePath(what, path) || g.removePath(what, g.paths(what).find((p) => p.endsWith(`/${path}`)) ?? path);
   return out(gone ? `Removed ${safe(path)}.` : `${safe(path)} was not on the list.`, { kind: what, path, removed: gone });
 }

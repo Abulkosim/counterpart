@@ -13,7 +13,7 @@
 // "gitleaks:allow" comment is deliberately not honoured: anyone who writes the
 // message could add it.
 
-import { existsSync, lstatSync, openSync, closeSync, readFileSync, readSync, readdirSync, statSync, fstatSync, constants } from "node:fs";
+import { existsSync, lstatSync, openSync, closeSync, readFileSync, readSync, readdirSync, realpathSync, statSync, fstatSync, constants } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { randomId } from "@counterpart/protocol";
@@ -26,7 +26,9 @@ export type GuardCategory =
   | "generic-secret"
   | "env-secret"
   | "dotenv-value"
-  | "never-share-file";
+  | "never-share-file"
+  // The message holds more encoded text than the guard will decode, so part of it went unchecked.
+  | "too-much-to-check";
 
 export type Encoding = "plain" | "reversed" | "split" | "base64" | "hex" | "url" | "escaped";
 
@@ -247,63 +249,29 @@ interface View {
   span: [number, number] | null; // where in the field this came from, if known
 }
 
-const MAX_VIEWS = 400;
-const MAX_DECODED = 256 * 1024;
+export interface Views {
+  list: View[];
+  incomplete: boolean; // a limit was reached and something went undecoded
+}
+
+const MIN_VIEWS = 600; // and one more for every 8 characters of the field
+const MIN_DECODED = 512 * 1024;
+const MAX_CODES = 65_536;
 
 // The readable stretches of decoded bytes. Random bytes (hashes, compressed
 // data) give none of any length; text that was encoded comes back whole, even
 // when the encoded run was cut at the wrong place or had words glued to it.
-const UNREADABLE = /[\ufffd\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]+/;
+const UNREADABLE = /[�\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]+/;
 function readable(s: string): string[] {
-  return s.split(UNREADABLE).filter((x) => x.length >= 8);
+  return s.split(UNREADABLE).filter((x) => x.length >= 6);
 }
 
 const reverse = (s: string): string => [...s].reverse().join("");
 
-function decodedViews(text: string, how: string, depth: number, offset: number | null, out: View[], budget: { bytes: number }): void {
-  const push = (decoded: string, kind: string, at: number, len: number): void => {
-    const chain = how === "plain" ? kind : `${how}>${kind}`;
-    const span: [number, number] | null = offset === null ? null : [offset + at, offset + at + len];
-    for (const part of readable(decoded)) {
-      if (out.length >= MAX_VIEWS || budget.bytes <= 0) return;
-      // Decoding an encoding of plain text again gives the same text; skip repeats.
-      if (out.some((v) => v.text === part)) continue;
-      budget.bytes -= part.length;
-      out.push({ text: part, how: chain, span });
-      out.push({ text: reverse(part), how: `${chain}>reversed`, span });
-      if (depth < 2) decodedViews(part, chain, depth + 1, null, out, budget);
-    }
-  };
-  // Hex, with or without separators, 0x or \x prefixes (the backslash doubled in JSON).
-  for (const m of text.matchAll(/(?:(?:\\{1,2}x|0x)?[0-9a-fA-F]{2}[\s:,-]?){8,}/g)) {
-    const hex = m[0].replace(/\\{1,2}x|0x|[\s:,-]/g, "");
-    if (hex.length % 2 === 0) push(Buffer.from(hex, "hex").toString("utf8"), "hex", m.index, m[0].length);
-  }
-  // Base64 in either alphabet, tried at each alignment in case it was cut out of a longer run.
-  for (const m of text.matchAll(/[A-Za-z0-9+/_-]{12,}={0,2}/g)) {
-    const s = m[0];
-    if (/^[0-9a-fA-F]+$/.test(s)) continue;
-    for (let skip = 0; skip < 4 && s.length - skip >= 12; skip++) push(Buffer.from(s.slice(skip), "base64").toString("utf8"), "base64", m.index, s.length);
-  }
-  // Percent-encoding.
-  for (const m of text.matchAll(/(?:%[0-9a-fA-F]{2}|[A-Za-z0-9._~+-]){6,}/g)) {
-    if ((m[0].match(/%/g)?.length ?? 0) < 3) continue;
-    try {
-      push(decodeURIComponent(m[0].replace(/\+/g, " ")), "url", m.index, m[0].length);
-    } catch {
-      // not valid percent-encoding
-    }
-  }
-  // Base32, as in TOTP secrets and some exports.
-  for (const m of text.matchAll(/\b[A-Z2-7]{16,}=*/g)) push(base32(m[0]), "base32", m.index, m[0].length);
-  // Character codes in decimal: "90, 116, 52, ...".
-  for (const m of text.matchAll(/(?:\b(?:3[2-9]|[4-9]\d|1[01]\d|12[0-6])\b[\s,;]*){8,}/g)) {
-    push(String.fromCharCode(...m[0].split(/[\s,;]+/).filter(Boolean).map(Number)), "codes", m.index, m[0].length);
-  }
-  // \u escapes.
-  for (const m of text.matchAll(/(?:\\u[0-9a-fA-F]{4}){4,}/g)) {
-    push(m[0].replace(/\\u([0-9a-fA-F]{4})/g, (_, h: string) => String.fromCharCode(parseInt(h, 16))), "escaped", m.index, m[0].length);
-  }
+function fromCodes(codes: number[]): string {
+  let out = "";
+  for (let i = 0; i < codes.length; i += 4096) out += String.fromCharCode(...codes.slice(i, i + 4096));
+  return out;
 }
 
 function base32(s: string): string {
@@ -312,7 +280,7 @@ function base32(s: string): string {
   let value = 0;
   const out: number[] = [];
   for (const c of s.replace(/=+$/, "")) {
-    value = (value << 5) | A.indexOf(c);
+    value = ((value << 5) | A.indexOf(c)) & 0xffff;
     bits += 5;
     if (bits >= 8) {
       out.push((value >>> (bits - 8)) & 0xff);
@@ -324,28 +292,92 @@ function base32(s: string): string {
 
 const rot13 = (s: string): string => s.replace(/[A-Za-z]/g, (c) => String.fromCharCode(((c.charCodeAt(0) - (c <= "Z" ? 65 : 97) + 13) % 26) + (c <= "Z" ? 65 : 97)));
 
-// The field as written, reversed, and every encoded run in it decoded, also
-// after the separators someone may have put between the pieces are removed.
-export function views(text: string): View[] {
-  const out: View[] = [{ text, how: "plain", span: null }];
-  out.push({ text: reverse(text), how: "reversed", span: null });
-  out.push({ text: rot13(text), how: "rot13", span: null });
-  // Full-width and other compatibility forms of letters and digits.
-  const folded = text.normalize("NFKC");
-  if (folded !== text) out.push({ text: folded, how: "folded", span: null });
-  const budget = { bytes: MAX_DECODED };
-  decodedViews(text, "plain", 0, 0, out, budget);
-  // Text inside a JSON or code string, with its escapes undone.
-  let unescaped = text;
-  if (/\\[nrt"\\/u]/.test(text)) {
-    unescaped = text.replace(/\\u([0-9a-fA-F]{4})|\\([nrt"\\/])/g, (_, h: string | undefined, c: string | undefined) => (h ? String.fromCharCode(parseInt(h, 16)) : c === "n" ? "\n" : c === "r" ? "\r" : c === "t" ? "\t" : c!));
-    out.push({ text: unescaped, how: "escaped", span: null });
-    decodedViews(unescaped, "escaped", 0, null, out, budget);
+const unescape = (s: string): string =>
+  s.replace(/\\u([0-9a-fA-F]{4})|\\([nrt"\\/])/g, (_, h: string | undefined, c: string | undefined) => (h ? String.fromCharCode(parseInt(h, 16)) : c === "n" ? "\n" : c === "r" ? "\r" : c === "t" ? "\t" : c!));
+// Pieces put on separate lines, between quotes, or joined with + in code.
+const unsplit = (s: string): string => s.replace(/["'`]\s*\+\s*["'`]/g, "").replace(/["'`\s,;|]+/g, "");
+
+// Every encoded run in a text, decoded: [kind, decoded, index, length].
+function decodings(text: string): [string, string, number, number][] {
+  const out: [string, string, number, number][] = [];
+  // Hex, with or without separators, 0x or \x prefixes (the backslash doubled in JSON).
+  for (const m of text.matchAll(/(?:(?:\\{1,2}x|0x)?[0-9a-fA-F]{2}[\s:,-]?){8,}/g)) {
+    const hex = m[0].replace(/\\{1,2}x|0x|[\s:,-]/g, "");
+    if (hex.length % 2 === 0) out.push(["hex", Buffer.from(hex, "hex").toString("utf8"), m.index, m[0].length]);
   }
-  // Pieces put on separate lines, between quotes, or joined with + in code.
-  const joined = unescaped.replace(/["'`]\s*\+\s*["'`]/g, "").replace(/["'`\s,;|]+/g, "");
-  if (joined !== unescaped) decodedViews(joined, "split", 0, null, out, budget);
+  // Base64 in either alphabet, tried at each alignment in case it was cut out of a longer run.
+  for (const m of text.matchAll(/[A-Za-z0-9+/_-]{8,}={0,2}/g)) {
+    const s = m[0];
+    if (/^[0-9a-fA-F]+$/.test(s)) continue;
+    for (let skip = 0; skip < 4 && s.length - skip >= 8; skip++) out.push(["base64", Buffer.from(s.slice(skip), "base64").toString("utf8"), m.index, s.length]);
+  }
+  // Percent-encoding.
+  for (const m of text.matchAll(/(?:%[0-9a-fA-F]{2}|[A-Za-z0-9._~+-]){6,}/g)) {
+    if ((m[0].match(/%/g)?.length ?? 0) < 3) continue;
+    try {
+      out.push(["url", decodeURIComponent(m[0].replace(/\+/g, " ")), m.index, m[0].length]);
+    } catch {
+      // not valid percent-encoding
+    }
+  }
+  // Base32, as in TOTP secrets and some exports.
+  for (const m of text.matchAll(/\b[A-Z2-7]{16,}=*/g)) out.push(["base32", base32(m[0]), m.index, m[0].length]);
+  // Character codes in decimal: "90, 116, 52, ...".
+  for (const m of text.matchAll(/(?:\b(?:3[2-9]|[4-9]\d|1[01]\d|12[0-6])\b[\s,;]*){8,}/g)) {
+    out.push(["codes", fromCodes(m[0].split(/[\s,;]+/).filter(Boolean).slice(0, MAX_CODES).map(Number)), m.index, m[0].length]);
+  }
+  // \u escapes.
+  for (const m of text.matchAll(/(?:\\u[0-9a-fA-F]{4}){4,}/g)) {
+    out.push(["escaped", m[0].replace(/\\u([0-9a-fA-F]{4})/g, (_, h: string) => String.fromCharCode(parseInt(h, 16))), m.index, m[0].length]);
+  }
   return out;
+}
+
+// The field as written and every way of reading it the guard knows: turned
+// around, rot13, full-width folded, unescaped, with separators taken out, and
+// each encoded run decoded, two levels deep, with the same done to what comes
+// out. Work is bounded; when a bound is reached the result says so, and the
+// message is held rather than sent half-checked.
+export function views(text: string): Views {
+  const list: View[] = [];
+  const seen = new Set<string>();
+  let bytes = Math.max(MIN_DECODED, 12 * text.length);
+  const maxViews = Math.max(MIN_VIEWS, Math.ceil(text.length / 8));
+  let incomplete = false;
+  const queue: { v: View; depth: number; surface: number }[] = [];
+  const add = (t: string, how: string, span: View["span"], depth: number, surface: number): void => {
+    if (!t || seen.has(t)) return;
+    if (list.length >= maxViews || bytes < t.length) {
+      incomplete = true;
+      return;
+    }
+    bytes -= t.length;
+    seen.add(t);
+    const v = { text: t, how, span };
+    list.push(v);
+    queue.push({ v, depth, surface });
+  };
+  const chain = (how: string, step: string): string => (how === "plain" ? step : `${how}>${step}`);
+  add(text, "plain", null, 0, 0);
+  for (let i = 0; i < queue.length; i++) {
+    const { v, depth, surface } = queue[i]!;
+    // Surface changes: at most two in a row, rot13 and folding only on what was written.
+    if (surface < 2) {
+      add(reverse(v.text), chain(v.how, "reversed"), v.span, depth, surface + 1);
+      add(unsplit(v.text), chain(v.how, "split"), v.span, depth, surface + 1);
+      if (/\\[nrtu"\\/]/.test(v.text)) add(unescape(v.text), chain(v.how, "escaped"), v.span, depth, surface + 1);
+      if (depth === 0 && surface === 0) {
+        add(rot13(v.text), "rot13", null, 0, 2);
+        add(v.text.normalize("NFKC"), "folded", null, 0, 1);
+      }
+    }
+    if (depth >= 3) continue;
+    for (const [kind, decoded, at, len] of decodings(v.text)) {
+      const span: View["span"] = v.how === "plain" ? [at, at + len] : v.span;
+      for (const part of readable(decoded)) add(part, chain(v.how, kind), span, depth + 1, 0);
+    }
+  }
+  return { list, incomplete };
 }
 
 const compact = (s: string): string => s.replace(/[^A-Za-z0-9]/g, "").toLowerCase();
@@ -371,19 +403,33 @@ export function worthMatching(value: string, secretName: boolean): boolean {
   if (/^[0-9]+$/.test(value) && value.length < 12) return false;
   if (/^[A-Za-z]+$/.test(value) && value.length < 12) return false;
   if (/^(?:\/|~\/|\.\.?\/|[A-Za-z]:\\)\S*$/.test(value)) return false; // a path
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return /:\/\/[^/\s@]+@/.test(value); // a URL is a secret only with a user or password in it
+  // A URL is a secret when it has a user or password in it, or when a
+  // secret-named variable holds it and a part of it looks like a key.
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return /:\/\/[^/\s@]+@/.test(value) || (secretName && urlKeys(value).length > 0);
   if (secretName) return true;
   return tokenLike(value);
 }
 
 export const tokenLike = (v: string): boolean => v.length >= 16 && v.length <= 512 && !/\s/.test(v) && /[A-Za-z]/.test(v) && /[0-9]/.test(v) && entropy(v) >= 3.0;
 
+// The parts of a URL that look like keys: a password, a path segment, a query value.
+function urlKeys(value: string): string[] {
+  const out: string[] = [];
+  const pw = /:\/\/[^/\s:@]*:([^/\s@]+)@/.exec(value)?.[1];
+  if (pw && pw.length >= 8) out.push(pw);
+  const user = /:\/\/([^/\s:@]+)@/.exec(value)?.[1];
+  if (user && tokenLike(user)) out.push(user);
+  const rest = value.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i, "");
+  for (const part of rest.split(/[/?&=#]+/)) if (tokenLike(part)) out.push(part);
+  return out;
+}
+
 function exact(value: string, category: GuardCategory, rule: string): Exact[] {
   const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(value);
+  // A whole URL counts only whole: its host and path are not secret. The
+  // parts that look like keys count on their own, pieces included.
   const out: Exact[] = [{ value, compact: compact(value), category, rule, ...(url ? { whole: true } : {}) }];
-  // The password inside a URL can leak on its own.
-  const pw = /:\/\/[^/\s:@]*:([^/\s@]+)@/.exec(value)?.[1];
-  if (pw && pw.length >= 8) out.push({ value: pw, compact: compact(pw), category, rule });
+  if (url) for (const k of urlKeys(value)) out.push({ value: k, compact: compact(k), category, rule });
   return out;
 }
 
@@ -410,7 +456,7 @@ export function parseDotenv(text: string): { name: string; value: string }[] {
   return out;
 }
 
-const MAX_FILE = 1024 * 1024;
+const MAX_FILE = 4 * 1024 * 1024;
 
 // Read a regular file without following a symlink at its last component.
 function readSmall(path: string): string | null {
@@ -493,6 +539,20 @@ export interface Shingles {
   set: Set<string>;
 }
 
+// Why a registered file gives no protection right now, or null when it does.
+export function fileProblem(path: string): string | null {
+  let st;
+  try {
+    st = lstatSync(path);
+  } catch {
+    return "cannot be read";
+  }
+  if (st.isSymbolicLink()) return "is a symbolic link";
+  if (!st.isFile()) return "is not a file";
+  if (st.size > MAX_FILE) return `is larger than ${MAX_FILE / 1024 / 1024} MB; only the start is checked`;
+  return null;
+}
+
 export function neverShare(file: string): { shingles: Shingles | null; exact: Exact[] } {
   const text = readSmall(file);
   if (text === null) return { shingles: null, exact: [] };
@@ -521,67 +581,90 @@ export interface Field {
   text: string;
 }
 
-// A piece of a secret is as bad as all of it. Every run of FRAGMENT letters
-// and digits from a longer exact value counts, if it has both letters and
-// digits (so a run of plain words from a passphrase does not).
-const FRAGMENT = 10;
-function fragments(exact: Exact[]): Map<string, Exact> {
-  const out = new Map<string, Exact>();
-  for (const e of exact) {
-    if (e.compact.length < 16 || e.whole) continue;
-    for (let i = 0; i + FRAGMENT <= e.compact.length; i++) {
-      const w = e.compact.slice(i, i + FRAGMENT);
-      if (/[a-z]/.test(w) && /[0-9]/.test(w) && !out.has(w)) out.set(w, e);
-    }
-  }
-  return out;
-}
-
 // The runs of letters and digits that look like pieces of a key (they have a
 // digit, or a capital inside), joined. "first part Zt4mQ9vL, then 2xR8pW1n"
 // gives "zt4mq9vl2xr8pw1n": the words put between the pieces drop out.
 export const pieces = (s: string): string =>
   (s.match(/[A-Za-z0-9]+/g) ?? []).filter((w) => /\d/.test(w) || /[a-z][A-Z]/.test(w)).join("").toLowerCase();
 
-// `earlier` is what this side recently sent the same contact, oldest first,
-// so a secret cut into several messages is caught when the piece that
-// completes a fragment is about to go.
-export function scan(fields: Field[], secrets: Secrets, earlier: string[] = []): Finding[] {
+// A piece of a secret is as bad as all of it. The guard counts how much of
+// each random-looking value (sixteen or more letters and digits, not a whole
+// URL) a message carries, in runs of GRAM with a letter and a digit, in any
+// reading of the message. COVER characters of one value is a hold, whether
+// they come in one message or spread over the recent ones to that contact.
+const GRAM = 6;
+const COVER = 10;
+type Grams = Map<string, { e: Exact; at: number }[]>;
+function grams(exact: Exact[]): Grams {
+  const out: Grams = new Map();
+  for (const e of exact) {
+    if (e.compact.length < 16 || e.whole) continue;
+    for (let i = 0; i + GRAM <= e.compact.length; i++) {
+      const g = e.compact.slice(i, i + GRAM);
+      if (!/[a-z]/.test(g) || !/[0-9]/.test(g)) continue;
+      const list = out.get(g) ?? [];
+      list.push({ e, at: i });
+      out.set(g, list);
+    }
+  }
+  return out;
+}
+
+function cover(streams: string[], index: Grams, into = new Map<Exact, Set<number>>()): Map<Exact, Set<number>> {
+  if (!index.size) return into;
+  for (const s of streams) {
+    for (let i = 0; i + GRAM <= s.length; i++) {
+      const hits = index.get(s.slice(i, i + GRAM));
+      if (!hits) continue;
+      for (const { e, at } of hits) {
+        const set = into.get(e) ?? new Set<number>();
+        for (let k = at; k < at + GRAM; k++) set.add(k);
+        into.set(e, set);
+      }
+    }
+  }
+  return into;
+}
+
+// What the gram counting looks at in one message: every reading of every field, flattened two ways.
+function streams(fields: Field[]): { streams: string[]; incomplete: boolean } {
+  const out: string[] = [];
+  let incomplete = false;
+  for (const f of fields) {
+    const v = views(f.text);
+    incomplete ||= v.incomplete;
+    for (const x of v.list) out.push(compact(x.text), pieces(x.text));
+  }
+  return { streams: out, incomplete };
+}
+
+// `earlier` is what this side recently sent the same contact, oldest first.
+export function scan(fields: Field[], secrets: Secrets, earlier: Field[][] = []): Finding[] {
   const found = new Map<string, Finding>();
   const add = (f: Finding): void => {
     const k = `${f.field} ${f.rule} ${f.how}`;
     if (!found.has(k)) found.set(k, f);
   };
-  const frags = fragments(secrets.exact);
-  const fragmentIn = (flat: string, from = 0, to = flat.length): Exact | undefined => {
-    for (let i = from; i < to && i + FRAGMENT <= flat.length; i++) {
-      const e = frags.get(flat.slice(i, i + FRAGMENT));
-      if (e) return e;
-    }
-    return undefined;
-  };
   for (const { field, text } of fields) {
     if (!text) continue;
-    const p = pieces(text.normalize("NFKC"));
-    const whole = secrets.exact.find((e) => !e.whole && e.compact.length >= 10 && p.includes(e.compact)) ?? fragmentIn(p);
-    if (whole) add({ category: whole.category, rule: whole.rule, field, how: "pieces", start: 0, end: text.length });
-    for (const v of views(text)) {
+    const vs = views(text);
+    if (vs.incomplete) add({ category: "too-much-to-check", rule: "guard-limits", field, how: "plain", start: 0, end: text.length });
+    for (const v of vs.list) {
       const whole = v.span ?? [0, text.length];
       for (const h of patternHits(v.text, v.how === "rot13")) {
         const span = v.how === "plain" ? [h.start, h.end] : whole;
         add({ category: h.category, rule: h.rule, field, how: v.how, start: span[0]!, end: span[1]! });
       }
       const flat = compact(v.text);
+      const bits = pieces(v.text);
       for (const e of secrets.exact) {
         const at = v.text.indexOf(e.value);
         if (at >= 0) {
           add({ category: e.category, rule: e.rule, field, how: v.how, start: v.how === "plain" ? at : whole[0], end: v.how === "plain" ? at + e.value.length : whole[1] });
-        } else if (e.compact.length >= 10 && flat.includes(e.compact)) {
+        } else if (e.compact.length >= 10 && (flat.includes(e.compact) || (!e.whole && bits.includes(e.compact)))) {
           add({ category: e.category, rule: e.rule, field, how: v.how === "plain" ? "split" : `${v.how}>split`, start: whole[0], end: whole[1] });
         }
       }
-      const part = fragmentIn(flat);
-      if (part) add({ category: part.category, rule: part.rule, field, how: v.how === "plain" ? "part" : `${v.how}>part`, start: whole[0], end: whole[1] });
       for (const s of secrets.shingles) {
         for (let i = 0; i + SHINGLE <= flat.length; i++) {
           if (s.set.has(flat.slice(i, i + SHINGLE))) {
@@ -592,14 +675,16 @@ export function scan(fields: Field[], secrets: Secrets, earlier: string[] = []):
       }
     }
   }
-  // Across messages: the earlier ones then this one, and this one then the
-  // earlier ones, looking only at runs that reach into this message.
-  if (earlier.length && frags.size) {
-    for (const cut of [compact, pieces]) {
-      const before = earlier.map(cut).join("");
-      const now = fields.map((f) => cut(f.text)).join("");
-      const e = fragmentIn(before + now, Math.max(0, before.length - FRAGMENT + 1)) ?? fragmentIn(now + before, 0, now.length);
-      if (e) add({ category: e.category, rule: e.rule, field: fields[0]?.field ?? "body", how: "across messages", start: 0, end: fields[0]?.text.length ?? 0 });
+  const index = grams(secrets.exact);
+  if (index.size) {
+    const now = cover(streams(fields).streams, index);
+    const before = earlier.length ? cover(earlier.flatMap((m) => streams(m).streams), index) : new Map<Exact, Set<number>>();
+    const first = fields[0];
+    for (const [e, here] of now) {
+      const was = before.get(e) ?? new Set<number>();
+      const fresh = [...here].filter((k) => !was.has(k));
+      if (!fresh.length || was.size + fresh.length < COVER) continue;
+      add({ category: e.category, rule: e.rule, field: first?.field ?? "body", how: here.size >= COVER ? "part" : "across messages", start: 0, end: first?.text.length ?? 0 });
     }
   }
   return [...found.values()];
@@ -666,6 +751,28 @@ export interface GuardOptions {
 
 export type PathKind = "repo" | "never-share";
 
+export interface Outgoing {
+  contactRoot: string;
+  threadId: string | null;
+  type: string;
+  body: unknown;
+}
+
+// Stopped by the second look inside the commit; becomes a HeldError after rollback.
+export class Recheck extends Error {
+  readonly out: Outgoing;
+  readonly findings: Finding[];
+  constructor(out: Outgoing, findings: Finding[]) {
+    super("held for your human");
+    this.out = out;
+    this.findings = findings;
+  }
+}
+
+// Far beyond anything the protocol lets through (eight attachments of 64,000
+// characters and a 32,000 character text). Larger input is held unread.
+const MAX_BODY = 1_000_000;
+
 export class Guard {
   private db: DatabaseSync;
   private opts: GuardOptions;
@@ -678,12 +785,20 @@ export class Guard {
     db.exec(`
       CREATE TABLE IF NOT EXISTS held (
         id TEXT PRIMARY KEY, at INTEGER NOT NULL, state TEXT NOT NULL, contact_root TEXT NOT NULL, thread_id TEXT,
-        type TEXT NOT NULL, body TEXT, reasons TEXT NOT NULL, findings TEXT NOT NULL, event_id TEXT, closed_at INTEGER
+        type TEXT NOT NULL, body TEXT, reasons TEXT NOT NULL, findings TEXT NOT NULL, event_id TEXT, closed_at INTEGER,
+        claimed_at INTEGER
       );
       CREATE TABLE IF NOT EXISTS guard_paths (
         kind TEXT NOT NULL, path TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (kind, path)
       );
     `);
+    const cols = new Set((db.prepare("PRAGMA table_info(held)").all() as { name: string }[]).map((c) => c.name));
+    try {
+      if (!cols.has("claimed_at")) db.exec("ALTER TABLE held ADD COLUMN claimed_at INTEGER");
+    } catch (e) {
+      // Another process opening the same home added it first.
+      if (!/duplicate column/.test((e as Error).message)) throw e;
+    }
   }
 
   private get env(): Record<string, string | undefined> {
@@ -720,23 +835,22 @@ export class Guard {
   }
 
   check(body: unknown, contactRoot?: string): Finding[] {
-    return scan(fieldsOf(body), this.secrets(), contactRoot ? this.earlier(contactRoot) : []);
+    const fields = fieldsOf(body);
+    if (fields.reduce((n, f) => n + f.text.length, 0) > MAX_BODY) return [{ category: "too-much-to-check", rule: "guard-limits", field: "body", how: "plain", start: 0, end: 0 }];
+    return scan(fields, this.secrets(), contactRoot ? this.earlier(contactRoot) : []);
   }
 
   // What this side sent the contact in the last day, up to eight events,
   // oldest first. Long ones keep their ends, where a piece would join on.
-  private earlier(contactRoot: string): string[] {
+  private earlier(contactRoot: string): Field[][] {
     const rows = this.db
       .prepare("SELECT e.json FROM events e JOIN threads t ON t.id = e.thread_id WHERE e.mine = 1 AND t.contact_root = ? AND e.received_at > ? ORDER BY e.ord DESC LIMIT 8")
       .all(contactRoot, this.now() - 24 * 3600_000) as { json: string }[];
-    return rows.reverse().map((r) => {
-      const text = fieldsOf((JSON.parse(r.json) as { body: unknown }).body).map((f) => f.text).join(" ");
-      return text.length > 8000 ? `${text.slice(0, 4000)} ${text.slice(-4000)}` : text;
-    });
+    return rows.reverse().map((r) => fieldsOf((JSON.parse(r.json) as { body: unknown }).body).map((f) => ({ field: f.field, text: f.text.length > 8000 ? `${f.text.slice(0, 4000)} ${f.text.slice(-4000)}` : f.text })));
   }
 
   // Throws HeldError, after storing the message, when it must not go out.
-  screen(out: { contactRoot: string; threadId: string | null; type: string; body: unknown }): void {
+  screen(out: Outgoing): void {
     const findings = this.check(out.body, out.contactRoot);
     const reasons = [...new Set(findings.map((f) => f.category))];
     if (this.off) {
@@ -749,7 +863,26 @@ export class Guard {
     throw new HeldError(id, reasons);
   }
 
-  private store(out: { contactRoot: string; threadId: string | null; type: string; body: unknown }, state: HeldState, reasons: GuardCategory[], findings: Finding[], keepBody: boolean): string {
+  // The part of the check that depends on what was sent before, run again
+  // inside the transaction that commits the message. Two messages screened at
+  // the same time could each carry half of a value; the transaction makes the
+  // second one see the first. Throws Recheck, which the caller turns into a
+  // hold once the transaction has been rolled back.
+  recheck(out: Outgoing): void {
+    if (this.off) return;
+    const secrets = this.secrets();
+    const fields = fieldsOf(out.body);
+    const findings = scan(fields, { exact: secrets.exact, shingles: [] }, this.earlier(out.contactRoot)).filter((f) => f.how === "across messages");
+    if (findings.length) throw new Recheck(out, findings);
+  }
+
+  // Store a message the recheck stopped, and say so the usual way.
+  hold(r: Recheck): HeldError {
+    const reasons = [...new Set(r.findings.map((f) => f.category))];
+    return new HeldError(this.store(r.out, "held", reasons, r.findings, true), reasons);
+  }
+
+  private store(out: Outgoing, state: HeldState, reasons: GuardCategory[], findings: Finding[], keepBody: boolean): string {
     const id = randomId(9);
     this.db
       .prepare("INSERT INTO held (id, at, state, contact_root, thread_id, type, body, reasons, findings) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
@@ -757,14 +890,15 @@ export class Guard {
     return id;
   }
 
+  // A release that was cut short (the process died before it committed) is held again.
   held(all = false): Held[] {
-    const rows = this.db.prepare(`SELECT * FROM held ${all ? "" : "WHERE state = 'held'"} ORDER BY at, rowid`).all() as unknown as HeldRow[];
+    const rows = this.db.prepare(`SELECT * FROM held ${all ? "" : "WHERE state IN ('held', 'releasing')"} ORDER BY at, rowid`).all() as unknown as HeldRow[];
     return rows.map(toHeld);
   }
 
   counts(): { held: number; unguarded: number } {
-    const n = (state: string): number => (this.db.prepare("SELECT COUNT(*) AS n FROM held WHERE state = ?").get(state) as { n: number }).n;
-    return { held: n("held"), unguarded: n("unguarded") };
+    const n = (states: string): number => (this.db.prepare(`SELECT COUNT(*) AS n FROM held WHERE state IN (${states})`).get() as { n: number }).n;
+    return { held: n("'held', 'releasing'"), unguarded: n("'unguarded'") };
   }
 
   // A held message by id or the first four or more characters of it.
@@ -776,24 +910,31 @@ export class Guard {
     return toHeld(rows[0]!);
   }
 
-  // Take a held message for sending. Only one caller wins.
+  // Take a held message for sending. Only one caller wins. A claim older than
+  // ten minutes belonged to a release that died before committing anything
+  // (sending and marking it released are one transaction), so it can be taken again.
   claim(id: string): Held {
-    const r = this.db.prepare("UPDATE held SET state = 'releasing' WHERE id = ? AND state = 'held'").run(id);
-    if (r.changes !== 1) throw new Error("that message is not held any more. See: cpart held --all");
+    const r = this.db
+      .prepare("UPDATE held SET state = 'releasing', claimed_at = ? WHERE id = ? AND (state = 'held' OR (state = 'releasing' AND claimed_at < ?))")
+      .run(this.now(), id, this.now() - 600_000);
+    if (r.changes !== 1) throw new Error("that message is not held any more, or is being released. See: cpart held --all");
     return this.find(id);
   }
 
   unclaim(id: string): void {
-    this.db.prepare("UPDATE held SET state = 'held' WHERE id = ? AND state = 'releasing'").run(id);
+    this.db.prepare("UPDATE held SET state = 'held', claimed_at = NULL WHERE id = ? AND state = 'releasing'").run(id);
   }
 
+  // Called inside the transaction that commits the released event, so the
+  // two happen together or not at all.
   released(id: string, eventId: string): void {
-    this.db.prepare("UPDATE held SET state = 'released', body = NULL, event_id = ?, closed_at = ? WHERE id = ?").run(eventId, this.now(), id);
+    const r = this.db.prepare("UPDATE held SET state = 'released', body = NULL, event_id = ?, closed_at = ? WHERE id = ? AND state = 'releasing'").run(eventId, this.now(), id);
+    if (r.changes !== 1) throw new Error("that message is no longer being released. Nothing was sent.");
   }
 
   drop(id: string): Held {
     const h = this.find(id);
-    const r = this.db.prepare("UPDATE held SET state = 'dropped', body = NULL, closed_at = ? WHERE id = ? AND state = 'held'").run(this.now(), h.id);
+    const r = this.db.prepare("UPDATE held SET state = 'dropped', body = NULL, closed_at = ? WHERE id = ? AND (state = 'held' OR (state = 'releasing' AND claimed_at < ?))").run(this.now(), h.id, this.now() - 600_000);
     if (r.changes !== 1) throw new Error("that message is not held any more. See: cpart held --all");
     return { ...h, state: "dropped", body: null };
   }
@@ -802,13 +943,26 @@ export class Guard {
     return (this.db.prepare("SELECT path FROM guard_paths WHERE kind = ? ORDER BY at").all(kind) as { path: string }[]).map((r) => r.path);
   }
 
+  // Stored by its real path, so a link cannot later point somewhere else.
   addPath(kind: PathKind, path: string): string {
-    const abs = resolve(path);
+    const abs = realpathSync(resolve(path));
     const st = statSync(abs);
     if (kind === "repo" && !st.isDirectory()) throw new Error(`${abs} is not a directory`);
     if (kind === "never-share" && !st.isFile()) throw new Error(`${abs} is not a file`);
+    if (kind === "never-share" && st.size > MAX_FILE) throw new Error(`${abs} is larger than ${MAX_FILE / 1024 / 1024} MB. Split it, or mark the parts that matter`);
     this.db.prepare("INSERT OR IGNORE INTO guard_paths (kind, path, at) VALUES (?, ?, ?)").run(kind, abs, this.now());
     return abs;
+  }
+
+  // Registered paths that give no protection right now, and why.
+  problems(): string[] {
+    const out: string[] = [];
+    for (const f of this.paths("never-share")) {
+      const p = fileProblem(f);
+      if (p) out.push(`${f} ${p}`);
+    }
+    for (const r of this.paths("repo")) if (!existsSync(r)) out.push(`${r} cannot be found`);
+    return out;
   }
 
   removePath(kind: PathKind, path: string): boolean {

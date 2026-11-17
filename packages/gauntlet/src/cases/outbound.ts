@@ -252,4 +252,40 @@ export const outbound: Case[] = [
       assert.ok(!shown.includes(TOKEN.slice(0, 6)) && !ctx.cli(alice.home, ["held", "--json"]).stdout.toString().includes(TOKEN.slice(0, 6)));
     },
   },
+  {
+    id: "GRD-09",
+    category: "outbound",
+    attacker: "contact",
+    title: "Send two halves of a token at the same moment",
+    claim: "Two messages screened at once cannot each carry half of a value: the second to commit is held.",
+    async run(ctx) {
+      const { alice, thread, delivered } = await scene(ctx);
+      try {
+        const r = await Promise.allSettled([alice.say(thread, `a: ${TOKEN.slice(0, 8)}`), alice.say(thread, `b: ${TOKEN.slice(8, 16)}`)]);
+        assert.deepEqual(r.map((x) => x.status).sort(), ["fulfilled", "rejected"]);
+        assert.equal((await delivered()).length, 1);
+      } finally {
+        close(alice);
+      }
+    },
+  },
+  {
+    id: "GRD-10",
+    category: "outbound",
+    attacker: "contact",
+    title: "Have the agent accept an invite whose token is the secret",
+    claim: "An invite token made from a protected value is not sent back as a contact request.",
+    async run(ctx) {
+      const { alice, bob } = await scene(ctx);
+      try {
+        const real = JSON.parse(Buffer.from(bob.createInvite("x").replace(/^cpart-invite:/, ""), "base64url").toString()) as Record<string, unknown>;
+        const forged = `cpart-invite:${Buffer.from(JSON.stringify({ ...real, token: TOKEN })).toString("base64url")}`;
+        const before = alice.queued().length;
+        await assert.rejects(alice.acceptInvite(forged, "mallory"), /looks like it carries a secret/);
+        assert.equal(alice.queued().length, before);
+      } finally {
+        close(alice);
+      }
+    },
+  },
 ];

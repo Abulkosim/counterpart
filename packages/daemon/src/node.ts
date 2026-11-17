@@ -9,7 +9,7 @@ import {
   randomId, renewDevice, safetyCode, seal, signApproval, verifyAgreement, verifyApproval,
 } from "@counterpart/protocol";
 import { type SealedRoot, DEFAULT_LOG_N, sealRoot, unsealRoot } from "./rootkey.ts";
-import { type GuardOptions, type Held, Guard } from "./guard.ts";
+import { type GuardOptions, type Held, Guard, Recheck } from "./guard.ts";
 
 const DAY = 24 * 3600 * 1000;
 const RENEW_BEFORE = 30 * DAY;
@@ -346,6 +346,8 @@ export class Counterpart {
     checkName(name);
     const inv = decodeInvite(invite, this.now());
     if (inv.credential.rootKey === this.keys.rootKey) throw new Error("that is your own invite");
+    // The token goes back to the inviter. Someone could have made it out of a secret.
+    if (this.guard.check({ token: inv.token }).length && !this.guard.off) throw new Error("this invite's token looks like it carries a secret. It was not accepted.");
     if (inv.relay !== this.keys.relay) throw new Error(`invite is for relay ${inv.relay}, this identity uses ${this.keys.relay}`);
     if (this.db.prepare("SELECT 1 FROM contacts WHERE name = ? OR root_key = ?").get(name, inv.credential.rootKey)) throw new Error("you already have this contact, or that name is taken");
     const out = await this.build(inv.credential, randomId(), "contact.request", { token: inv.token }, 0, []);
@@ -379,13 +381,20 @@ export class Counterpart {
 
   async openThread(contactName: string, goal: string, released?: string): Promise<string> {
     const c = this.activeContact(contactName);
-    if (!released) this.guard.screen({ contactRoot: c.rootKey, threadId: null, type: "thread.opened", body: { goal } });
+    const screened = { contactRoot: c.rootKey, threadId: null, type: "thread.opened", body: { goal } };
+    if (!released) this.guard.screen(screened);
     const threadId = randomId();
     const out = await this.build(c.credential, threadId, "thread.opened", { goal, participants: [this.keys.rootKey, c.rootKey] }, 0, []);
-    this.tx(() => {
-      this.db.prepare("INSERT INTO threads (id, goal, contact_root, opened_by_me, created_at, genesis) VALUES (?, ?, ?, 1, ?, ?)").run(threadId, goal, c.rootKey, this.now(), hashOf(out.event));
-      this.commitOut(out);
-    });
+    try {
+      this.tx(() => {
+        if (!released) this.guard.recheck(screened);
+        this.db.prepare("INSERT INTO threads (id, goal, contact_root, opened_by_me, created_at, genesis) VALUES (?, ?, ?, 1, ?, ?)").run(threadId, goal, c.rootKey, this.now(), hashOf(out.event));
+        this.commitOut(out);
+        if (released) this.guard.released(released, out.event.id);
+      });
+    } catch (e) {
+      throw e instanceof Recheck ? this.guard.hold(e) : e;
+    }
     return threadId;
   }
 
@@ -400,7 +409,8 @@ export class Counterpart {
     const t = this.db.prepare("SELECT contact_root FROM threads WHERE id = ?").get(threadId) as { contact_root: string } | undefined;
     if (!t) throw new Error(`no thread ${threadId}`);
     const c = this.activeContact(t.contact_root);
-    if (!released) this.guard.screen({ contactRoot: c.rootKey, threadId, type, body });
+    const screened = { contactRoot: c.rootKey, threadId, type, body };
+    if (!released) this.guard.screen(screened);
     const mine = deviceId(this.keys.device.credential);
     // Sequence numbers are allocated here and committed below; a clash with a
     // concurrent writer fails the unique index and the caller retries.
@@ -410,11 +420,15 @@ export class Counterpart {
       const out = await this.build(c.credential, threadId, type, body, seq, parents);
       try {
         this.tx(() => {
+          // Again inside the commit, so two messages sent at once cannot each carry half of a value.
+          if (!released) this.guard.recheck(screened);
           this.checkAct(out.event, this.keys.rootKey);
           this.commitOut(out);
+          if (released) this.guard.released(released, out.event.id);
         });
         return out.event as ThreadEvent<T>;
       } catch (e) {
+        if (e instanceof Recheck) throw this.guard.hold(e);
         if (e instanceof Reject) throw new Error(e.message);
         if (attempt >= 5 || !/UNIQUE constraint failed: events/.test((e as Error).message)) throw e;
       }
@@ -427,22 +441,18 @@ export class Counterpart {
   }
 
   // Send a message the outbound guard held, as it was written. Only the owner
-  // may: a passphrase-locked root key is unlocked first, which fails on a
-  // wrong passphrase. The CLI also insists on a terminal.
+  // may: the passphrase is checked first, and an identity without one cannot
+  // release at all, since nothing would tell its owner from an agent. The CLI
+  // also insists on a terminal. Sending and marking it released are one transaction.
   async releaseHeld(ref: string, passphrase?: string): Promise<{ held: Held; eventId: string; threadId: string }> {
+    if (!this.keys.sealedRoot) throw new Error("this identity was made without a passphrase, so nothing can tell you from an agent here, and held messages cannot be released. Drop it, and send what you meant to send in words that do not carry the secret.");
     this.checkPassphrase(passphrase);
     const h = this.guard.claim(this.guard.find(ref).id);
     try {
       let threadId: string;
-      let eventId: string;
-      if (h.type === "thread.opened") {
-        threadId = await this.openThread(h.contactRoot, (h.body as { goal: string }).goal, h.id);
-        eventId = (this.db.prepare("SELECT id FROM events WHERE thread_id = ? AND mine = 1 AND author_seq = 0").get(threadId) as { id: string }).id;
-      } else {
-        threadId = h.threadId!;
-        eventId = (await this.post(threadId, h.type as EventType, h.body as never, [], h.id)).id;
-      }
-      this.guard.released(h.id, eventId);
+      if (h.type === "thread.opened") threadId = await this.openThread(h.contactRoot, (h.body as { goal: string }).goal, h.id);
+      else threadId = (await this.post(h.threadId!, h.type as EventType, h.body as never, [], h.id)).threadId;
+      const eventId = this.guard.find(h.id).eventId!;
       return { held: h, eventId, threadId };
     } catch (e) {
       this.guard.unclaim(h.id);
