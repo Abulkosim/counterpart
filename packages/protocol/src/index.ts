@@ -10,3 +10,4 @@ export * from "./agreement.ts";
 export * from "./envelope.ts";
 export * from "./invite.ts";
 export * from "./relay-frames.ts";
+export * from "./relays.ts";
