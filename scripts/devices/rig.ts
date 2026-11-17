@@ -50,8 +50,7 @@ export interface RigOptions {
   log: (line: string) => void;
 }
 
-// The relay as the devices reach it. `restartable` is false when a restart
-// would give it a new address (a quick tunnel).
+// The relay as the devices reach it.
 export interface RelayInfo {
   mode: Mode;
   url: string;
@@ -65,6 +64,7 @@ export class Rig {
   private ips: Record<Device, number> = { laptop: 10, devcontainer: 20 };
   relay: RelayInfo | undefined;
   private relayProc: ChildProcess | undefined;
+  private owned = false;
   private paused = new Set<Device>();
   private offline = new Set<Device>();
   readonly trace: string;
@@ -105,6 +105,7 @@ export class Rig {
       const subnet = `10.234.${third}.0/24`;
       const r = await this.docker(["network", "create", "--driver", "bridge", "--subnet", subnet, this.net]);
       if (r.code === 0) {
+        this.owned = true;
         this.subnet = `10.234.${third}`;
         this.note(`network ${this.net} ${subnet}`);
         return;
@@ -252,8 +253,9 @@ export class Rig {
   }
 
   async startDevice(d: Device): Promise<void> {
-    const host = this.relay?.mode === "host" ? "host.docker.internal:host-gateway" : this.relay?.mode === "container" ? undefined : undefined;
-    const args = ["run", "-d", "--init", "--name", this.name(d), "--hostname", d, "--network", this.net, "--ip", this.ip(d), ...(host ? ["--add-host", host] : [])];
+    // In container mode the relay container answers to host.docker.internal on this network.
+    const host = this.relay?.mode === "host" ? ["--add-host", "host.docker.internal:host-gateway"] : [];
+    const args = ["run", "-d", "--init", "--name", this.name(d), "--hostname", d, "--network", this.net, "--ip", this.ip(d), ...host];
     const cred = this.o.creds[d];
     if (cred) args.push("-v", `${cred}:/home/node/.claude-rig/.credentials.json:ro`);
     args.push(this.o.image);
@@ -267,9 +269,12 @@ export class Rig {
     if (r.code !== 0) throw new Error(`seeding ${d}: ${r.err}`);
   }
 
+  // Values in opts.env go through the docker client's environment, not its
+  // arguments, so a passphrase does not show in a process listing.
   exec(d: Device, cmd: string[], opts: { env?: Record<string, string>; timeoutMs?: number; cwd?: string; input?: string } = {}): Promise<Run> {
-    const args = ["exec", "-i", ...(opts.cwd ? ["-w", opts.cwd] : []), ...Object.entries(opts.env ?? {}).flatMap(([k, v]) => ["-e", `${k}=${v}`]), this.name(d), ...cmd];
-    return sh("docker", args, { timeoutMs: opts.timeoutMs ?? 60_000, ...(opts.input !== undefined ? { input: opts.input } : {}) });
+    const env = opts.env ?? {};
+    const args = ["exec", "-i", ...(opts.cwd ? ["-w", opts.cwd] : []), ...Object.keys(env).flatMap((k) => ["-e", k]), this.name(d), ...cmd];
+    return sh("docker", args, { timeoutMs: opts.timeoutMs ?? 60_000, env: { ...process.env, ...env }, ...(opts.input !== undefined ? { input: opts.input } : {}) });
   }
 
   cpart(d: Device, args: string[], env: Record<string, string> = {}, timeoutMs = 60_000): Promise<Run> {
@@ -315,8 +320,7 @@ export class Rig {
   // Wi-Fi drop a laptop often gets one.
   async connect(d: Device, newAddress = true): Promise<void> {
     if (newAddress) this.ips[d] += 1;
-    const host = this.relay?.mode === "container" ? [] : [];
-    await this.must(["network", "connect", "--ip", this.ip(d), ...host, this.net, this.name(d)]);
+    await this.must(["network", "connect", "--ip", this.ip(d), this.net, this.name(d)]);
     this.offline.delete(d);
     this.note(`fault over: ${d} back on the network at ${this.ip(d)}`);
   }
@@ -359,9 +363,12 @@ export class Rig {
   }
 
   async teardown(): Promise<void> {
+    this.stopHostRelay();
+    // Names alone do not prove these are ours. Only a run that created its
+    // network removes anything.
+    if (!this.owned) return;
     for (const d of [...this.paused]) await this.docker(["unpause", this.name(d)]);
     await this.docker(["rm", "-f", this.name("laptop"), this.name("devcontainer"), this.name("relay")]);
     await this.docker(["network", "rm", this.net]);
-    this.stopHostRelay();
   }
 }

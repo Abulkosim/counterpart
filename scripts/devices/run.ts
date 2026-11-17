@@ -16,13 +16,18 @@ const { values: flags, positionals } = parseArgs({
   allowPositionals: true,
   options: {
     work: { type: "string" }, out: { type: "string" }, image: { type: "string" }, port: { type: "string" }, mode: { type: "string" },
-    "no-sessions": { type: "boolean" }, model: { type: "string" }, id: { type: "string" }, laptop: { type: "string" }, devcontainer: { type: "string" },
+    "no-sessions": { type: "boolean" }, model: { type: "string" }, id: { type: "string" }, laptop: { type: "string" }, devcontainer: { type: "string" }, "login-until": { type: "string" },
   },
 });
 const WORK = resolve(flags.work ?? "");
 const OUT = resolve(flags.out ?? join(WORK, "results"));
 const MODEL = flags.model ?? "claude-sonnet-5-5";
 const PASSPHRASE: Record<Device, string> = { laptop: "laptop long passphrase", devcontainer: "devcontainer long passphrase" };
+// The devices' copy of the login has no refresh token, so it stops working
+// when the access token expires. No session starts that close to it.
+const LOGIN_UNTIL = Number(flags["login-until"] ?? 0);
+// Without this a signal ends Node before the exit hook that stops a relay on this machine.
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(sig, () => process.exit(130));
 mkdirSync(join(WORK, "sessions"), { recursive: true });
 mkdirSync(OUT, { recursive: true });
 
@@ -158,6 +163,7 @@ class Running {
       }
       case "session": {
         if (flags["no-sessions"]) throw new Error("this scenario needs a live Claude Code session; run without --no-sessions");
+        if (LOGIN_UNTIL && LOGIN_UNTIL - Date.now() < (Number(st.timeout ?? 900) + 60) * 1000) throw new Error("the devices' copy of the Claude Code login would run out during this session");
         const id = (st.id as string) ?? `${d}-${this.r.sessions.length + 1}`;
         const p = this.session(d, id, this.fill(st.prompt as string), (st.tools as string[]) ?? [], Number(st.timeout ?? 900));
         if (st.background) this.sessions.set(id, p);
@@ -249,7 +255,8 @@ class Running {
     const d = st.device as Device;
     const from = other(d);
     const pattern = st.text ? new RegExp(this.fill(st.text as string), "i") : undefined;
-    const type = (st.type as string) ?? "talk.posted";
+    const types = st.type === undefined ? ["talk.posted"] : Array.isArray(st.type) ? (st.type as string[]) : [st.type as string];
+    const type = types.join(" or ");
     const since = st.since === "step" ? Date.now() : this.t0;
     const timeout = Number(st.timeout ?? 300);
     const recoverAfter = st.recover_after !== undefined ? Number(st.recover_after) : undefined;
@@ -259,9 +266,9 @@ class Running {
     for (;;) {
       if (!rig.isPaused(d)) {
         const evs = await this.scenarioEvents(d);
-        const hit = evs.find((e) => !e.mine && e.status === "applied" && e.type === type && e.receivedAt >= since - 1000 && (!pattern || pattern.test(JSON.stringify(e.body))));
+        const hit = evs.find((e) => !e.mine && e.status === "applied" && types.includes(e.type) && e.receivedAt >= since - 1000 && (!pattern || pattern.test(JSON.stringify(e.body))));
         if (hit) {
-          this.r.waits.push({ label, device: d, arrived: true, afterS: Math.round((hit.receivedAt - started) / 100) / 10, recovered });
+          this.r.waits.push({ label, device: d, arrived: true, afterS: Math.max(0, Math.round((hit.receivedAt - started) / 100) / 10), recovered });
           say(`  ${label}: arrived after ${Math.round((Date.now() - started) / 1000)}s`);
           return;
         }
@@ -348,6 +355,8 @@ class Running {
       pass = both.every(Boolean);
       detail = `agreed on laptop: ${both[0]}, on devcontainer: ${both[1]}`;
     }
+    // For what must not happen, such as a secret reaching the other side.
+    if (st.negate === true) pass = !pass;
     this.r.checks.push({ name, pass, detail });
     say(`  check ${name}: ${pass ? "pass" : "FAIL"}`);
   }
@@ -430,8 +439,11 @@ async function runScenario(s: Scenario): Promise<ScenarioResult> {
     run.r.ok = false;
     run.r.error = (e as Error).message;
     say(`  FAILED: ${run.r.error}`);
-    // A session left running would keep talking into the next scenario.
-    await Promise.race([Promise.all(run.sessions.values()), sleep(5000)]);
+    // A session left running would keep talking into the next scenario. Only
+    // the rig's own sessions match; the front desk runs claude differently.
+    await rig.heal();
+    for (const d of DEVICES) await rig.exec(d, ["pkill", "-f", "allowedTools mcp__counterpart"]);
+    await Promise.race([Promise.all(run.sessions.values()), sleep(30_000)]);
   }
   const healed = await rig.heal();
   if (healed.length) run.r.notes.push(`after the steps the rig undid: ${healed.join(", ")}`);
@@ -443,8 +455,8 @@ async function runScenario(s: Scenario): Promise<ScenarioResult> {
   }
   if (run.r.checks.some((c) => !c.pass)) run.r.ok = false;
   if (run.r.lost.laptopToDevcontainer || run.r.lost.devcontainerToLaptop) run.r.ok = false;
-  // Getting there only after a restart by hand is not the smooth path.
-  if (run.r.restartedByHand) run.r.ok = false;
+  // Getting there only after a restart by hand, or not at all, is not the smooth path.
+  if (run.r.restartedByHand || run.r.waits.some((w) => !w.arrived)) run.r.ok = false;
   run.r.durationS = Math.round((Date.now() - run.t0) / 1000);
   say(`== ${s.name}: ${run.r.ok ? "ok" : "NOT OK"} in ${run.r.durationS}s; first answer ${run.r.timeToFirstAnswerS ?? "-"}s; interventions ${run.r.interventions.length}; lost ${run.r.lost.laptopToDevcontainer + run.r.lost.devcontainerToLaptop}; restarted by hand: ${run.r.restartedByHand ? "yes" : "no"}`);
   return run.r;
@@ -464,7 +476,7 @@ async function setup(res: SetupResult): Promise<SetupResult> {
   // First as a person would type it. It asks before using a relay on a private address.
   let j = await rig.cpart("devcontainer", ["join", invite, "laptop"], { CPART_PASSPHRASE: PASSPHRASE.devcontainer }, 120_000);
   if (j.code !== 0 && /this needs a terminal|Type yes/.test(j.err + j.out)) {
-    res.interventions.push({ by: "human", what: "devcontainer: typed yes to use a relay on a private address (cpart join ... --yes)", why: (j.err + j.out).trim().split("\n")[0]!.slice(0, 200), atS: Math.round((Date.now() - t0) / 1000) });
+    res.interventions.push({ by: "human", what: "devcontainer: typed yes to use a relay on a private address (cpart join ... --yes)", why: `join asks before it uses a relay on a private address; without a terminal it said: ${(j.err + j.out).trim().split("\n")[0]!.slice(0, 200)}`, atS: Math.round((Date.now() - t0) / 1000) });
     j = await rig.cpart("devcontainer", ["join", invite, "laptop", "--yes"], { CPART_PASSPHRASE: PASSPHRASE.devcontainer }, 120_000);
   }
   res.devcontainer = (j.out + j.err).trim();

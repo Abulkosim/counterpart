@@ -75,7 +75,9 @@ export interface RunResult {
 
 // ok: done with no help. A restart by hand that got it through is told apart from a failure.
 export const verdict = (s: ScenarioResult): string =>
-  s.ok ? "ok" : s.error || s.checks.some((c) => !c.pass) || s.lost.laptopToDevcontainer + s.lost.devcontainerToLaptop ? "**failed**" : "**needed a restart**";
+  s.ok ? "ok"
+  : s.error || s.checks.some((c) => !c.pass) || s.waits.some((w) => !w.arrived) || s.lost.laptopToDevcontainer + s.lost.devcontainerToLaptop ? "**failed**"
+  : "**needed a restart**";
 
 const cell = (s: string): string => s.replace(/\|/g, "\\|").replace(/\n/g, " ");
 
