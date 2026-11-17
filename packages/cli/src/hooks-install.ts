@@ -145,7 +145,7 @@ export function hookLines(r: BothHooks, safe: (s: string) => string): string[] {
   if (x.found)
     out.push(
       x.error ? `--  Codex hooks: could not change ${safe(x.file)} (${safe(x.error)})`
-      : x.state === "here" ? `ok  Codex ${x.changed === "none" ? "already has" : x.changed === "updated" ? "has updated" : "now has"} the hooks in ${safe(x.file)}${x.changed === "none" ? "" : ". Codex runs them only once you trust them: start codex, type /hooks, and trust the three Counterpart hooks"}`
+      : x.state === "here" ? `ok  Codex ${x.changed === "none" ? "already has" : x.changed === "updated" ? "has updated" : "now has"} the hooks in ${safe(x.file)}${x.changed === "none" ? "" : ". Codex runs them only once you trust them: the next time codex starts it asks you to review them, or type /hooks"}`
       : x.changed === "removed" ? `ok  Codex hooks removed from ${safe(x.file)}`
       : "--  Codex has no Counterpart hooks",
     );

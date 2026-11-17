@@ -115,7 +115,7 @@ grep -q '"systemMessage":"Counterpart stopped keeping this session on thread' "$
 export CLAUDE_CONFIG_DIR=$WORK/claude CODEX_HOME=$WORK/codex
 mkdir -p "$CLAUDE_CONFIG_DIR" "$CODEX_HOME"
 echo '{"model":"keep-me","hooks":{"Stop":[{"hooks":[{"type":"command","command":"true"}]}]}}' >"$CLAUDE_CONFIG_DIR/settings.json"
-echo '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo keep-me"}]}]},"other":1}' >"$CODEX_HOME/hooks.json"
+echo '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo keep-me"}]}]},"description":"mine"}' >"$CODEX_HOME/hooks.json"
 has() { command -v "$1" >/dev/null; }
 if has claude || has codex; then
   step "cpart setup --no-hooks, then cpart setup, in throwaway Claude Code and Codex config directories"
@@ -136,7 +136,7 @@ fi
 if has codex; then
   grep -q "^ok  Codex now has the hooks in $CODEX_HOME/hooks.json. Codex runs them only once you trust them" "$WORK/setup2.out"
   grep -q "^ok  Codex already has the hooks" "$WORK/setup3.out"
-  node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); const n=(e)=>JSON.stringify(s.hooks[e]??[]); if (s.other!==1||!n("Stop").includes("keep-me")||!n("Stop").includes("hook-main.ts")||!n("PostToolUse").includes("hook-main.ts")||!n("UserPromptSubmit").includes("hook-main.ts")||n("PostToolUse").includes(" watch")) process.exit(1)' "$CODEX_HOME/hooks.json" || fail "codex hooks.json is not as expected: $(cat "$CODEX_HOME/hooks.json")"
+  node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); const n=(e)=>JSON.stringify(s.hooks[e]??[]); if (s.description!=="mine"||!n("Stop").includes("keep-me")||!n("Stop").includes("hook-main.ts")||!n("PostToolUse").includes("hook-main.ts")||!n("UserPromptSubmit").includes("hook-main.ts")||n("PostToolUse").includes(" watch")) process.exit(1)' "$CODEX_HOME/hooks.json" || fail "codex hooks.json is not as expected: $(cat "$CODEX_HOME/hooks.json")"
 fi
 if has claude || has codex; then
   step "cpart hook remove takes out only what it added"
@@ -149,7 +149,7 @@ if has claude; then
 fi
 if has codex; then
   grep -q "^ok  Codex hooks removed" "$WORK/remove.out"
-  node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); if (JSON.stringify(s)!==JSON.stringify({hooks:{Stop:[{hooks:[{type:"command",command:"echo keep-me"}]}]},other:1})) process.exit(1)' "$CODEX_HOME/hooks.json" || fail "codex hooks.json was not restored: $(cat "$CODEX_HOME/hooks.json")"
+  node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); if (JSON.stringify(s)!==JSON.stringify({hooks:{Stop:[{hooks:[{type:"command",command:"echo keep-me"}]}]},description:"mine"})) process.exit(1)' "$CODEX_HOME/hooks.json" || fail "codex hooks.json was not restored: $(cat "$CODEX_HOME/hooks.json")"
 fi
 
 printf '\nDELIVERY SMOKE OK\n'

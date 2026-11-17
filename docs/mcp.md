@@ -83,8 +83,7 @@ Limits, so neither a stuck session nor the other side can keep it busy:
 
 What they do not do:
 
-- **`claude -p`.** The Stop hook works there: the run does not end while a followed thread has no reply, within the limits. The background wake does not: Claude Code ends background hooks when a `-p` run ends.
-- **Other Claude Code front ends.** The background wake runs only when Claude Code says it is an interactive terminal session (`CLAUDE_CODE_ENTRYPOINT=cli`). Under `claude -p`, Claude Code 2.1.326 waited for that hook instead of running it in the background, which held the tool result; so anywhere else it ends at once. The other hooks still run.
+- **Wake a `claude -p` run.** The Stop hook works there: the run does not end while a followed thread has no reply, within the limits. The background wake is off: Claude Code 2.1.326 waited for that hook under `-p` instead of running it in the background, which held the tool result. It runs only when Claude Code says the session is an interactive terminal one (`CLAUDE_CODE_ENTRYPOINT=cli`), so IDE extensions and the desktop app do not get it either. That was not tried.
 - **Windows.** The hook commands are written for `sh`.
 
 `cpart hook prompt|tool|stop|watch` is what the hooks run; it reads the hook JSON on stdin. The plugin calls `packages/mcp/src/hook-main.ts` directly, which does the same without loading the rest of the CLI.
@@ -93,7 +92,7 @@ What they do not do:
 
 Codex 0.166 has hooks too, in `$CODEX_HOME/hooks.json` (default `~/.codex/hooks.json`), with the same input and output for UserPromptSubmit, PostToolUse and Stop. `cpart setup` adds three entries there, keeping whatever else the file holds, and `cpart hook remove` takes out only its own. So in Codex a session is told of arrivals on its next prompt, after its next Counterpart tool call and when it tries to stop, and a followed thread keeps it from stopping, with the same limits.
 
-Codex runs hooks only once the person has trusted them, against their hash: start `codex`, type `/hooks`, and trust the three Counterpart hooks. Until then they do nothing. `cpart setup` says so; it does not mark them trusted for you.
+Codex runs hooks only once the person has trusted them, against their hash. The next time `codex` starts it says "Hooks need review" and offers to show them; `/hooks` does the same later. Until then they do nothing. `cpart setup` says so; it does not mark them trusted for you. Codex records trust in `config.toml` by file, event and position, so a hook added after ours in the same event can need trusting again after `cpart hook remove`. In our runs, `codex exec` without trust ran none of them, and with `--dangerously-bypass-hook-trust` (for the test only) it ran all three and the session got the follow confirmation.
 
 What Codex does not have is a way to wake an idle session. Its documentation lists background hooks but nothing like Claude Code's `asyncRewake`. `codex queue --thread <session> --message <text>` queues a message for a saved session. That would be a message in the person's place, so Counterpart does not use it; it was not tried. An idle Codex session hears about a reply the next time the person types.
 
