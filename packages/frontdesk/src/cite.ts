@@ -57,7 +57,7 @@ export function checkCitations(reply: string, files: Map<string, string>): Check
       else {
         const quote = norm(q.replace(/\\"/g, '"').replace(/(^|\s)\d{1,7}\| /g, "$1"));
         const window = norm(fl.slice(Math.max(0, start - 1 - SLACK), end + SLACK).join("\n"));
-        if (quote.replace(/\s/g, "").length < 3) bad = `quoted too little from ${path}:${start}`;
+        if (quote.replace(/\s/g, "").length < 6) bad = `quoted too little from ${path}:${start}`;
         else if (!window.includes(quote)) bad = `quoted text that is not at ${path}:${start}${end > start ? `-${end}` : ""}`;
       }
       if (bad) break;
