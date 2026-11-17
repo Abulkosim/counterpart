@@ -1,9 +1,9 @@
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Counterpart } from "@counterpart/daemon";
-import { readBundle } from "./bundle.ts";
+import { TEXT, compose, prepare, queryFrom, unchanged } from "./answer.ts";
 import type { Model } from "./model.ts";
-import { ASK, systemPrompt, userPrompt } from "./prompt.ts";
+import { userPrompt } from "./prompt.ts";
 
 export interface DeskConfig {
   contact: string; // local contact name
@@ -37,19 +37,12 @@ export interface Ask {
 }
 
 const REPLY_CHARS = 6000;
-const ASK_CHARS = 300;
 const DAY = 24 * 3600 * 1000;
 const NOTICES_PER_DAY = 3;
 const ROUNDS = 3;
 
-const TEXT = {
-  noMaterial: (owner: string) => `This is ${owner}'s front desk. Nothing has been shared with you here yet, so I can't answer. ${owner} will see your message.`,
-  outOfBudget: (owner: string) => `This is ${owner}'s front desk. I've used the replies ${owner} allowed for this thread. ${owner} will see the rest of your messages.`,
-  asked: (owner: string) => `I can't answer that from what ${owner} has shared. I've passed the question to ${owner}.`,
-};
-
 // Answers a contact's questions while the owner is away, from the approved
-// bundle only. It replies in threads the contact opened, never in ones the
+// bundle or the files the owner shared from a repository, nothing else. It replies in threads the contact opened, never in ones the
 // owner opened, so two front desks cannot talk to each other in a loop. Every
 // reply first takes a slot from a budget only the owner can refill.
 export class FrontDesk {
@@ -286,46 +279,54 @@ export class FrontDesk {
       return false;
     }
 
-    const bundle = readBundle(this.node.home, contact.name);
-    if (bundle.files.length === 0) {
+    const latest = (waiting.at(-1)!.body as { text: string }).text;
+    let material: ReturnType<typeof prepare>;
+    try {
+      material = prepare(this.node.home, contact, cfg.owner, queryFrom(thread.goal, log));
+    } catch (e) {
+      // A shared repository that moved or cannot be read. Said to the owner, not the contact.
+      record("failed", { detail: `could not read what is shared: ${(e as Error).message.slice(0, 250)}` });
+      setAnswered(inputOrd);
+      return false;
+    }
+    if (!material) {
       record("no_material", { replyEventId: await post(TEXT.noMaterial(cfg.owner)) });
       return false;
     }
 
     let raw: string;
     try {
-      raw = await this.model({ system: systemPrompt(cfg.owner, contact.name, bundle), prompt: userPrompt(contact.name, thread.goal, log) });
+      raw = await this.model({ system: material.system, prompt: userPrompt(contact.name, thread.goal, log) });
     } catch (e) {
       // The slot stays spent: a peer must not get free retries by making the model fail.
-      record("failed", { bundleHash: bundle.hash, detail: (e as Error).message.slice(0, 300) });
+      record("failed", { bundleHash: material.hash, detail: (e as Error).message.slice(0, 300) });
       setAnswered(inputOrd);
       return false;
     }
 
     // The owner may have turned the desk off or changed what is shared while
     // the model was working. An answer made under the old rules is not sent.
-    if (!this.config(contact.name).enabled || readBundle(this.node.home, contact.name).hash !== bundle.hash) {
-      record("failed", { bundleHash: bundle.hash, detail: "sharing changed while answering; reply dropped" });
+    if (!this.config(contact.name).enabled || !unchanged(this.node.home, contact, material)) {
+      record("failed", { bundleHash: material.hash, detail: "sharing changed while answering; reply dropped" });
       return true;
     }
     if (ownerSpokeAfter(inputOrd)) {
-      record("failed", { bundleHash: bundle.hash, detail: "owner replied first" });
+      record("failed", { bundleHash: material.hash, detail: "owner replied first" });
       setAnswered(applied().at(-1)!.ord!);
       return false;
     }
 
-    const lines = raw.split("\n");
-    const asks = lines.filter((l) => l.trimStart().startsWith(ASK)).map((l) => l.trimStart().slice(ASK.length).trim().slice(0, ASK_CHARS)).filter(Boolean);
-    let reply = lines.filter((l) => !l.trimStart().startsWith(ASK)).join("\n").trim();
     const lowered = raw.toLowerCase();
     if (this.forbidden.some((f) => lowered.includes(f))) {
-      record("failed", { bundleHash: bundle.hash, detail: "reply contained a private value; dropped" });
+      record("failed", { bundleHash: material.hash, detail: "reply contained a private value; dropped" });
       setAnswered(inputOrd);
       return false;
     }
-    if (asks.length > 0) reply = reply ? `${reply}\n\n${TEXT.asked(cfg.owner)}` : TEXT.asked(cfg.owner);
+    const c = compose(material, raw, cfg.owner, latest);
+    let reply = c.reply;
+    const asks = c.asks;
     if (!reply) {
-      record("failed", { bundleHash: bundle.hash, detail: "empty reply" });
+      record("failed", { bundleHash: material.hash, detail: c.detail ?? "empty reply" });
       setAnswered(inputOrd);
       return false;
     }
@@ -333,7 +334,7 @@ export class FrontDesk {
 
     const replyEventId = await post(reply);
     if (asks.length > 0) this.db.prepare("INSERT INTO asks (at, contact_root, thread_id, question) VALUES (?, ?, ?, ?)").run(this.now(), contact.rootKey, threadId, asks[0]!);
-    record(asks.length > 0 ? "asked_human" : "answered", { bundleHash: bundle.hash, files: bundle.files.map((f) => f.name).filter((n) => reply.includes(n)), replyEventId });
+    record(asks.length > 0 ? "asked_human" : "answered", { bundleHash: material.hash, files: c.files, replyEventId, ...(c.detail ? { detail: c.detail } : {}) });
     return true;
   }
 
