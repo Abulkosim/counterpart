@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import WebSocket from "ws";
-import { type ClientFrame, type ServerFrame, type ThreadEvent, RELAY_AUTH_DOMAIN, isId, isObject, isStr, relayAuthMessage, sign } from "@counterpart/protocol";
+import { type ClientFrame, type PairClientFrame, type PairServerFrame, type ServerFrame, type ThreadEvent, RELAY_AUTH_DOMAIN, isId, isObject, isPairFrame, isStr, relayAuthMessage, sign } from "@counterpart/protocol";
 import type { Counterpart, Verdict } from "./node.ts";
 
 const MAX_BACKLOG = 256;
@@ -14,6 +14,8 @@ export interface LinkEvents {
   event: [ThreadEvent];
   verdict: [Verdict];
   error: [Error];
+  // Short-code pairing frames, handled by pairing.ts. Unchecked: the relay wrote them.
+  pair: [PairServerFrame];
 }
 
 // `event` is a wake-up hint, not a delivery guarantee: a crash between commit
@@ -73,6 +75,14 @@ export class RelayLink extends EventEmitter<LinkEvents> {
     return this.ready;
   }
 
+  // For pairing.ts. False when not logged in; the caller tries again later.
+  sendPair(frame: PairClientFrame): boolean {
+    const ws = this.ws;
+    if (!ws || !this.ready) return false;
+    this.send(ws, frame);
+    return true;
+  }
+
   private connect(): void {
     // Never log in with a credential that is about to expire.
     void this.node
@@ -122,6 +132,10 @@ export class RelayLink extends EventEmitter<LinkEvents> {
   }
 
   private onFrame(ws: WebSocket, frame: ServerFrame): void {
+    if (isPairFrame(frame.t)) {
+      if (this.ready) this.emit("pair", frame as PairServerFrame);
+      return;
+    }
     switch (frame.t) {
       case "challenge": {
         if (!isStr(frame.nonce, 16, 128)) return;

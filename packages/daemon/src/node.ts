@@ -226,6 +226,8 @@ export class Counterpart {
     try {
       if (!cols.has("received_at")) this.db.exec("ALTER TABLE outbox ADD COLUMN received_at INTEGER");
       if (!cols.has("resends")) this.db.exec("ALTER TABLE outbox ADD COLUMN resends INTEGER NOT NULL DEFAULT 0");
+      // An invite made after a short-code pairing is good only for the root key that proved the code.
+      if (!(this.db.prepare("PRAGMA table_info(invites)").all() as { name: string }[]).some((c) => c.name === "for_root")) this.db.exec("ALTER TABLE invites ADD COLUMN for_root TEXT");
     } catch (e) {
       // Another process opening the same home added them first.
       if (!/duplicate column/.test((e as Error).message)) throw e;
@@ -329,12 +331,12 @@ export class Counterpart {
 
   // ---- contacts ----
 
-  createInvite(name: string, ttlMs = DAY): string {
+  createInvite(name: string, ttlMs = DAY, forRoot?: string): string {
     checkName(name);
     if (this.db.prepare("SELECT 1 FROM contacts WHERE name = ?").get(name)) throw new Error(`contact "${name}" already exists`);
     const token = randomId();
     const expiresAt = this.now() + ttlMs;
-    this.db.prepare("INSERT INTO invites (token, name, expires_at) VALUES (?, ?, ?)").run(token, name, expiresAt);
+    this.db.prepare("INSERT INTO invites (token, name, expires_at, for_root) VALUES (?, ?, ?, ?)").run(token, name, expiresAt, forRoot ?? null);
     return encodeInvite({ v: 1, relay: this.keys.relay, credential: this.keys.device.credential, token, expiresAt });
   }
 
@@ -884,8 +886,9 @@ export class Counterpart {
 
         if (event.type === "contact.request") {
           const token = (event as ThreadEvent<"contact.request">).body.token;
-          const inv = this.db.prepare("SELECT * FROM invites WHERE token = ?").get(token) as { name: string; expires_at: number; used_by: string | null } | undefined;
+          const inv = this.db.prepare("SELECT * FROM invites WHERE token = ?").get(token) as { name: string; expires_at: number; used_by: string | null; for_root: string | null } | undefined;
           if (!inv) throw new Reject("contact request with unknown invite token");
+          if (inv.for_root && inv.for_root !== credential.rootKey) throw new Reject("invite token was made for someone else");
           if (inv.used_by) throw new Reject("invite token already used");
           if (inv.expires_at <= this.now()) throw new Reject("invite expired");
           if (contact) throw new Reject("contact request from an existing contact");
