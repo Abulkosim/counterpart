@@ -85,7 +85,20 @@ test("a secret from the sender's environment is held, plain or encoded, and the 
   assert.ok(held.every((h) => h.reasons.includes("env-secret") && h.type === "talk.posted"));
   // The record says where and how it matched, not the value.
   assert.ok(!JSON.stringify(held.map((h) => h.findings)).includes(TOKEN));
-  assert.deepEqual(new Set(held.flatMap((h) => h.findings.map((f) => f.how.split(">")[0]))), new Set(["plain", "base64", "reversed", "split"]));
+  const hows = new Set(held.flatMap((h) => h.findings.map((f) => f.how.split(">")[0])));
+  for (const h of ["plain", "base64", "reversed", "split"]) assert.ok(hows.has(h), `found ${h}`);
+});
+
+test("a secret cut into pieces is held, in one message or across several", async () => {
+  const { alice, bob, thread, carry } = await pair({ env: { ORDERS_SERVICE_TOKEN: TOKEN }, cwd: null });
+  const q = TOKEN.match(/.{1,7}/g)!; // four pieces of seven, each too short to match alone
+  await assert.rejects(alice.say(thread, `piece one ${q[0]}, piece two ${q[1]}, piece three ${q[2]}`), /env-secret/);
+  await alice.say(thread, `first piece: ${q[0]}`);
+  await assert.rejects(alice.say(thread, `second piece: ${q[1]}`), /env-secret/);
+  await assert.rejects(alice.say(thread, TOKEN.slice(0, 14)), /env-secret/);
+  await carry();
+  assert.deepEqual(bobTexts(bob, thread), [`first piece: ${q[0]}`], "only the first seven characters left");
+  assert.ok(alice.guard.held().some((h) => h.findings.some((f) => f.how === "across messages")));
 });
 
 test("ordinary messages go out unchanged", async () => {

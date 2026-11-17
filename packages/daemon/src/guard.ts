@@ -182,11 +182,32 @@ interface Hit {
 
 // Pattern hits in one piece of text, with gitleaks' own rules for which part
 // of a match is the secret, entropy and allowlists.
-export function patternHits(text: string): Hit[] {
+const CHUNK = 4_000;
+const OVERLAP = 1_000;
+
+// `shape` is for text put through rot13: then only rules for fixed token
+// shapes apply. Ordinary text comes out with its placeholders scrambled and
+// its structure intact, which the loose rules would take for a secret.
+export function patternHits(text: string, shape = false): Hit[] {
+  // A few upstream patterns take time that grows with the square of a line's
+  // length. Long text is checked in overlapping pieces.
+  if (text.length > CHUNK + OVERLAP) {
+    const out: Hit[] = [];
+    const seen = new Set<string>();
+    for (let at = 0; at < text.length; at += CHUNK) {
+      for (const h of patternHits(text.slice(at, at + CHUNK + OVERLAP), shape)) {
+        const k = `${h.rule} ${h.start + at}`;
+        if (!seen.has(k)) out.push({ ...h, start: h.start + at, end: h.end + at });
+        seen.add(k);
+      }
+    }
+    return out;
+  }
   const { rules: list, global } = rules();
   const lower = text.toLowerCase();
   const out: Hit[] = [];
   for (const r of list) {
+    if (shape && r.category === "generic-secret") continue;
     if (r.keywords.length && !r.keywords.some((k) => lower.includes(k))) continue;
     for (const m of text.matchAll(r.re)) {
       const match = m[0];
@@ -203,6 +224,7 @@ export function patternHits(text: string): Hit[] {
     }
   }
   for (const r of OWN) {
+    if (shape && r.category === "generic-secret") continue;
     r.re.lastIndex = 0;
     for (const m of text.matchAll(r.re)) {
       const secret = r.group ? (m[r.group] ?? "") : m[0];
@@ -231,7 +253,7 @@ const MAX_DECODED = 256 * 1024;
 // The readable stretches of decoded bytes. Random bytes (hashes, compressed
 // data) give none of any length; text that was encoded comes back whole, even
 // when the encoded run was cut at the wrong place or had words glued to it.
-const UNREADABLE = /[�\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]+/;
+const UNREADABLE = /[\ufffd\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]+/;
 function readable(s: string): string[] {
   return s.split(UNREADABLE).filter((x) => x.length >= 8);
 }
@@ -272,17 +294,45 @@ function decodedViews(text: string, how: string, depth: number, offset: number |
       // not valid percent-encoding
     }
   }
+  // Base32, as in TOTP secrets and some exports.
+  for (const m of text.matchAll(/\b[A-Z2-7]{16,}=*/g)) push(base32(m[0]), "base32", m.index, m[0].length);
+  // Character codes in decimal: "90, 116, 52, ...".
+  for (const m of text.matchAll(/(?:\b(?:3[2-9]|[4-9]\d|1[01]\d|12[0-6])\b[\s,;]*){8,}/g)) {
+    push(String.fromCharCode(...m[0].split(/[\s,;]+/).filter(Boolean).map(Number)), "codes", m.index, m[0].length);
+  }
   // \u escapes.
   for (const m of text.matchAll(/(?:\\u[0-9a-fA-F]{4}){4,}/g)) {
     push(m[0].replace(/\\u([0-9a-fA-F]{4})/g, (_, h: string) => String.fromCharCode(parseInt(h, 16))), "escaped", m.index, m[0].length);
   }
 }
 
+function base32(s: string): string {
+  const A = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let bits = 0;
+  let value = 0;
+  const out: number[] = [];
+  for (const c of s.replace(/=+$/, "")) {
+    value = (value << 5) | A.indexOf(c);
+    bits += 5;
+    if (bits >= 8) {
+      out.push((value >>> (bits - 8)) & 0xff);
+      bits -= 8;
+    }
+  }
+  return Buffer.from(out).toString("utf8");
+}
+
+const rot13 = (s: string): string => s.replace(/[A-Za-z]/g, (c) => String.fromCharCode(((c.charCodeAt(0) - (c <= "Z" ? 65 : 97) + 13) % 26) + (c <= "Z" ? 65 : 97)));
+
 // The field as written, reversed, and every encoded run in it decoded, also
 // after the separators someone may have put between the pieces are removed.
 export function views(text: string): View[] {
   const out: View[] = [{ text, how: "plain", span: null }];
   out.push({ text: reverse(text), how: "reversed", span: null });
+  out.push({ text: rot13(text), how: "rot13", span: null });
+  // Full-width and other compatibility forms of letters and digits.
+  const folded = text.normalize("NFKC");
+  if (folded !== text) out.push({ text: folded, how: "folded", span: null });
   const budget = { bytes: MAX_DECODED };
   decodedViews(text, "plain", 0, 0, out, budget);
   // Text inside a JSON or code string, with its escapes undone.
@@ -294,7 +344,7 @@ export function views(text: string): View[] {
   }
   // Pieces put on separate lines, between quotes, or joined with + in code.
   const joined = unescaped.replace(/["'`]\s*\+\s*["'`]/g, "").replace(/["'`\s,;|]+/g, "");
-  if (joined !== text) decodedViews(joined, "split", 0, null, out, budget);
+  if (joined !== unescaped) decodedViews(joined, "split", 0, null, out, budget);
   return out;
 }
 
@@ -307,6 +357,7 @@ export interface Exact {
   compact: string;
   category: GuardCategory;
   rule: string;
+  whole?: boolean; // only the whole value counts, not pieces of it (a URL: its host and path are not secret)
 }
 
 const SECRET_NAME = /secret|token|passw|pwd|passphrase|api[_-]?key|apikey|access[_-]?key|private[_-]?key|credential|auth(?!or)|session|cookie|signing|salt|dsn|database[_-]?url|db[_-]?url|conn(?:ection)?[_-]?str|webhook|bearer|jwt|encryption[_-]?key|master[_-]?key|license[_-]?key/i;
@@ -328,7 +379,8 @@ export function worthMatching(value: string, secretName: boolean): boolean {
 export const tokenLike = (v: string): boolean => v.length >= 16 && v.length <= 512 && !/\s/.test(v) && /[A-Za-z]/.test(v) && /[0-9]/.test(v) && entropy(v) >= 3.0;
 
 function exact(value: string, category: GuardCategory, rule: string): Exact[] {
-  const out: Exact[] = [{ value, compact: compact(value), category, rule }];
+  const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(value);
+  const out: Exact[] = [{ value, compact: compact(value), category, rule, ...(url ? { whole: true } : {}) }];
   // The password inside a URL can leak on its own.
   const pw = /:\/\/[^/\s:@]*:([^/\s@]+)@/.exec(value)?.[1];
   if (pw && pw.length >= 8) out.push({ value: pw, compact: compact(pw), category, rule });
@@ -469,17 +521,53 @@ export interface Field {
   text: string;
 }
 
-export function scan(fields: Field[], secrets: Secrets): Finding[] {
+// A piece of a secret is as bad as all of it. Every run of FRAGMENT letters
+// and digits from a longer exact value counts, if it has both letters and
+// digits (so a run of plain words from a passphrase does not).
+const FRAGMENT = 10;
+function fragments(exact: Exact[]): Map<string, Exact> {
+  const out = new Map<string, Exact>();
+  for (const e of exact) {
+    if (e.compact.length < 16 || e.whole) continue;
+    for (let i = 0; i + FRAGMENT <= e.compact.length; i++) {
+      const w = e.compact.slice(i, i + FRAGMENT);
+      if (/[a-z]/.test(w) && /[0-9]/.test(w) && !out.has(w)) out.set(w, e);
+    }
+  }
+  return out;
+}
+
+// The runs of letters and digits that look like pieces of a key (they have a
+// digit, or a capital inside), joined. "first part Zt4mQ9vL, then 2xR8pW1n"
+// gives "zt4mq9vl2xr8pw1n": the words put between the pieces drop out.
+export const pieces = (s: string): string =>
+  (s.match(/[A-Za-z0-9]+/g) ?? []).filter((w) => /\d/.test(w) || /[a-z][A-Z]/.test(w)).join("").toLowerCase();
+
+// `earlier` is what this side recently sent the same contact, oldest first,
+// so a secret cut into several messages is caught when the piece that
+// completes a fragment is about to go.
+export function scan(fields: Field[], secrets: Secrets, earlier: string[] = []): Finding[] {
   const found = new Map<string, Finding>();
   const add = (f: Finding): void => {
     const k = `${f.field} ${f.rule} ${f.how}`;
     if (!found.has(k)) found.set(k, f);
   };
+  const frags = fragments(secrets.exact);
+  const fragmentIn = (flat: string, from = 0, to = flat.length): Exact | undefined => {
+    for (let i = from; i < to && i + FRAGMENT <= flat.length; i++) {
+      const e = frags.get(flat.slice(i, i + FRAGMENT));
+      if (e) return e;
+    }
+    return undefined;
+  };
   for (const { field, text } of fields) {
     if (!text) continue;
+    const p = pieces(text.normalize("NFKC"));
+    const whole = secrets.exact.find((e) => !e.whole && e.compact.length >= 10 && p.includes(e.compact)) ?? fragmentIn(p);
+    if (whole) add({ category: whole.category, rule: whole.rule, field, how: "pieces", start: 0, end: text.length });
     for (const v of views(text)) {
       const whole = v.span ?? [0, text.length];
-      for (const h of patternHits(v.text)) {
+      for (const h of patternHits(v.text, v.how === "rot13")) {
         const span = v.how === "plain" ? [h.start, h.end] : whole;
         add({ category: h.category, rule: h.rule, field, how: v.how, start: span[0]!, end: span[1]! });
       }
@@ -492,6 +580,8 @@ export function scan(fields: Field[], secrets: Secrets): Finding[] {
           add({ category: e.category, rule: e.rule, field, how: v.how === "plain" ? "split" : `${v.how}>split`, start: whole[0], end: whole[1] });
         }
       }
+      const part = fragmentIn(flat);
+      if (part) add({ category: part.category, rule: part.rule, field, how: v.how === "plain" ? "part" : `${v.how}>part`, start: whole[0], end: whole[1] });
       for (const s of secrets.shingles) {
         for (let i = 0; i + SHINGLE <= flat.length; i++) {
           if (s.set.has(flat.slice(i, i + SHINGLE))) {
@@ -500,6 +590,16 @@ export function scan(fields: Field[], secrets: Secrets): Finding[] {
           }
         }
       }
+    }
+  }
+  // Across messages: the earlier ones then this one, and this one then the
+  // earlier ones, looking only at runs that reach into this message.
+  if (earlier.length && frags.size) {
+    for (const cut of [compact, pieces]) {
+      const before = earlier.map(cut).join("");
+      const now = fields.map((f) => cut(f.text)).join("");
+      const e = fragmentIn(before + now, Math.max(0, before.length - FRAGMENT + 1)) ?? fragmentIn(now + before, 0, now.length);
+      if (e) add({ category: e.category, rule: e.rule, field: fields[0]?.field ?? "body", how: "across messages", start: 0, end: fields[0]?.text.length ?? 0 });
     }
   }
   return [...found.values()];
@@ -619,13 +719,25 @@ export class Guard {
     return { exact: exactList, shingles };
   }
 
-  check(body: unknown): Finding[] {
-    return scan(fieldsOf(body), this.secrets());
+  check(body: unknown, contactRoot?: string): Finding[] {
+    return scan(fieldsOf(body), this.secrets(), contactRoot ? this.earlier(contactRoot) : []);
+  }
+
+  // What this side sent the contact in the last day, up to eight events,
+  // oldest first. Long ones keep their ends, where a piece would join on.
+  private earlier(contactRoot: string): string[] {
+    const rows = this.db
+      .prepare("SELECT e.json FROM events e JOIN threads t ON t.id = e.thread_id WHERE e.mine = 1 AND t.contact_root = ? AND e.received_at > ? ORDER BY e.ord DESC LIMIT 8")
+      .all(contactRoot, this.now() - 24 * 3600_000) as { json: string }[];
+    return rows.reverse().map((r) => {
+      const text = fieldsOf((JSON.parse(r.json) as { body: unknown }).body).map((f) => f.text).join(" ");
+      return text.length > 8000 ? `${text.slice(0, 4000)} ${text.slice(-4000)}` : text;
+    });
   }
 
   // Throws HeldError, after storing the message, when it must not go out.
   screen(out: { contactRoot: string; threadId: string | null; type: string; body: unknown }): void {
-    const findings = this.check(out.body);
+    const findings = this.check(out.body, out.contactRoot);
     const reasons = [...new Set(findings.map((f) => f.category))];
     if (this.off) {
       this.log(`COUNTERPART OUTBOUND GUARD IS OFF (CPART_GUARD=off). ${out.type} sent unchecked${reasons.length ? `. The guard would have HELD it: ${reasons.join(", ")}` : ""}.`);

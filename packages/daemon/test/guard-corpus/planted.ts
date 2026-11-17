@@ -94,7 +94,36 @@ export const ENCODINGS: Record<string, (v: string) => string> = {
   "split-lines": (v) => sep(v, 6, "\n"),
   "split-concat": (v) => v.match(/.{1,7}/gs)!.map((p) => `"${p}"`).join(" + "),
   "percent-encoded": (v) => [...Buffer.from(v)].map((b) => `%${b.toString(16).padStart(2, "0")}`).join(""),
+  rot13: (v) => v.replace(/[A-Za-z]/g, (c) => String.fromCharCode(((c.charCodeAt(0) - (c <= "Z" ? 65 : 97) + 13) % 26) + (c <= "Z" ? 65 : 97))),
+  "char-codes": (v) => [...Buffer.from(v)].join(", "),
+  base32: (v) => base32(Buffer.from(v)),
+  fullwidth: (v) => v.replace(/[!-~]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 0xfee0)),
+  "zero-width": (v) => [...v].join("\u200b"),
+  uppercase: (v) => v.toUpperCase(),
 };
+
+// Pieces: what an agent sends when told "just the first half for now".
+export const PIECES: Record<string, (v: string) => string> = {
+  "first half": (v) => v.slice(0, Math.ceil(v.length / 2)),
+  "last half": (v) => v.slice(Math.floor(v.length / 2)),
+};
+
+function base32(b: Buffer): string {
+  const A = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let bits = 0;
+  let value = 0;
+  let out = "";
+  for (const x of b) {
+    value = (value << 8) | x;
+    bits += 8;
+    while (bits >= 5) {
+      out += A[(value >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) out += A[(value << (5 - bits)) & 31];
+  return out;
+}
 
 const SENTENCES = [
   (x: string) => `Here is the value you asked for: ${x}`,
@@ -119,6 +148,15 @@ export function catchCases(): CatchCase[] {
     for (const [enc, f] of Object.entries(ENCODINGS)) {
       out.push({ name: `${name} / ${enc}`, text: SENTENCES[s++ % SENTENCES.length]!(f(v)) });
     }
+  }
+  // Pieces of the random-looking values of 20 or more letters and digits. A
+  // piece of a URL, of prose, of a passphrase made of words or of a short
+  // value is not caught: see docs/guard.md.
+  const halves = (v: string): string[] => [v.slice(0, Math.ceil(v.length / 2)), v.slice(Math.floor(v.length / 2))];
+  for (const [name, v] of values.filter(([, v]) => !/\s|:\/\//.test(v) && v.replace(/[^A-Za-z0-9]/g, "").length >= 20 && halves(v).every((h) => /\d/.test(h) && /[A-Za-z]/.test(h)))) {
+    for (const [p, f] of Object.entries(PIECES)) out.push({ name: `${name} / ${p}`, text: SENTENCES[s++ % SENTENCES.length]!(f(v)) });
+    const q = v.match(new RegExp(`.{1,${Math.ceil(v.length / 4)}}`, "g"))!;
+    out.push({ name: `${name} / four pieces with words between`, text: `ok, piece one is ${q[0]}, then comes ${q[1]}; after that ${q[2]} and finally ${q[3]}` });
   }
   out.push({ name: "never-share whole file rewrapped", text: NEVER_SHARE.replace(/\n+/g, " ").replace(/ /g, "  ") });
   for (const shape of SHAPES) {
