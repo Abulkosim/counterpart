@@ -106,7 +106,7 @@ export function pairingLines(home: string): string[] {
   try {
     return store.recent().map((v) => {
       const who = v.role === "inviter" ? `for ${v.name}` : `with ${v.name}`;
-      if (v.state === "done") return `  paired with ${v.name} by code at ${clock(v.updatedAt)}`;
+      if (v.state === "done") return `  paired with ${v.name} ${v.detail ? `(${v.detail})` : "by code"} at ${clock(v.updatedAt)}`;
       if (v.state === "failed") return `  pairing ${who} failed at ${clock(v.updatedAt)}: ${v.detail ?? ""}`;
       if (v.state === "open") return `  code ${v.code} ${who} works until ${clock(v.expiresAt)}${v.claimed ? "; someone has entered it" : ""}`;
       if (v.state === "confirmed") return `  pairing ${who}: both sides proved the code; waiting for the contact request`;

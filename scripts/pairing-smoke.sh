@@ -22,7 +22,7 @@ start_daemon alice
 start_daemon erin
 
 step "alice: cpart invite bob"
-cpart alice invite bob --json --no-wait >"$WORK/invite1.json"
+cpart alice invite bob --json --code >"$WORK/invite1.json"
 CODE=$(js code <"$WORK/invite1.json")
 FULL=$(js full <"$WORK/invite1.json")
 echo "code $CODE, line: $(js line <"$WORK/invite1.json")"
@@ -61,7 +61,7 @@ cpart carol down >/dev/null 2>&1 || true
 rm -rf "$WORK/carol"
 
 step "carol types a wrong word: both sides told, code burned"
-cpart alice invite carol --json --no-wait >"$WORK/invite2.json"
+cpart alice invite carol --json --code >"$WORK/invite2.json"
 CODE2=$(js full <"$WORK/invite2.json")
 W2=$(echo "$CODE2" | sed -E 's/^([0-9]+-[a-z]+)-([a-z]+)@/\2/')
 OTHER=acid; [ "$W2" = acid ] && OTHER=zoom
@@ -81,7 +81,7 @@ if cpart dave join "$CODE2" alice --yes --no-passphrase --no-agents >"$WORK/dave
 grep -q "No code with that number" "$WORK/dave.out"
 
 step "erin already uses this relay: the bare code is enough"
-cpart alice invite erin --json --no-wait >"$WORK/invite3.json"
+cpart alice invite erin --json --code >"$WORK/invite3.json"
 cpart erin join "$(js code <"$WORK/invite3.json")" alice --no-agents | tee "$WORK/erin.join"
 grep -q "^Paired with alice" "$WORK/erin.join"
 
@@ -102,6 +102,11 @@ cpart frank join "$F" alice --no-agents >"$WORK/frank.join"
 wait "$INV"
 cat "$WORK/alice.wait"
 grep -q "^Paired with frank" "$WORK/alice.wait" || fail "the waiting invite did not report the pairing"
+
+step "the long invite still works, and --json without --code still gives it"
+LONG=$(cpart alice invite zed --json | js invite)
+[[ "$LONG" == cpart-invite:* ]] || fail "--json no longer gives the long invite"
+cpart alice invite yan --long | grep -q "cpart join cpart-invite:" || fail "--long did not print a long invite"
 
 step "daemon logs"
 grep "pairing" "$WORK/alice.log"

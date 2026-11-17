@@ -250,6 +250,13 @@ export class PairingEngine {
           this.fail(r, "This pairing names another relay than this identity uses.");
           continue;
         }
+        // Paired some other way meanwhile, say with the long invite: the code is not needed.
+        if (r.role === "inviter" && (r.state === "requested" || r.state === "open") && this.node.contacts().some((c) => c.name === r.name)) {
+          if (r.nameplate) this.link.sendPair({ t: "pair.close", nameplate: r.nameplate });
+          this.store.set(r.id, { state: "done", detail: "paired another way; the code was closed" });
+          this.runs.delete(r.id);
+          continue;
+        }
         if (r.state === "confirmed") {
           const c = this.node.contacts().find((x) => x.rootKey === r.peer_root);
           if (c?.state === "active") {

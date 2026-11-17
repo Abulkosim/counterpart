@@ -29,7 +29,8 @@ Start here. One of these is all the setup there is:
   cpart join <code> <name>                                        the same, with the code someone sent you (7-violet-anchor@host).
                                                                   <name> is what you call them. A long cpart-invite: works too
   cpart invite <name> [--no-wait] [--long]                        make a short code to send, then wait for them. <name> is what you
-                                                                  call them. --long makes the old long invite instead
+                                                                  call them. --long makes the long invite instead. With --json
+                                                                  the long invite is printed unless you add --code
   cpart status                                                    is everything running, and what is waiting for you
   cpart up [--boot] | cpart down                                  start or stop the background daemon. --boot also starts it at login
 
@@ -112,7 +113,7 @@ const { values: flags, positionals } = parseArgs({
   options: {
     relay: { type: "string" }, port: { type: "string" }, host: { type: "string" }, db: { type: "string" },
     home: { type: "string" }, evidence: { type: "boolean" }, head: { type: "string" }, base: { type: "string" }, label: { type: "string" }, pr: { type: "string" }, run: { type: "string" }, status: { type: "string" }, bind: { type: "string", multiple: true }, work: { type: "string" }, branch: { type: "string" }, repo: { type: "string" }, paths: { type: "string" }, brief: { type: "string" }, allow: { type: "string", multiple: true }, title: { type: "string" }, file: { type: "string" }, part: { type: "string", multiple: true }, supersedes: { type: "string" },
-    out: { type: "string" }, yes: { type: "boolean" }, all: { type: "boolean" }, notify: { type: "boolean" }, "view-port": { type: "string" }, "no-passphrase": { type: "boolean" }, as: { type: "string" }, slots: { type: "string" }, daily: { type: "string" }, model: { type: "string" }, url: { type: "string" }, boot: { type: "boolean" }, "no-boot": { type: "boolean" }, "no-agents": { type: "boolean" }, tunnel: { type: "boolean" }, "no-wait": { type: "boolean" }, long: { type: "boolean" }, json: { type: "boolean" }, help: { type: "boolean", short: "h" },
+    out: { type: "string" }, yes: { type: "boolean" }, all: { type: "boolean" }, notify: { type: "boolean" }, "view-port": { type: "string" }, "no-passphrase": { type: "boolean" }, as: { type: "string" }, slots: { type: "string" }, daily: { type: "string" }, model: { type: "string" }, url: { type: "string" }, boot: { type: "boolean" }, "no-boot": { type: "boolean" }, "no-agents": { type: "boolean" }, tunnel: { type: "boolean" }, "no-wait": { type: "boolean" }, long: { type: "boolean" }, code: { type: "boolean" }, json: { type: "boolean" }, help: { type: "boolean", short: "h" },
   },
 });
 const [cmd, ...args] = positionals;
@@ -745,8 +746,10 @@ async function main(): Promise<void> {
       need(1, "invite <name>");
       // The invite completes only while this side is online to answer it.
       const d = await ensureDaemon();
-      if (!flags.long && (await inviteByCode(node, args[0]!, { out, note, safe }, { daemon: d, wait: !flags["no-wait"] && !flags.json }))) return;
-      if (!flags.long) note(d ? "The relay did not give out a short code, so here is a long invite instead." : "A short code needs the daemon running, so here is a long invite instead.");
+      // Scripts read `invite` from --json, so that stays the long form unless they ask for --code.
+      const short = flags.json ? !!flags.code : !flags.long;
+      if (short && (await inviteByCode(node, args[0]!, { out, note, safe }, { daemon: d, wait: !flags["no-wait"] && !flags.json }))) return;
+      if (short) note(d ? "The relay did not give out a short code, so here is a long invite instead." : "A short code needs the daemon running, so here is a long invite instead.");
       const invite = node.createInvite(args[0]!);
       return out(
         `Send this to ${args[0]}. It works once and expires in 24 hours. They run it, with the name they call you:\n\n  cpart join ${invite} <your name>\n${d ? "" : "\nYour daemon is not running, so their request will wait. Start it with: cpart up\n"}`,
