@@ -7,6 +7,9 @@ import {
   type ClientFrame, type ServerFrame, LIMITS, RELAY_AUTH_DOMAIN, canonicalize, deviceId, isId, isObject, isStr,
   parseWire, relayAuthMessage, verify, verifyCredential,
 } from "@counterpart/protocol";
+import { type RelayNames, relayNames } from "./names.ts";
+
+export { relayNames, splitUrls } from "./names.ts";
 
 export interface RelayOptions {
   port?: number;
@@ -16,6 +19,9 @@ export interface RelayOptions {
   // another relay forwarding our challenge to its own clients. Defaults to
   // ws://host:port.
   publicUrl?: string;
+  // More addresses this relay answers to, after publicUrl. See names.ts for
+  // what it answers to when neither is given.
+  urls?: string[];
   // Root keys allowed to use this relay. Empty means open.
   allowRoots?: string[];
   maxPerSender?: number; // queued messages from one device to one device
@@ -36,6 +42,7 @@ export interface RelayOptions {
 
 export interface Relay {
   url: string;
+  urls: string[]; // every address it answers to, url first
   port: number;
   queued(device?: string): number;
   // Re-send everything queued for a connected device. Delivery is at least once,
@@ -68,6 +75,9 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
   const buckets = new Map<string, { tokens: number; refilled: number }>();
   const rate = opts.framesPerSecond ?? 50;
   const allow = new Set(opts.allowRoots ?? []);
+  const given = [...(opts.publicUrl ? [opts.publicUrl] : []), ...(opts.urls ?? [])];
+  // A bad address is refused before anything listens.
+  if (given.length) relayNames("", 0, given);
 
   const db = new DatabaseSync(opts.dbPath ?? ":memory:");
   db.exec(`
@@ -106,7 +116,7 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
   const count = (stmt: typeof q.countAll, ...args: string[]): number => (stmt.get(...args) as { n: number }).n;
 
   const online = new Map<string, { ws: WebSocket; s: Session }>();
-  let url = "";
+  let names: RelayNames | undefined;
   const http = createServer((req, res) => {
     if (req.url === "/healthz") {
       res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, online: online.size, queued: count(q.countAll) }));
@@ -164,7 +174,7 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
         try {
           const cred = verifyCredential(frame.credential, t);
           if (!isStr(frame.relay, 1, 512) || !isStr(frame.sig)) throw new Error("fields");
-          if (frame.relay !== url) throw new RelayError("wrong_relay_url");
+          if (!names?.has(frame.relay)) throw new RelayError("wrong_relay_url");
           if (!verify(cred.signKey, RELAY_AUTH_DOMAIN, relayAuthMessage(s.nonce, frame.relay), frame.sig)) throw new Error("signature");
           if (allow.size > 0 && !allow.has(cred.rootKey)) throw new RelayError("not_invited");
           s.device = deviceId(cred);
@@ -181,7 +191,7 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
         }
         online.get(s.device)?.ws.close(4009, "replaced by a newer connection");
         online.set(s.device, { ws, s });
-        send(ws, { t: "ready", device: s.device });
+        send(ws, { t: "ready", device: s.device, features: ["ping"] });
         flush(s.device);
         return;
       }
@@ -231,6 +241,10 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
         }
         q.ack.run(s.device, frame.id);
         if (s.outstanding.delete(frame.id) && s.outstanding.size === 0) flush(s.device);
+      } else if (frame.t === "ping") {
+        // Lets a client notice within seconds that the path to us is dead.
+        const n = (frame as { n?: unknown }).n;
+        send(ws, { t: "pong", n: Number.isSafeInteger(n) ? (n as number) : 0 });
       } else ws.close(4002, "bad frame");
     });
 
@@ -267,11 +281,13 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
     throw err.code === "EADDRINUSE" ? new Error(`port ${opts.port} on ${opts.host ?? "127.0.0.1"} is already in use. Stop what is using it or pick another with --port`) : err;
   }
   const port = (http.address() as AddressInfo).port;
-  url = opts.publicUrl ?? `ws://${opts.host ?? "127.0.0.1"}:${port}`;
-  log(`relay listening on ${url}`);
+  names = relayNames(opts.host ?? "127.0.0.1", port, given);
+  const url = names.primary;
+  log(`relay listening on ${url}${names.all.length > 1 ? ` (also answers to ${names.all.slice(1).join(", ")})` : ""}`);
 
   return {
     url,
+    urls: names.all,
     port,
     queued: (device) => (device ? count(q.countBox, device) : count(q.countAll)),
     redeliver: flush,
