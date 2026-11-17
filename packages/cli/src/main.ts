@@ -16,6 +16,7 @@ import { startViewer } from "@counterpart/viewer";
 import { type WorkResult, apply as applyWork, work } from "@counterpart/worker";
 import { agents, bootInstalled, claim, down, logFile, registerAgents, running, up } from "./service.ts";
 import { openTunnel } from "./tunnel.ts";
+import { GUARD_USAGE, guardCommand } from "./guard-cli.ts";
 
 const USAGE = `cpart: let your agent talk to someone else's agent
 
@@ -99,6 +100,8 @@ using only the files you put in that contact's bundle.
   cpart asks [--all]                                              questions the front desk passed to you that are still open
   cpart asks answer <id> [text]                                   mark one answered. With text, send it to the contact as your own message
   cpart asks dismiss <id>                                         close one without answering
+
+${GUARD_USAGE}
 
 Identity lives in $CPART_HOME (default ~/.counterpart). Add --json for machine output.`;
 
@@ -356,7 +359,9 @@ function status(node: Counterpart): void {
   const toSign = threads.flatMap((t) => node.contracts(t.id).filter((c) => c.status === "open" && !c.approvedByMe).map((c) => ({ thread: t, c })));
   const agreed = threads.flatMap((t) => node.contracts(t.id).filter((c) => c.status === "agreed")).length;
   const pending = contacts.filter((c) => c.state === "pending");
+  const guard = node.guard.counts();
   const waiting = [
+    ...(guard.held ? [`  ${guard.held} message${guard.held > 1 ? "s" : ""} held by the outbound guard. Nothing was sent\n      cpart held`] : []),
     ...toSign.map(({ thread, c }) => `  contract to read, ${c.approvedByThem ? `signed by ${thread.contact}` : c.proposedByMe ? "proposed by your side" : `proposed by ${thread.contact}`}: ${safe(c.contract.title)}\n      cpart contract ${thread.id.slice(0, 8)} ${c.proposalId.slice(0, 8)}`),
     ...(asks.length ? [`  ${asks.length} question${asks.length > 1 ? "s" : ""} your front desk could not answer\n      cpart asks`] : []),
     ...pending.map((c) => `  pairing with ${c.name} has not completed; it does when both daemons are online`),
@@ -369,10 +374,11 @@ function status(node: Counterpart): void {
     `Agents    ${hosts.filter((h) => h.found).map((h) => `${h.name}: ${h.registered === "here" ? "has the tools" : h.registered === "elsewhere" ? "has the tools for ANOTHER identity" : "not added (cpart setup adds it)"}`).join("; ") || "neither claude nor codex found on PATH"}`,
     `Contacts  ${contacts.length ? contacts.map((c) => `${c.name}${c.state === "pending" ? " (pending)" : ""}${desks.get(c.name) ? " (front desk on)" : ""}`).join(", ") : "none yet. Pair with: cpart invite <name>"}`,
     `Threads   ${threads.length}${agreed ? `, ${agreed} agreement${agreed > 1 ? "s" : ""} signed by both` : ""}`,
+    `Guard     ${node.guard.off ? "OFF in this shell (CPART_GUARD=off)" : "on"}, ${guard.held} held${guard.unguarded ? `, ${guard.unguarded} sent unchecked that it would have held` : ""}`,
     "",
     waiting.length ? `Waiting for you:\n${waiting.join("\n")}` : "Nothing is waiting for you.",
   ];
-  out(lines.join("\n"), { me: node.me, daemon: d ?? null, boot: bootInstalled(home) ?? null, agents: hosts, contacts: contacts.map((c) => ({ name: c.name, state: c.state })), threads: threads.length, toSign: toSign.map(({ thread, c }) => ({ threadId: thread.id, proposalId: c.proposalId, title: c.contract.title })), asks: asks.length });
+  out(lines.join("\n"), { me: node.me, daemon: d ?? null, boot: bootInstalled(home) ?? null, agents: hosts, contacts: contacts.map((c) => ({ name: c.name, state: c.state })), threads: threads.length, held: guard.held, unguarded: guard.unguarded, toSign: toSign.map(({ thread, c }) => ({ threadId: thread.id, proposalId: c.proposalId, title: c.contract.title })), asks: asks.length });
 }
 
 async function main(): Promise<void> {
@@ -859,6 +865,11 @@ async function main(): Promise<void> {
       process.on("SIGTERM", stop);
       return;
     }
+    case "held":
+    case "release":
+    case "drop":
+    case "guard":
+      return guardCommand(cmd, { node, args, flags, out, safe, time });
     case "rejects": {
       const list = node.rejects();
       return out(list.length ? list.map((r) => `${time(r.at)}  ${safe(r.reason)}`).join("\n") : "Nothing has been refused.", list);
