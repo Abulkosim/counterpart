@@ -223,18 +223,20 @@ export class Counterpart {
     `);
     // Columns added after the first databases were made.
     const cols = new Set((this.db.prepare("PRAGMA table_info(outbox)").all() as { name: string }[]).map((c) => c.name));
-    try {
-      if (!cols.has("received_at")) this.db.exec("ALTER TABLE outbox ADD COLUMN received_at INTEGER");
-      if (!cols.has("resends")) this.db.exec("ALTER TABLE outbox ADD COLUMN resends INTEGER NOT NULL DEFAULT 0");
-    } catch (e) {
-      // Another process opening the same home added them first.
-      if (!/duplicate column/.test((e as Error).message)) throw e;
-    }
-    // An invite made after a short-code pairing is good only for the root key that proved the code.
-    try {
-      if (!(this.db.prepare("PRAGMA table_info(invites)").all() as { name: string }[]).some((c) => c.name === "for_root")) this.db.exec("ALTER TABLE invites ADD COLUMN for_root TEXT");
-    } catch (e) {
-      if (!/duplicate column/.test((e as Error).message)) throw e;
+    const inviteCols = new Set((this.db.prepare("PRAGMA table_info(invites)").all() as { name: string }[]).map((c) => c.name));
+    for (const [have, sql] of [
+      [cols.has("received_at"), "ALTER TABLE outbox ADD COLUMN received_at INTEGER"],
+      [cols.has("resends"), "ALTER TABLE outbox ADD COLUMN resends INTEGER NOT NULL DEFAULT 0"],
+      // An invite made after a short-code pairing is good only for the root key that proved the code.
+      [inviteCols.has("for_root"), "ALTER TABLE invites ADD COLUMN for_root TEXT"],
+    ] as const) {
+      if (have) continue;
+      try {
+        this.db.exec(sql);
+      } catch (e) {
+        // Another process opening the same home added it first.
+        if (!/duplicate column/.test((e as Error).message)) throw e;
+      }
     }
   }
 

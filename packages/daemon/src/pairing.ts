@@ -211,6 +211,11 @@ export class PairingEngine {
       if ((r.role === "inviter" && r.state === "open") || (r.role === "joiner" && r.state === "answered")) {
         this.fail(r, "The daemon restarted during the pairing. Nothing was paired. Make a new code.");
       }
+      // Stopped between proving the code and adding the contact: the invite was
+      // in memory only, so this cannot finish.
+      if (r.role === "joiner" && r.state === "confirmed" && !this.node.contacts().some((c) => c.rootKey === r.peer_root)) {
+        this.fail(r, "The daemon stopped while adding the contact. Nothing was paired. Ask for a new code.");
+      }
     }
     this.link.on("pair", this.onFrame);
     this.link.on("ready", this.onReady);
@@ -255,12 +260,18 @@ export class PairingEngine {
     this.onLine(`pairing ${r.role === "inviter" ? "for" : "with"} ${r.name}: ${line}`);
   }
 
+  // Per-run memory goes when a pairing ends, however it ends.
+  private forget(id: string): void {
+    this.runs.delete(id);
+    this.sent.delete(id);
+    this.asked.delete(id);
+  }
+
   private fail(r: Row, detail: string, opts: { tell?: PairFailure; close?: boolean } = {}): void {
     if (r.nameplate && opts.tell) this.say(r, r.nameplate, { v: 1, k: "fail", why: opts.tell });
     if (r.nameplate && opts.close) this.link.sendPair({ t: "pair.close", nameplate: r.nameplate });
     this.store.set(r.id, { state: "failed", detail });
-    this.runs.delete(r.id);
-    this.sent.delete(r.id);
+    this.forget(r.id);
     this.log(r, `failed. ${detail}`);
   }
 
@@ -277,13 +288,14 @@ export class PairingEngine {
         if (r.role === "inviter" && (r.state === "requested" || r.state === "open") && this.node.contacts().some((c) => c.name === r.name)) {
           if (r.nameplate) this.link.sendPair({ t: "pair.close", nameplate: r.nameplate });
           this.store.set(r.id, { state: "done", detail: "paired another way; the code was closed" });
-          this.runs.delete(r.id);
+          this.forget(r.id);
           continue;
         }
         if (r.state === "confirmed") {
           const c = this.node.contacts().find((x) => x.rootKey === r.peer_root);
           if (c?.state === "active") {
             this.store.set(r.id, { state: "done", detail: null });
+            this.forget(r.id);
             this.log(r, "paired");
           } else if (r.expires_at <= t) this.fail(r, `Both sides proved the code, but ${r.name}'s contact request never arrived. Make a new code.`);
           continue;
