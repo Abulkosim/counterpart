@@ -238,13 +238,59 @@ test("what Codex found: composed encodings, encoded pieces, capability URLs, lim
   await assert.rejects(alice.say(thread, `post to ${hook}`), /env-secret/);
   await assert.rejects(alice.say(thread, "the id is Qm7Xr2Lp9Vt4Zc8Nb3Kw6Hy1"), /env-secret/);
   await alice.say(thread, "log in at https://auth.example.com/login");
-  // Too much encoded text to read is held, not sent half-checked.
+  // Hundreds of encoded notes are all read, and harmless ones go out.
   const many = Array.from({ length: 700 }, (_, i) => b64(`harmless note number ${i}`)).join(" ");
-  await assert.rejects(alice.say(thread, many.slice(0, 16000)), /too-much-to-check/);
+  await alice.say(thread, many.slice(0, 16000));
+  // Encodings nested past the last level are held, not sent half-checked.
+  let nested = `the token is ${TOKEN} and that is all`;
+  for (let i = 0; i < 6; i++) nested = b64(nested);
+  await assert.rejects(alice.say(thread, nested.slice(0, 16000)), /too-much-to-check/);
   // A huge run of character codes does not crash the check.
   // (It is then refused for its length, as before.)
   await assert.rejects(alice.say(thread, "65 ".repeat(200_000)), (e: Error) => !(e instanceof RangeError) && /bad talk.posted body|held/.test(e.message));
   assert.doesNotThrow(() => alice.guard.check({ text: "65 ".repeat(300_000) }));
+});
+
+test("what the second review found: rot13 inside base64, deep nesting, tiny pieces, padding, encoded URL parts, broken files, repeats", async () => {
+  const b64 = (x: string): string => Buffer.from(x).toString("base64");
+  const rot = (x: string): string => x.replace(/[A-Za-z]/g, (c) => String.fromCharCode(((c.charCodeAt(0) - (c <= "Z" ? 65 : 97) + 13) % 26) + (c <= "Z" ? 65 : 97)));
+  const hook = `https://example.test/hook?token=${[...Buffer.from("Wq8Pz3Lm6Tr1Vb9Kc4Ns7Hd2")].map((x) => `%${x.toString(16)}`).join("")}`;
+  const { alice, thread } = await pair({ env: { ORDERS_SERVICE_TOKEN: TOKEN, WEBHOOK_URL: hook, CPART_PASSPHRASE: "build1build1build1" }, cwd: null });
+  await assert.rejects(alice.say(thread, b64(rot(TOKEN))), /env-secret/);
+  let deep = TOKEN;
+  for (let i = 0; i < 4; i++) deep = b64(deep);
+  await assert.rejects(alice.say(thread, deep), /env-secret/);
+  await assert.rejects(alice.say(thread, b64(b64(deep))), /env-secret|too-much-to-check/);
+  await assert.rejects(alice.say(thread, "the id is Wq8Pz3Lm6Tr1Vb9Kc4Ns7Hd2"), /env-secret/);
+  // A value with a repeating part: one copy of the part is not ten characters of it.
+  await alice.say(thread, "rebuild with build1 tonight");
+
+  const second = await pair({ env: { ORDERS_SERVICE_TOKEN: TOKEN }, cwd: null });
+  const four = TOKEN.match(/.{1,4}/g)!;
+  await second.alice.say(second.thread, `p ${four[0]}`);
+  await second.alice.say(second.thread, `p ${four[1]}`);
+  await assert.rejects(second.alice.say(second.thread, `p ${four[2]}`), /env-secret/);
+
+  const third = await pair({ env: { ORDERS_SERVICE_TOKEN: TOKEN }, cwd: null });
+  const pad = "lorem ipsum dolor sit amet ".repeat(170);
+  await third.alice.say(third.thread, `${pad} ${TOKEN.slice(0, 6)} ${pad}`);
+  await assert.rejects(third.alice.say(third.thread, `${pad} ${TOKEN.slice(6, 12)} ${pad}`), /env-secret/);
+
+  const f = join(dir(), "notes.md");
+  writeFileSync(f, "internal notes, never to be shared with anyone outside\n");
+  third.alice.guard.addPath("never-share", f);
+  rmSync(f);
+  await assert.rejects(third.alice.say(third.thread, "an ordinary message"), /never-share-unreadable/);
+});
+
+test("many copies of one token in a never-share file and a long run of one piece do not take long", async () => {
+  const f = join(dir(), "dump.txt");
+  writeFileSync(f, `${"Zt4mQ9vL2xR8pW1nK6sB3yH7cD5fAa9 ".repeat(100_000)}`);
+  const { alice, thread } = await pair({ env: {}, cwd: null });
+  alice.guard.addPath("never-share", f);
+  const t = Date.now();
+  await assert.rejects(alice.say(thread, "Zt4mQ9vL2x ".repeat(1400)), /never-share-file/);
+  assert.ok(Date.now() - t < 15_000, `took ${Date.now() - t} ms`);
 });
 
 test("an invite whose token was made from a secret is not accepted", async () => {
@@ -267,7 +313,7 @@ test("a never-share file is kept by its real path, and a missing one is reported
   assert.equal(alice.guard.addPath("never-share", join(d, "link.md")), real);
   assert.deepEqual(alice.guard.problems(), []);
   rmSync(real);
-  assert.match(alice.guard.problems()[0]!, /cannot be read/);
+  assert.match(alice.guard.problems()[0]!, /cannot be found/);
 });
 
 test("a large message is checked in reasonable time", async () => {

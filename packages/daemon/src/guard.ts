@@ -28,7 +28,9 @@ export type GuardCategory =
   | "dotenv-value"
   | "never-share-file"
   // The message holds more encoded text than the guard will decode, so part of it went unchecked.
-  | "too-much-to-check";
+  | "too-much-to-check"
+  // A never-share file the owner registered cannot be read whole, so nothing is checked against it.
+  | "never-share-unreadable";
 
 export type Encoding = "plain" | "reversed" | "split" | "base64" | "hex" | "url" | "escaped";
 
@@ -254,9 +256,10 @@ export interface Views {
   incomplete: boolean; // a limit was reached and something went undecoded
 }
 
-const MIN_VIEWS = 600; // and one more for every 8 characters of the field
+const MIN_VIEWS = 2000; // and one more for every 2 characters of the field
 const MIN_DECODED = 512 * 1024;
 const MAX_CODES = 65_536;
+const MAX_DEPTH = 4; // encodings inside encodings
 
 // The readable stretches of decoded bytes. Random bytes (hashes, compressed
 // data) give none of any length; text that was encoded comes back whole, even
@@ -342,7 +345,7 @@ export function views(text: string): Views {
   const list: View[] = [];
   const seen = new Set<string>();
   let bytes = Math.max(MIN_DECODED, 12 * text.length);
-  const maxViews = Math.max(MIN_VIEWS, Math.ceil(text.length / 8));
+  const maxViews = Math.max(MIN_VIEWS, Math.ceil(text.length / 2));
   let incomplete = false;
   const queue: { v: View; depth: number; surface: number }[] = [];
   const add = (t: string, how: string, span: View["span"], depth: number, surface: number): void => {
@@ -361,20 +364,27 @@ export function views(text: string): Views {
   add(text, "plain", null, 0, 0);
   for (let i = 0; i < queue.length; i++) {
     const { v, depth, surface } = queue[i]!;
-    // Surface changes: at most two in a row, rot13 and folding only on what was written.
-    if (surface < 2) {
+    // Surface changes, on every reading, up to three in a row. These undo
+    // themselves (reversing twice, rot13 twice) or settle (joining twice),
+    // so three covers the combinations that matter.
+    // Random bytes decode to many short readable scraps; those are not worth turning around.
+    if (surface < 3 && (depth === 0 || v.text.length >= 8)) {
       add(reverse(v.text), chain(v.how, "reversed"), v.span, depth, surface + 1);
       add(unsplit(v.text), chain(v.how, "split"), v.span, depth, surface + 1);
+      add(rot13(v.text), chain(v.how, "rot13"), v.span, depth, surface + 1);
+      add(v.text.normalize("NFKC"), chain(v.how, "folded"), v.span, depth, surface + 1);
       if (/\\[nrtu"\\/]/.test(v.text)) add(unescape(v.text), chain(v.how, "escaped"), v.span, depth, surface + 1);
-      if (depth === 0 && surface === 0) {
-        add(rot13(v.text), "rot13", null, 0, 2);
-        add(v.text.normalize("NFKC"), "folded", null, 0, 1);
-      }
     }
-    if (depth >= 3) continue;
     for (const [kind, decoded, at, len] of decodings(v.text)) {
       const span: View["span"] = v.how === "plain" ? [at, at + len] : v.span;
-      for (const part of readable(decoded)) add(part, chain(v.how, kind), span, depth + 1, 0);
+      for (const part of readable(decoded)) {
+        // Something still decodes at the last level: say so rather than stop quietly.
+        if (depth >= MAX_DEPTH) {
+          if (part.length >= 16 && !seen.has(part)) incomplete = true;
+          continue;
+        }
+        add(part, chain(v.how, kind), span, depth + 1, 0);
+      }
     }
   }
   return { list, incomplete };
@@ -420,7 +430,15 @@ function urlKeys(value: string): string[] {
   const user = /:\/\/([^/\s:@]+)@/.exec(value)?.[1];
   if (user && tokenLike(user)) out.push(user);
   const rest = value.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i, "");
-  for (const part of rest.split(/[/?&=#]+/)) if (tokenLike(part)) out.push(part);
+  for (const part of rest.split(/[/?&=#]+/)) {
+    let plain = part;
+    try {
+      plain = decodeURIComponent(part);
+    } catch {
+      // not percent-encoded
+    }
+    for (const p of new Set([part, plain])) if (tokenLike(p)) out.push(p);
+  }
   return out;
 }
 
@@ -459,6 +477,7 @@ export function parseDotenv(text: string): { name: string; value: string }[] {
 const MAX_FILE = 4 * 1024 * 1024;
 
 // Read a regular file without following a symlink at its last component.
+// Null when it cannot be read whole.
 function readSmall(path: string): string | null {
   let fd: number;
   try {
@@ -468,10 +487,12 @@ function readSmall(path: string): string | null {
   }
   try {
     const st = fstatSync(fd);
-    if (!st.isFile()) return null;
-    const buf = Buffer.alloc(Math.min(st.size, MAX_FILE));
+    if (!st.isFile() || st.size > MAX_FILE) return null;
+    const buf = Buffer.alloc(st.size);
     const n = readSync(fd, buf, 0, buf.length, 0);
-    return buf.subarray(0, n).toString("utf8");
+    return n === st.size ? buf.toString("utf8") : null;
+  } catch {
+    return null;
   } finally {
     closeSync(fd);
   }
@@ -545,11 +566,12 @@ export function fileProblem(path: string): string | null {
   try {
     st = lstatSync(path);
   } catch {
-    return "cannot be read";
+    return "cannot be found";
   }
-  if (st.isSymbolicLink()) return "is a symbolic link";
+  if (st.isSymbolicLink()) return "is now a symbolic link";
   if (!st.isFile()) return "is not a file";
-  if (st.size > MAX_FILE) return `is larger than ${MAX_FILE / 1024 / 1024} MB; only the start is checked`;
+  if (st.size > MAX_FILE) return `is larger than ${MAX_FILE / 1024 / 1024} MB`;
+  if (readSmall(path) === null) return "cannot be read";
   return null;
 }
 
@@ -559,7 +581,7 @@ export function neverShare(file: string): { shingles: Shingles | null; exact: Ex
   const c = compact(text);
   const rule = `never-share:${file}`;
   const out: Exact[] = [];
-  for (const tok of text.split(/[\s"'`=:,;()[\]{}<>]+/)) if (tokenLike(tok) || (tok.length >= 12 && worthMatching(tok, false))) out.push({ value: tok, compact: compact(tok), category: "never-share-file", rule });
+  for (const tok of new Set(text.split(/[\s"'`=:,;()[\]{}<>]+/))) if (tokenLike(tok) || (tok.length >= 12 && worthMatching(tok, false))) out.push({ value: tok, compact: compact(tok), category: "never-share-file", rule });
   if (c.length < SHINGLE + STEP) {
     if (c.length >= 10) out.push({ value: text.trim(), compact: c, category: "never-share-file", rule });
     return { shingles: null, exact: out };
@@ -593,30 +615,37 @@ export const pieces = (s: string): string =>
 // reading of the message. COVER characters of one value is a hold, whether
 // they come in one message or spread over the recent ones to that contact.
 const GRAM = 6;
+const HISTORY = 64_000; // characters of earlier messages looked at
 const COVER = 10;
 type Grams = Map<string, { e: Exact; at: number }[]>;
 function grams(exact: Exact[]): Grams {
   const out: Grams = new Map();
   for (const e of exact) {
-    if (e.compact.length < 16 || e.whole) continue;
+    if (e.compact.length < 16 || e.whole || entropy(e.compact) < 3) continue;
     for (let i = 0; i + GRAM <= e.compact.length; i++) {
       const g = e.compact.slice(i, i + GRAM);
       if (!/[a-z]/.test(g) || !/[0-9]/.test(g)) continue;
       const list = out.get(g) ?? [];
-      list.push({ e, at: i });
+      // A gram that repeats inside a value is credited once, at its first place.
+      if (list.some((h) => h.e === e)) continue;
+      if (list.length < 8) list.push({ e, at: i });
       out.set(g, list);
     }
   }
   return out;
 }
 
+// Which characters of each value the streams carry. Each distinct gram seen
+// counts once, however often it appears.
 function cover(streams: string[], index: Grams, into = new Map<Exact, Set<number>>()): Map<Exact, Set<number>> {
   if (!index.size) return into;
+  const seen = new Set<string>();
   for (const s of streams) {
     for (let i = 0; i + GRAM <= s.length; i++) {
-      const hits = index.get(s.slice(i, i + GRAM));
-      if (!hits) continue;
-      for (const { e, at } of hits) {
+      const g = s.slice(i, i + GRAM);
+      if (seen.has(g)) continue;
+      seen.add(g);
+      for (const { e, at } of index.get(g) ?? []) {
         const set = into.get(e) ?? new Set<number>();
         for (let k = at; k < at + GRAM; k++) set.add(k);
         into.set(e, set);
@@ -651,7 +680,7 @@ export function scan(fields: Field[], secrets: Secrets, earlier: Field[][] = [])
     if (vs.incomplete) add({ category: "too-much-to-check", rule: "guard-limits", field, how: "plain", start: 0, end: text.length });
     for (const v of vs.list) {
       const whole = v.span ?? [0, text.length];
-      for (const h of patternHits(v.text, v.how === "rot13")) {
+      for (const h of patternHits(v.text, /(?:^|>)rot13(?:>|$)/.test(v.how))) {
         const span = v.how === "plain" ? [h.start, h.end] : whole;
         add({ category: h.category, rule: h.rule, field, how: v.how, start: span[0]!, end: span[1]! });
       }
@@ -671,6 +700,26 @@ export function scan(fields: Field[], secrets: Secrets, earlier: Field[][] = [])
             add({ category: "never-share-file", rule: `never-share:${s.file}`, field, how: v.how, start: whole[0], end: whole[1] });
             break;
           }
+        }
+      }
+    }
+  }
+  // Short pieces (under six characters) sent one per message: join the
+  // key-like runs of the recent messages and this one, and look for ten
+  // characters of a value that reach into this message.
+  if (earlier.length) {
+    const tail = (m: Field[]): string => m.map((f) => pieces(f.text)).join("");
+    const before = earlier.map(tail).join("").slice(-HISTORY);
+    const now = tail(fields);
+    const joined = before + now;
+    const first = fields[0];
+    for (const e of secrets.exact) {
+      if (e.compact.length < 16 || e.whole) continue;
+      for (let i = Math.max(0, before.length - COVER + 1); i + COVER <= joined.length && i < joined.length; i++) {
+        const w = joined.slice(i, i + COVER);
+        if (/[a-z]/.test(w) && /[0-9]/.test(w) && e.compact.includes(w)) {
+          add({ category: e.category, rule: e.rule, field: first?.field ?? "body", how: "across messages", start: 0, end: first?.text.length ?? 0 });
+          break;
         }
       }
     }
@@ -831,12 +880,17 @@ export class Guard {
       exactList.push(...n.exact);
       if (n.shingles) shingles.push(n.shingles);
     }
-    return { exact: exactList, shingles };
+    const seen = new Set<string>();
+    return { exact: exactList.filter((e) => !seen.has(e.value) && seen.add(e.value)), shingles };
   }
 
   check(body: unknown, contactRoot?: string): Finding[] {
     const fields = fieldsOf(body);
     if (fields.reduce((n, f) => n + f.text.length, 0) > MAX_BODY) return [{ category: "too-much-to-check", rule: "guard-limits", field: "body", how: "plain", start: 0, end: 0 }];
+    // A protection that has stopped working stops everything until the owner
+    // restores the file or removes it; otherwise its text would go out unchecked.
+    const broken = this.paths("never-share").filter((f) => fileProblem(f) !== null);
+    if (broken.length) return broken.map((f) => ({ category: "never-share-unreadable", rule: `never-share:${f}`, field: "body", how: "plain", start: 0, end: 0 }));
     return scan(fields, this.secrets(), contactRoot ? this.earlier(contactRoot) : []);
   }
 
@@ -846,7 +900,21 @@ export class Guard {
     const rows = this.db
       .prepare("SELECT e.json FROM events e JOIN threads t ON t.id = e.thread_id WHERE e.mine = 1 AND t.contact_root = ? AND e.received_at > ? ORDER BY e.ord DESC LIMIT 8")
       .all(contactRoot, this.now() - 24 * 3600_000) as { json: string }[];
-    return rows.reverse().map((r) => fieldsOf((JSON.parse(r.json) as { body: unknown }).body).map((f) => ({ field: f.field, text: f.text.length > 8000 ? `${f.text.slice(0, 4000)} ${f.text.slice(-4000)}` : f.text })));
+    // Newest first, whole, until HISTORY characters; then oldest first.
+    const out: Field[][] = [];
+    let left = HISTORY;
+    for (const r of rows) {
+      const fields = fieldsOf((JSON.parse(r.json) as { body: unknown }).body);
+      const n = fields.reduce((a, f) => a + f.text.length, 0);
+      if (n > left) {
+        // A long one keeps its end, where a piece would join on.
+        out.push(fields.map((f) => ({ ...f, text: f.text.slice(-Math.floor(left / fields.length)) })));
+        break;
+      }
+      left -= n;
+      out.push(fields);
+    }
+    return out.reverse();
   }
 
   // Throws HeldError, after storing the message, when it must not go out.

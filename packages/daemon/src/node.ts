@@ -379,7 +379,12 @@ export class Counterpart {
 
   // ---- threads ----
 
-  async openThread(contactName: string, goal: string, released?: string): Promise<string> {
+  async openThread(contactName: string, goal: string): Promise<string> {
+    return this.open(contactName, goal);
+  }
+
+  // `released` names the held message this is, once its owner let it go. Only releaseHeld passes it.
+  private async open(contactName: string, goal: string, released?: string): Promise<string> {
     const c = this.activeContact(contactName);
     const screened = { contactRoot: c.rootKey, threadId: null, type: "thread.opened", body: { goal } };
     if (!released) this.guard.screen(screened);
@@ -450,7 +455,7 @@ export class Counterpart {
     const h = this.guard.claim(this.guard.find(ref).id);
     try {
       let threadId: string;
-      if (h.type === "thread.opened") threadId = await this.openThread(h.contactRoot, (h.body as { goal: string }).goal, h.id);
+      if (h.type === "thread.opened") threadId = await this.open(h.contactRoot, (h.body as { goal: string }).goal, h.id);
       else threadId = (await this.post(h.threadId!, h.type as EventType, h.body as never, [], h.id)).threadId;
       const eventId = this.guard.find(h.id).eventId!;
       return { held: h, eventId, threadId };

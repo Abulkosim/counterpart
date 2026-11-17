@@ -36,6 +36,8 @@ const DESCRIBE: Record<string, string> = {
   "env-secret": "the value of a secret-named variable in the sending program's environment",
   "dotenv-value": "a value from a .env file",
   "never-share-file": "text from a file you marked never-share",
+  "too-much-to-check": "more encoded text than the guard will decode, so part of it went unchecked",
+  "never-share-unreadable": "a never-share file that cannot be read now (restore it, or remove it with cpart guard never-share remove)",
 };
 
 const HOW: Record<string, string> = {
