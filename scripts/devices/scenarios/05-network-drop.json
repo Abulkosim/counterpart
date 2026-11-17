@@ -8,7 +8,7 @@
       "do": "session", "device": "devcontainer", "id": "asker", "background": true, "timeout": 900, "tools": ["Read", "Grep", "Glob"],
       "prompt": "sync.js needs to authenticate to the warehouse team's stockroom API. Ask their agent (Counterpart contact: laptop) how to authenticate and what a bad key gets back. Wait for the answer, then tell me what to put in sync.js. Do not edit any file."
     },
-    { "do": "wait_message", "device": "laptop", "since": "step", "timeout": 300, "label": "the question on the laptop" },
+    { "do": "wait_message", "device": "laptop", "type": ["thread.opened", "talk.posted"], "since": "step", "timeout": 300, "label": "the question on the laptop" },
     { "do": "fault", "kind": "disconnect", "device": "devcontainer" },
     { "do": "sleep", "seconds": 60 },
     { "do": "fault", "kind": "connect", "device": "devcontainer" },
