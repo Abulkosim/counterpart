@@ -92,7 +92,11 @@ export function scalarMultVfy(y: Uint8Array, x: Uint8Array): Uint8Array {
   } catch {
     return IDENTITY;
   }
-  const k = p.multiplyUnsafe(scalarOf(y));
+  if (p.is0()) return IDENTITY;
+  const s = scalarOf(y);
+  if (s === 0n) return IDENTITY;
+  // The constant-time multiply: y is secret, and its timing must not leak.
+  const k = p.multiply(s);
   return k.is0() ? IDENTITY : k.toBytes();
 }
 

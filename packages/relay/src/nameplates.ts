@@ -143,6 +143,8 @@ export function nameplates(opts: NameplateOptions): Nameplates {
       if (!from) return err(device, "nameplate_not_yours", { nameplate: n });
       if (f.t === "pair.send") {
         if (!isStr(f.body, 1, PAIR_BODY_MAX)) return err(device, "bad_frame", { nameplate: n });
+        // A client sends again after a reconnect. The same message twice is one message.
+        if (p.msgs.some((m) => m.from === from && m.body === f.body)) return;
         const count = p.msgs.filter((m) => m.from === from).length;
         if (count >= maxMessages) return err(device, "too_many_messages", { nameplate: n });
         const m = { from, n: count, body: f.body };

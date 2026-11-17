@@ -20,19 +20,20 @@ interface Person {
 // stopped when `fn` ends, whatever happens.
 async function withPeople<T>(ctx: Ctx, relayUrl: string, n: number, fn: (p: Person[]) => Promise<T>): Promise<T> {
   const people: Person[] = [];
-  const stops: (() => void)[] = [];
+  const stops: (() => unknown)[] = [];
   try {
     for (let i = 0; i < n; i++) {
       const node = await ctx.person({ relay: relayUrl });
       const link = ctx.connect(node);
       const engine = new PairingEngine(node, link, { pollMs: 15 }).start();
+      if (process.env.GAUNTLET_TRACE) engine.onLine = (l) => console.log(`         [${i}] ${l}`);
       const store = new PairingStore(node.home);
       stops.push(() => engine.stop(), () => store.close());
       people.push({ node, store });
     }
     return await fn(people);
   } finally {
-    for (const s of stops) s();
+    for (const s of stops) await s();
   }
 }
 
@@ -331,6 +332,38 @@ export const pairing: Case[] = [
       }
       c.send({ t: "pair.claim", nameplate: 11 });
       assert.equal(frame(await c.next("pair.error")).code, "rate_limited");
+    },
+  },
+  {
+    id: "PAIR-11",
+    category: "pairing",
+    attacker: "network",
+    title: "Lose the joiner's answer together with its connection",
+    claim: "A pairing message lost with a dropped connection is sent again after the reconnect, once, and the pairing completes.",
+    async run(ctx) {
+      let answers = 0;
+      let joinerConn: EvilConn | null = null;
+      const fake = fakeRelay((from, body) => {
+        if (from === "joiner" && parsePairMsg(body).k === "b" && answers++ === 0) {
+          joinerConn?.ws.terminate();
+          return [];
+        }
+        return [body];
+      });
+      const r = await ctx.evilRelay((c) => {
+        fake.onConn(c);
+        c.ws.on("message", (raw) => {
+          if ((JSON.parse(raw.toString()) as { t: string }).t === "pair.claim") joinerConn = c;
+        });
+      });
+      await withPeople(ctx, r.url, 2, async ([alice, bob]) => {
+        const { id, code } = await invite(alice!, "bob");
+        const j = bob!.store.requestJoin(code, "alice", r.url);
+        // This relay carries pairing frames only, so the ordinary contact
+        // request never arrives. Both sides proving the code is the point.
+        await until("both sides to confirm", () => alice!.store.get(id)!.state === "confirmed" && bob!.store.get(j)!.state === "confirmed", 6000);
+        assert.equal(answers, 2, "the answer was sent again exactly once");
+      });
     },
   },
   {

@@ -226,10 +226,14 @@ export class Counterpart {
     try {
       if (!cols.has("received_at")) this.db.exec("ALTER TABLE outbox ADD COLUMN received_at INTEGER");
       if (!cols.has("resends")) this.db.exec("ALTER TABLE outbox ADD COLUMN resends INTEGER NOT NULL DEFAULT 0");
-      // An invite made after a short-code pairing is good only for the root key that proved the code.
-      if (!(this.db.prepare("PRAGMA table_info(invites)").all() as { name: string }[]).some((c) => c.name === "for_root")) this.db.exec("ALTER TABLE invites ADD COLUMN for_root TEXT");
     } catch (e) {
       // Another process opening the same home added them first.
+      if (!/duplicate column/.test((e as Error).message)) throw e;
+    }
+    // An invite made after a short-code pairing is good only for the root key that proved the code.
+    try {
+      if (!(this.db.prepare("PRAGMA table_info(invites)").all() as { name: string }[]).some((c) => c.name === "for_root")) this.db.exec("ALTER TABLE invites ADD COLUMN for_root TEXT");
+    } catch (e) {
       if (!/duplicate column/.test((e as Error).message)) throw e;
     }
   }

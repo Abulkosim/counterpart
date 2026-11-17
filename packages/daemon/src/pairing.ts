@@ -12,8 +12,8 @@ import { chmodSync, closeSync, openSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
-  type PairCode, type PairFailure, type PairMsg, type PairServerFrame, InviterRun, JoinerRun, canonicalize, decodeInvite, encodePairMsg, formatCode, isObject, pairFailureText,
-  parsePairMsg, randomId, randomWords,
+  type PairCode, type PairFailure, type PairMsg, type PairServerFrame, InviterRun, JoinerRun, NAMEPLATE_MAX, PAIR_BODY_MAX, canonicalize, decodeInvite, encodePairMsg, formatCode,
+  isObject, pairFailureText, parsePairMsg, randomId, randomWords,
 } from "@counterpart/protocol";
 import type { RelayLink } from "./link.ts";
 import type { Counterpart } from "./node.ts";
@@ -189,6 +189,11 @@ export class PairingEngine {
   private runs = new Map<string, Live>(); // by pairing id, in memory only
   private asked = new Map<string, { at: number; tries: number }>(); // open and claim requests sent
   private seen = new Set<string>(); // relay message keys already handled
+  // What each live pairing has sent, to send again after a reconnect: a message
+  // lost with a dropped connection would otherwise stall the pairing. The relay
+  // treats the same message twice as one.
+  private sent = new Map<string, { nameplate: number; bodies: string[] }>();
+  private pending = new Set<Promise<unknown>>();
   onLine: (line: string) => void = () => {};
 
   constructor(node: Counterpart, link: RelayLink, opts: { now?: () => number; pollMs?: number; store?: PairingStore } = {}) {
@@ -214,18 +219,35 @@ export class PairingEngine {
     return this;
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
     this.link.off("pair", this.onFrame);
     this.link.off("ready", this.onReady);
+    // A contact being added finishes before the store closes.
+    await Promise.allSettled([...this.pending]);
     this.store.close();
+  }
+
+  private say(r: Pick<Row, "id">, nameplate: number, m: PairMsg): void {
+    const body = encodePairMsg(m);
+    const s = this.sent.get(r.id) ?? { nameplate, bodies: [] };
+    s.bodies.push(body);
+    this.sent.set(r.id, s);
+    this.link.sendPair({ t: "pair.send", nameplate, body });
   }
 
   private onReady = (): void => {
     // After a reconnect, ask again for what has not been answered. Claiming a
     // nameplate you hold already makes the relay send its messages again.
     this.asked.clear();
-    for (const r of this.store.live()) if (r.role === "joiner" && (r.state === "claimed" || r.state === "answered") && r.nameplate) this.link.sendPair({ t: "pair.claim", nameplate: r.nameplate });
+    const live = new Set<string>();
+    for (const r of this.store.live()) {
+      live.add(r.id);
+      if (r.role === "joiner" && (r.state === "claimed" || r.state === "answered") && r.nameplate) this.link.sendPair({ t: "pair.claim", nameplate: r.nameplate });
+      const s = this.sent.get(r.id);
+      if (s) for (const body of s.bodies) this.link.sendPair({ t: "pair.send", nameplate: s.nameplate, body });
+    }
+    for (const id of this.sent.keys()) if (!live.has(id)) this.sent.delete(id);
     this.tick();
   };
 
@@ -234,10 +256,11 @@ export class PairingEngine {
   }
 
   private fail(r: Row, detail: string, opts: { tell?: PairFailure; close?: boolean } = {}): void {
-    if (r.nameplate && opts.tell) this.link.sendPair({ t: "pair.send", nameplate: r.nameplate, body: encodePairMsg({ v: 1, k: "fail", why: opts.tell }) });
+    if (r.nameplate && opts.tell) this.say(r, r.nameplate, { v: 1, k: "fail", why: opts.tell });
     if (r.nameplate && opts.close) this.link.sendPair({ t: "pair.close", nameplate: r.nameplate });
     this.store.set(r.id, { state: "failed", detail });
     this.runs.delete(r.id);
+    this.sent.delete(r.id);
     this.log(r, `failed. ${detail}`);
   }
 
@@ -317,7 +340,7 @@ export class PairingEngine {
         this.runs.set(r.id, { inviter: run });
         const expiresAt = typeof f.expiresAt === "number" ? Math.min(f.expiresAt, this.now() + 10 * 60_000) : this.now() + 10 * 60_000;
         this.store.set(r.id, { state: "open", nameplate: n, words: words.join("-"), expires_at: expiresAt });
-        this.link.sendPair({ t: "pair.send", nameplate: n, body: encodePairMsg(run.first()) });
+        this.say(r, n, run.first());
         this.log(r, `code ${n} is live`);
         return;
       }
@@ -355,15 +378,17 @@ export class PairingEngine {
   }
 
   private onMessage(f: Record<string, unknown>): void {
-    const from = f.from;
+    const { from, nameplate, n, body } = f;
     if (from !== "inviter" && from !== "joiner") return;
+    if (typeof nameplate !== "number" || !Number.isInteger(nameplate) || nameplate < 1 || nameplate > NAMEPLATE_MAX) return;
+    if (typeof n !== "number" || !Number.isInteger(n) || n < 0 || n > 100 || typeof body !== "string" || body.length > PAIR_BODY_MAX) return;
+    const r = this.byPlate(nameplate, from === "joiner" ? "inviter" : "joiner");
+    if (!r) return;
     // The relay sends everything again after a reconnect. Each message is handled once.
-    const key = `${f.nameplate}/${from}/${f.n}/${typeof f.body === "string" ? createHash("sha256").update(f.body).digest("base64url") : ""}`;
+    const key = `${nameplate}/${from}/${n}/${createHash("sha256").update(body).digest("base64url")}`;
     if (this.seen.has(key)) return;
     this.seen.add(key);
     if (this.seen.size > 1000) this.seen.delete(this.seen.values().next().value!);
-    const r = this.byPlate(f.nameplate, from === "joiner" ? "inviter" : "joiner");
-    if (!r) return;
     let m: PairMsg;
     try {
       m = parsePairMsg(f.body);
@@ -391,7 +416,7 @@ export class PairingEngine {
     const known = this.node.contacts().find((c) => c.rootKey === step.peer.rootKey || c.name === r.name);
     if (known) return this.fail(r, known.rootKey === step.peer.rootKey ? `They are already your contact, as ${known.name}. Nothing changed.` : `You already have a contact named ${r.name}. Nothing was paired.`, { tell: "refused", close: true });
     const invite = this.node.createInvite(r.name, INVITE_TTL, step.peer.rootKey);
-    this.link.sendPair({ t: "pair.send", nameplate: r.nameplate!, body: encodePairMsg(step.finish(invite)) });
+    this.say(r, r.nameplate!, step.finish(invite));
     // The nameplate stays open until the joiner closes it or it expires, so the
     // last message still reaches a joiner who is briefly offline.
     this.store.set(r.id, { state: "confirmed", peer_root: step.peer.rootKey, detail: null, expires_at: this.now() + INVITE_TTL });
@@ -406,7 +431,7 @@ export class PairingEngine {
       const step = run.answer(m);
       if (!step.ok) return this.fail(r, pairFailureText(step.why, "joiner"), { tell: step.why, close: true });
       this.store.set(r.id, { state: "answered", peer_root: step.peer.rootKey });
-      this.link.sendPair({ t: "pair.send", nameplate: r.nameplate!, body: encodePairMsg(step.reply) });
+      this.say(r, r.nameplate!, step.reply);
       return;
     }
     if (m.k === "c" && r.state === "answered") {
@@ -423,19 +448,19 @@ export class PairingEngine {
       } catch {
         return this.fail(r, pairFailureText("bad-message", "joiner"), { tell: "bad-message", close: true });
       }
-      try {
-        void this.node.acceptInvite(step.invite, r.name).then(
-          () => {
-            this.store.set(r.id, { state: "confirmed", detail: null, expires_at: this.now() + INVITE_TTL });
-            this.runs.delete(r.id);
-            this.link.sendPair({ t: "pair.close", nameplate: r.nameplate! });
-            this.log(r, "both sides proved the code; contact request sent");
-          },
-          (e: Error) => this.fail(r, `Both sides proved the code, but the contact could not be added: ${e.message}`, { tell: "refused", close: true }),
-        );
-      } catch (e) {
-        this.fail(r, `Both sides proved the code, but the contact could not be added: ${(e as Error).message}`, { tell: "refused", close: true });
-      }
+      // Confirmed is written first, so nothing the relay says while the contact
+      // is being added (a fail, a close, an expiry) can end the pairing.
+      this.store.set(r.id, { state: "confirmed", detail: null, expires_at: this.now() + INVITE_TTL });
+      const added = this.node.acceptInvite(step.invite, r.name).then(
+        () => {
+          this.sent.delete(r.id);
+          this.link.sendPair({ t: "pair.close", nameplate: r.nameplate! });
+          this.log(r, "both sides proved the code; contact request sent");
+        },
+        (e: Error) => this.fail(r, `Both sides proved the code, but the contact could not be added: ${e.message}`, { tell: "refused", close: true }),
+      ).catch((e: Error) => this.onLine(`pairing: ${e.message}`));
+      this.pending.add(added);
+      void added.finally(() => this.pending.delete(added));
     }
   }
 }

@@ -80,6 +80,9 @@ test("open, claim once, pass messages both ways, close", async () => {
   assert.equal((await a.next("pair.error")).code, "nameplate_own");
   b.send({ t: "pair.send", nameplate: n, body: "back" });
   assert.equal((await a.next("pair.msg")).body, "back");
+  // Sent again after a reconnect: one message, delivered once.
+  b.send({ t: "pair.send", nameplate: n, body: "back" });
+  await a.none("pair.msg");
   b.send({ t: "pair.close", nameplate: n });
   assert.equal((await a.next("pair.closed")).why, "closed");
   // Gone, and the number rests: it is not handed out again straight away.
