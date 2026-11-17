@@ -7,7 +7,7 @@
 #
 #   ./scripts/devices/rig.sh                      every scenario, relay on this machine (or in a container if the firewall blocks that)
 #   ./scripts/devices/rig.sh --mode tunnel        relay behind cpart relay --tunnel. Needs cloudflared
-#   ./scripts/devices/rig.sh --no-sessions        only the scenarios that use no model (free, about three minutes)
+#   ./scripts/devices/rig.sh --no-sessions        only the scenarios that use no model (free, about ten minutes)
 #   ./scripts/devices/rig.sh scripts/devices/scenarios/01-ask.json
 #
 # Needs docker. Scenarios with live sessions need a Claude Code login in
