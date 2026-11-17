@@ -96,18 +96,18 @@ In `packages/daemon/src/link.ts`, for each relay:
 
 ## What was measured
 
-`scripts/connectivity-smoke.sh` runs a relay in a container with its port published on the host's loopback, Alice on the host (`ws://127.0.0.1:PORT`), Dave on the host behind a TCP proxy that can black-hole traffic (`scripts/tcp-proxy.ts`), and Bob in a second container (`ws://host.docker.internal:PORT`). The relay is in a container because this machine's firewall drops traffic from containers to the host; the names each side uses are the ones a Mac and its dev container would use. It breaks things and counts. Results from one run on Linux (Node 24.22), with the defaults above:
+`scripts/connectivity-smoke.sh` runs a relay in a container with its port published on the host's loopback, Alice on the host (`ws://127.0.0.1:PORT`), Dave on the host behind a TCP proxy that can black-hole traffic (`scripts/tcp-proxy.ts`), and Bob in a second container (`ws://host.docker.internal:PORT`). The relay is in a container because this machine's firewall drops traffic from containers to the host; the names each side uses are the ones a Mac and its dev container would use. It breaks things and counts. Two runs on Linux (Node 24.22, 2 cores shared with other jobs). The first was before the review fixes, with a load average around 3; the second on the final code, with a load average of 11:
 
 | Scenario | Detect (s) | Recover (s) | Sent | Read | Lost |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Wi-Fi drop: proxy black-holes Dave's traffic for 8 s, closes nothing | 7.4 | 4.8 | 8 | 8 | 0 |
-| Sleep: Dave's daemon SIGSTOPped 15 s with its network black-holed, then SIGCONT | - | 0.7 | 5 | 5 | 0 |
-| Sleep with the network up: SIGSTOP 8 s, then SIGCONT | - | 0.7 | 3 | 3 | 0 |
-| Relay killed with SIGKILL, down 5 s, started again on the same database | - | 7.4 | 8 | 8 | 0 |
-| Bob's container disconnected from its docker network for 10 s | - | 3.6 | 6 | 6 | 0 |
-| `cpart relay move` to a second relay (finished in 6.3 s), then the first relay killed | - | 6.0 | 6 | 6 | 0 |
+| Wi-Fi drop: proxy black-holes Dave's traffic for 8 s, closes nothing | 7.4 / 12.0 | 4.8 / 15.4 | 8 | 8 | 0 |
+| Sleep: Dave's daemon SIGSTOPped 15 s with its network black-holed, then SIGCONT | - | 0.7 / 2.4 | 5 | 5 | 0 |
+| Sleep with the network up: SIGSTOP 8 s, then SIGCONT | - | 0.7 / 1.8 | 3 | 3 | 0 |
+| Relay killed with SIGKILL, down 5 s, started again on the same database | - | 7.4 / 14.5 | 8 | 8 | 0 |
+| Bob's container disconnected from its docker network for 10 s | - | 3.6 / 8.8 | 6 | 6 | 0 |
+| `cpart relay move` to a second relay (finished in 6.3 / 6.7 s), then the first relay killed | - | 6.0 / 22.4 | 6 | 6 | 0 |
 
-Nothing was refused on any side. After the black hole, Dave's log said `no answer to a ping in 4s`; after the stop, `woke after 20s`; Bob's said `network changed` when the container lost and regained its network. Recovery after the black hole is longer than after a sleep because a dial that started while traffic was dropped waits out its 10 second login limit.
+Nothing was refused on any side in either run. "Detect" for the black hole starts before the script sends eight messages with eight `cpart` processes, so under load it overstates the daemon's own time. After the black hole, Dave's log said `no answer to a ping in 4s`; after the stop, `woke after 20s`; Bob's said `network changed` when the container lost and regained its network. Recovery after the black hole is longer than after a sleep because a dial that started while traffic was dropped waits out its 10 second login limit.
 
 "detect" is from the fault to the daemon saying the connection was lost. "recover" is from the fault ending to the last message being read on the other side. Times include the script's polling (0.1 s plus a `cpart log` process each time).
 
@@ -126,4 +126,4 @@ Not tested: a real laptop sleeping, real Wi-Fi, macOS, a relay behind a real tun
 | `KeepAlive` | true | start again if it exits |
 | `StandardOutPath`, `StandardErrorPath` | `<home>/daemon.log`, absolute | the same log as the other ways of running it |
 
-It parsed, with a home path containing `&`, `<`, `>` and a space. The check found one fault, fixed: the log paths were written as given, so a relative `CPART_HOME` gave launchd a relative path. Not checked: that launchd accepts the file, that `launchctl load -w` still works on current macOS (Apple lists `bootstrap` as its replacement), and what happens on sleep and wake under launchd.
+It parsed, with a home path containing `&`, `<`, `>` and a space. Comparing the parsed fields with the code turned up one fault, now fixed: the log paths were written as given, so a relative `CPART_HOME` would have given launchd a relative path (the systemd unit already made them absolute). A relative home was not run through the check itself. Not checked: that launchd accepts the file, that `launchctl load -w` still works on current macOS (Apple lists `bootstrap` as its replacement), and what happens on sleep and wake under launchd.
