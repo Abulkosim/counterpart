@@ -1,0 +1,234 @@
+{
+  "startedAt": "2026-11-17T22:52:52.442Z",
+  "finishedAt": "2026-11-17T23:00:18.326Z",
+  "relay": {
+    "mode": "container",
+    "url": "ws://host.docker.internal:7447",
+    "note": "relay in a third container on the devices' network, reached as host.docker.internal"
+  },
+  "model": "claude-sonnet-5-5",
+  "claudeVersion": "2.1.326 (Claude Code)",
+  "image": "two-devices:latest",
+  "host": "linux",
+  "setup": {
+    "ok": true,
+    "durationS": 12,
+    "interventions": [
+      {
+        "by": "human",
+        "what": "devcontainer: typed yes to use a relay on a private address (cpart join ... --yes)",
+        "why": "join asks before it uses a relay on a private address; without a terminal it said: cpart: this needs a terminal",
+        "atS": 5
+      }
+    ],
+    "laptop": "ok  relay ws://host.docker.internal:7447 answers\nok  identity h_LM-GlTvHPn-SR4BpJZ68cw created in /home/node/.cpart\nok  daemon started, connected\nok  Claude Code now has the counterpart tools. Sessions started from now on see them\n\nReady. Next, pair with someone:\n  cpart invite <what you call them>      then send them what it prints",
+    "devcontainer": "ok  relay ws://host.docker.internal:7447 answers\nok  identity h_hy4mlIdgkGjeitX_FxR70w created in /home/node/.cpart\nok  daemon started, connected\nok  Claude Code now has the counterpart tools. Sessions started from now on see them\n\nPaired with laptop. Safety code 2367 9964 7780: ask laptop to read theirs to you. If the two differ, someone is in the middle.\n\nNow, in Claude Code or Codex, say something like:\n  ask laptop's agent what their API returns for an empty page",
+    "safetyCodesMatch": true,
+    "agentsRegistered": {
+      "laptop": "Claude Code: here",
+      "devcontainer": "Claude Code: here"
+    },
+    "error": null
+  },
+  "scenarios": [
+    {
+      "name": "05b-network-drop-message",
+      "title": "As 05, with a prompt that says to send a message, since in 05 the agent twice put the question in the thread goal and the front desk never answered",
+      "file": "scripts/devices/scenarios/05b-network-drop-message.json",
+      "ok": false,
+      "error": null,
+      "startedAt": "2026-11-17T22:53:09.491Z",
+      "durationS": 389,
+      "timeToFirstAnswerS": 370.5,
+      "timeToAgreementS": null,
+      "interventions": [
+        {
+          "by": "rig, for the human",
+          "what": "cpart down, then cpart up, on devcontainer",
+          "why": "the laptop's answer on the devcontainer had not arrived 300s after the wait began; devcontainer's cpart status said the daemon was running and connected",
+          "atS": 375.3
+        }
+      ],
+      "restartedByHand": true,
+      "lost": {
+        "laptopToDevcontainer": 0,
+        "devcontainerToLaptop": 0,
+        "held": 0,
+        "notDelivered": []
+      },
+      "faults": [
+        {
+          "kind": "disconnect",
+          "device": "devcontainer",
+          "atS": 7.8
+        },
+        {
+          "kind": "connect",
+          "device": "devcontainer",
+          "atS": 67.9
+        }
+      ],
+      "checks": [
+        {
+          "name": "the answer names the header and the 401",
+          "pass": true,
+          "detail": "1 message(s); first: Authentication: every request must carry the header `X-Api-Key` with the API key as its value. No scheme prefix (like Bearer) is mentioned. (from README.md)\n\nBad or missing key: the API returns `401` with body `{\"error\":{\"code\":\"unauthorized\"}}`. (from README.md) The server code also includes a `mes"
+        },
+        {
+          "name": "the asker's report to its human has the answer",
+          "pass": false,
+          "detail": "I don't have an answer yet. I opened thread `oWBAoiwMrveztty2h-6aRA` with laptop and asked how sync.js should authenticate (header name, scheme, where the key comes from) and what a bad or missing key gets back (status code and body). I then waited about 4 minutes in two 120-second waits, and laptop's agent hasn't replied. The relay has stored the messages for them.\n\nI have nothing to put in sync."
+        }
+      ],
+      "sessions": [
+        {
+          "id": "asker",
+          "device": "devcontainer",
+          "startedAtS": 2,
+          "durationS": 326,
+          "exit": 0,
+          "counterpartServer": "connected",
+          "turns": 5,
+          "costUsd": 0.023408300000000003,
+          "isError": false,
+          "toolCalls": [
+            "counterpart_open_thread {\"contact\":\"laptop\",\"goal\":\"Learn how sync.js should authenticate to the warehouse team's stockroom API, and what response a bad key gets.\"}",
+            "counterpart_say {\"thread\":\"oWBAoiwMrveztty2h-6aRA\",\"text\":\"Hi, I'm working on sync.js, which needs to call the stockroom API. How should it authenticate (header name, scheme, w",
+            "counterpart_wait_for_reply {\"thread\":\"oWBAoiwMrveztty2h-6aRA\",\"after\":4,\"timeout_seconds\":120}",
+            "counterpart_wait_for_reply {\"thread\":\"oWBAoiwMrveztty2h-6aRA\",\"after\":4,\"timeout_seconds\":120}"
+          ],
+          "toolErrors": [],
+          "finalText": "I don't have an answer yet. I opened thread `oWBAoiwMrveztty2h-6aRA` with laptop and asked how sync.js should authenticate (header name, scheme, where the key comes from) and what a bad or missing key gets back (status code and body). I then waited about 4 minutes in two 120-second waits, and laptop's agent hasn't replied. The relay has stored the messages for them.\n\nI have nothing to put in sync.js yet. I haven't guessed at a header or error format, and I haven't edited any files.\n\nIf you'd like, I can keep waiting or check the thread again later. You could also ask the warehouse team directly in case their agent is offline.",
+          "stderr": "",
+          "transcript": "05b-network-drop-message-asker.jsonl"
+        }
+      ],
+      "waits": [
+        {
+          "label": "the question, as a message, on the laptop",
+          "device": "laptop",
+          "arrived": true,
+          "afterS": 5.3,
+          "recovered": false
+        },
+        {
+          "label": "the laptop's answer on the devcontainer",
+          "device": "devcontainer",
+          "arrived": true,
+          "afterS": 307.3,
+          "recovered": true
+        }
+      ],
+      "reconnects": {
+        "laptop": {
+          "lost": 0,
+          "connected": 0,
+          "errors": []
+        },
+        "devcontainer": {
+          "lost": 0,
+          "connected": 1,
+          "errors": []
+        }
+      },
+      "notes": [],
+      "threads": [
+        "oWBAoiwMrveztty2h-6aRA"
+      ]
+    },
+    {
+      "name": "06-relay-restart",
+      "title": "The relay restarts while the laptop's front desk is answering",
+      "file": "scripts/devices/scenarios/06-relay-restart.json",
+      "ok": true,
+      "error": null,
+      "startedAt": "2026-11-17T22:59:41.237Z",
+      "durationS": 37,
+      "timeToFirstAnswerS": 18.2,
+      "timeToAgreementS": null,
+      "interventions": [],
+      "restartedByHand": false,
+      "lost": {
+        "laptopToDevcontainer": 0,
+        "devcontainerToLaptop": 0,
+        "held": 0,
+        "notDelivered": []
+      },
+      "faults": [
+        {
+          "kind": "relay_restart",
+          "device": null,
+          "atS": 11.5
+        }
+      ],
+      "checks": [
+        {
+          "name": "the answer names 50 and 15 minutes",
+          "pass": true,
+          "detail": "1 message(s); first: 1) The default page_size is 50 (range 1 to 200; anything above 200 is refused with 400 page_size_too_large, not clamped). (from README.md; server.js also uses 50 as the default.)\n\n2) A pagination cursor expires after 15 minutes. (from README.md)\n\nThe cursor is the `next_cursor` from the previous pag"
+        },
+        {
+          "name": "the asker's report to its human has the answer",
+          "pass": true,
+          "detail": "- Default `page_size` is 50 (range 1–200; above 200 returns 400 `page_size_too_large` rather than being clamped).\n- A cursor (`next_cursor` from the previous page) expires after 15 minutes. It is `null` on the last page.\n\nThis comes from the warehouse agent, who cited their README.md and server.js. I didn't check it against the API itself. I didn't edit any files."
+        }
+      ],
+      "sessions": [
+        {
+          "id": "asker",
+          "device": "devcontainer",
+          "startedAtS": 3,
+          "durationS": 25,
+          "exit": 0,
+          "counterpartServer": "connected",
+          "turns": 5,
+          "costUsd": 0.020589200000000002,
+          "isError": false,
+          "toolCalls": [
+            "counterpart_contacts {}",
+            "counterpart_open_thread {\"contact\":\"laptop\",\"goal\":\"Question about the stockroom API used by sync.js: what is the default page_size, and how long does a pagination cursor stay valid?\"}",
+            "counterpart_say {\"thread\":\"0DkzCRdlGtOBBMVrMI8BKA\",\"text\":\"Hi! For the stockroom API's paginated endpoints: (1) what is the default page_size when none is passed, and (2) how l",
+            "counterpart_wait_for_reply {\"thread\":\"0DkzCRdlGtOBBMVrMI8BKA\",\"after\":7,\"timeout_seconds\":120}"
+          ],
+          "toolErrors": [],
+          "finalText": "- Default `page_size` is 50 (range 1–200; above 200 returns 400 `page_size_too_large` rather than being clamped).\n- A cursor (`next_cursor` from the previous page) expires after 15 minutes. It is `null` on the last page.\n\nThis comes from the warehouse agent, who cited their README.md and server.js. I didn't check it against the API itself. I didn't edit any files.",
+          "stderr": "",
+          "transcript": "06-relay-restart-asker.jsonl"
+        }
+      ],
+      "waits": [
+        {
+          "label": "the question on the laptop",
+          "device": "laptop",
+          "arrived": true,
+          "afterS": 4.7,
+          "recovered": false
+        },
+        {
+          "label": "the laptop's answer on the devcontainer",
+          "device": "devcontainer",
+          "arrived": true,
+          "afterS": 1.7,
+          "recovered": false
+        }
+      ],
+      "reconnects": {
+        "laptop": {
+          "lost": 1,
+          "connected": 1,
+          "errors": []
+        },
+        "devcontainer": {
+          "lost": 1,
+          "connected": 1,
+          "errors": []
+        }
+      },
+      "notes": [],
+      "threads": [
+        "0DkzCRdlGtOBBMVrMI8BKA"
+      ]
+    }
+  ],
+  "fatal": null
+}
