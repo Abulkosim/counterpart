@@ -10,3 +10,5 @@ export * from "./agreement.ts";
 export * from "./envelope.ts";
 export * from "./invite.ts";
 export * from "./relay-frames.ts";
+export * from "./pake.ts";
+export * from "./wordlist.ts";
