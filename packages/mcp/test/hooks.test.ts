@@ -85,7 +85,7 @@ test("a session that never used Counterpart is left alone, and nothing is writte
   dirs.push(home);
   let opened = false;
   const opts = { home, node: () => ((opened = true), {} as Counterpart) };
-  for (const e of ["prompt", "stop", "watch"] as const) assert.deepEqual(await runHook(e, { session_id: "x" }, opts), { code: 0, stdout: "", stderr: "" });
+  for (const e of ["prompt", "stop"] as const) assert.deepEqual(await runHook(e, { session_id: "x" }, opts), { code: 0, stdout: "", stderr: "" });
   assert.equal(existsSync(join(home, "hooks.db")), false);
   assert.equal(opened, false);
   assert.deepEqual(await runHook("tool", { session_id: "../../etc", tool_name: "mcp__counterpart__counterpart_say" }, opts), { code: 0, stdout: "", stderr: "" });
@@ -185,6 +185,15 @@ test("following has limits: a number of reminders and a time", async () => {
   assert.match(decision(await s.hook("stop", {})).systemMessage!, /stopped keeping/);
 });
 
+test("reminders to wait count against the same hourly budget", async () => {
+  const s = await scene();
+  await s.call("say", { thread: s.thread, text: "q" });
+  await s.call("follow", { thread: s.thread });
+  assert.equal(decision(await s.hook("stop", {}, { maxPerHour: 2 })).decision, "block");
+  assert.equal(decision(await s.hook("stop", {}, { maxPerHour: 2 })).decision, "block");
+  assert.deepEqual(await s.hook("stop", {}, { maxPerHour: 2 }), { code: 0, stdout: "", stderr: "" });
+});
+
 test("the other side cannot keep a session from stopping: refusals for news are budgeted", async () => {
   const s = await scene();
   await s.call("say", { thread: s.thread, text: "q" });
@@ -232,4 +241,25 @@ test("watch: an arrival the session reads straight away is not announced", async
   await s.call("read_thread", { thread: s.thread, after: 0 });
   s.clock.t += 10_000;
   assert.deepEqual(await s.hook("watch", {}, { watchMs: 3000 }), { code: 0, stdout: "", stderr: "" });
+});
+
+test("watch: started with the session's first Counterpart call, it waits for the thread to be recorded", async () => {
+  const s = await scene();
+  const w = s.hook("watch", {}, { pollMs: 100 });
+  await s.call("say", { thread: s.thread, text: "q" });
+  await s.arrive(() => s.alice.say(s.thread, "reply"));
+  const r = await w;
+  assert.equal(r.code, 2);
+  assert.match(r.stderr, /^Counterpart notice: alice's side sent 1 message/);
+});
+
+test("reading what arrived does not renew the hour in which arrivals may wake the session", async () => {
+  const s = await scene();
+  await s.call("say", { thread: s.thread, text: "q" });
+  s.clock.t += 50 * 60_000;
+  await s.call("read_thread", { thread: s.thread, after: 0 });
+  s.clock.t += 11 * 60_000;
+  await s.arrive(() => s.alice.say(s.thread, "again"));
+  assert.deepEqual(await s.hook("watch", {}), { code: 0, stdout: "", stderr: "" });
+  assert.match(ctx(await s.hook("prompt", {})), /sent 1 message/, "still told when the human next types");
 });
