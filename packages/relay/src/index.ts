@@ -4,9 +4,10 @@ import type { AddressInfo } from "node:net";
 import { DatabaseSync } from "node:sqlite";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
-  type ClientFrame, type ServerFrame, LIMITS, RELAY_AUTH_DOMAIN, canonicalize, deviceId, isId, isObject, isStr,
-  parseWire, relayAuthMessage, verify, verifyCredential,
+  type ClientFrame, type PairClientFrame, type ServerFrame, LIMITS, RELAY_AUTH_DOMAIN, canonicalize, deviceId, isId, isObject, isStr,
+  isPairFrame, parseWire, relayAuthMessage, verify, verifyCredential,
 } from "@counterpart/protocol";
+import { type NameplateOptions, nameplates } from "./nameplates.ts";
 
 export interface RelayOptions {
   port?: number;
@@ -32,6 +33,8 @@ export interface RelayOptions {
   framesPerSecond?: number;
   now?: () => number;
   log?: (line: string) => void;
+  // Short-code pairing mailboxes (nameplates.ts). Limits for tests.
+  pairing?: Omit<NameplateOptions, "deliver" | "now" | "log">;
 }
 
 export interface Relay {
@@ -117,6 +120,7 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
   const send = (ws: WebSocket, frame: ServerFrame): void => {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(frame));
   };
+  const plates = nameplates({ ...opts.pairing, now, log, deliver: (device, frame) => { const c = online.get(device); if (c) send(c.ws, frame); } });
   // Send the oldest queued messages, at most one window at a time. The next
   // window goes out when the client has acknowledged the current one.
   const flush = (device: string): number => {
@@ -183,6 +187,7 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
         online.set(s.device, { ws, s });
         send(ws, { t: "ready", device: s.device });
         flush(s.device);
+        plates.online(s.device);
         return;
       }
 
@@ -231,7 +236,8 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
         }
         q.ack.run(s.device, frame.id);
         if (s.outstanding.delete(frame.id) && s.outstanding.size === 0) flush(s.device);
-      } else ws.close(4002, "bad frame");
+      } else if (isPairFrame(frame.t)) plates.handle(s.device, frame as PairClientFrame);
+      else ws.close(4002, "bad frame");
     });
 
     ws.on("close", () => {
@@ -262,6 +268,7 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
     });
   } catch (e) {
     clearInterval(sweeper);
+    plates.close();
     db.close();
     const err = e as NodeJS.ErrnoException;
     throw err.code === "EADDRINUSE" ? new Error(`port ${opts.port} on ${opts.host ?? "127.0.0.1"} is already in use. Stop what is using it or pick another with --port`) : err;
@@ -277,6 +284,7 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
     redeliver: flush,
     async close() {
       clearInterval(sweeper);
+      plates.close();
       for (const ws of wss.clients) ws.terminate();
       await new Promise<void>((r) => wss.close(() => r()));
       await new Promise<void>((r) => http.close(() => r()));
