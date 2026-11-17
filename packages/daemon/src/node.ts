@@ -9,6 +9,7 @@ import {
   randomId, renewDevice, safetyCode, seal, signApproval, verifyAgreement, verifyApproval,
 } from "@counterpart/protocol";
 import { type SealedRoot, DEFAULT_LOG_N, sealRoot, unsealRoot } from "./rootkey.ts";
+import { type GuardOptions, type Held, Guard } from "./guard.ts";
 
 const DAY = 24 * 3600 * 1000;
 const RENEW_BEFORE = 30 * DAY;
@@ -146,6 +147,8 @@ export class Counterpart {
   private now: () => number;
   private resendAfter: number;
   private receiptDelay: number;
+  // Every body this side sends passes it before it is sealed. See guard.ts.
+  readonly guard: Guard;
 
   private constructor(home: string, keys: Keys, opts: NodeOptions) {
     const now = opts.now ?? Date.now;
@@ -230,6 +233,7 @@ export class Counterpart {
       // Another process opening the same home added them first.
       if (!/duplicate column/.test((e as Error).message)) throw e;
     }
+    this.guard = new Guard(this.db, opts.guard ?? {}, now);
   }
 
   // With a passphrase the root key is locked from the moment it exists, and the
@@ -373,8 +377,9 @@ export class Counterpart {
 
   // ---- threads ----
 
-  async openThread(contactName: string, goal: string): Promise<string> {
+  async openThread(contactName: string, goal: string, released?: string): Promise<string> {
     const c = this.activeContact(contactName);
+    if (!released) this.guard.screen({ contactRoot: c.rootKey, threadId: null, type: "thread.opened", body: { goal } });
     const threadId = randomId();
     const out = await this.build(c.credential, threadId, "thread.opened", { goal, participants: [this.keys.rootKey, c.rootKey] }, 0, []);
     this.tx(() => {
@@ -390,10 +395,12 @@ export class Counterpart {
 
   // Add one of my events to a thread. `body` may depend on the thread's state,
   // so it can be given as a function that runs once the contact is known.
-  private async post<T extends EventType>(threadId: string, type: T, body: EventBodies[T], extraParents: string[] = []): Promise<ThreadEvent<T>> {
+  // `released` names the held message this is, once its owner let it go.
+  private async post<T extends EventType>(threadId: string, type: T, body: EventBodies[T], extraParents: string[] = [], released?: string): Promise<ThreadEvent<T>> {
     const t = this.db.prepare("SELECT contact_root FROM threads WHERE id = ?").get(threadId) as { contact_root: string } | undefined;
     if (!t) throw new Error(`no thread ${threadId}`);
     const c = this.activeContact(t.contact_root);
+    if (!released) this.guard.screen({ contactRoot: c.rootKey, threadId, type, body });
     const mine = deviceId(this.keys.device.credential);
     // Sequence numbers are allocated here and committed below; a clash with a
     // concurrent writer fails the unique index and the caller retries.
@@ -411,6 +418,35 @@ export class Counterpart {
         if (e instanceof Reject) throw new Error(e.message);
         if (attempt >= 5 || !/UNIQUE constraint failed: events/.test((e as Error).message)) throw e;
       }
+    }
+  }
+
+  // Throws unless this is the passphrase, when the root key has one.
+  checkPassphrase(passphrase?: string): void {
+    if (this.keys.sealedRoot) this.unlock(passphrase);
+  }
+
+  // Send a message the outbound guard held, as it was written. Only the owner
+  // may: a passphrase-locked root key is unlocked first, which fails on a
+  // wrong passphrase. The CLI also insists on a terminal.
+  async releaseHeld(ref: string, passphrase?: string): Promise<{ held: Held; eventId: string; threadId: string }> {
+    this.checkPassphrase(passphrase);
+    const h = this.guard.claim(this.guard.find(ref).id);
+    try {
+      let threadId: string;
+      let eventId: string;
+      if (h.type === "thread.opened") {
+        threadId = await this.openThread(h.contactRoot, (h.body as { goal: string }).goal, h.id);
+        eventId = (this.db.prepare("SELECT id FROM events WHERE thread_id = ? AND mine = 1 AND author_seq = 0").get(threadId) as { id: string }).id;
+      } else {
+        threadId = h.threadId!;
+        eventId = (await this.post(threadId, h.type as EventType, h.body as never, [], h.id)).id;
+      }
+      this.guard.released(h.id, eventId);
+      return { held: h, eventId, threadId };
+    } catch (e) {
+      this.guard.unclaim(h.id);
+      throw e;
     }
   }
 
@@ -1043,6 +1079,7 @@ export class Counterpart {
 
 export interface NodeOptions {
   now?: () => number;
+  guard?: GuardOptions; // the outbound guard; by default it reads this process's environment and working directory
   resendAfterMs?: number; // how long an event is held before its missing parents are asked for
   receiptDelayMs?: number; // how long a receipt waits for more events to cover
 }
