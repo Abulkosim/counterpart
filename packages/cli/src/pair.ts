@@ -86,10 +86,9 @@ export async function joinByCode(home: string, input: string, name: string, io: 
     const end = await watch(store, id, 120_000, (v) => v.state === "done" || v.state === "failed");
     const c = node.contacts().find((x) => x.name === name);
     if (end.state === "done" && c) {
-      io.note(`\nPaired with ${name}. The code proved who is on each side, so there is no safety code to compare.\n\n${NEXT(name)}`);
-      io.out("", c);
+      io.out(`\nPaired with ${name}. The code proved who is on each side, so there is no safety code to compare.\n\n${NEXT(name)}`, c);
     } else if (end.state === "failed") {
-      throw new Error(end.detail ?? "the pairing failed");
+      throw new Error(`${end.detail ?? "the pairing failed"} To try again, ask ${name} for a new code.`);
     } else if (end.state === "confirmed") {
       io.note(`\nBoth sides proved the code. Your contact request is on its way to ${name}; it completes when their daemon answers. Check with: cpart status`);
     } else {
@@ -107,7 +106,7 @@ export function pairingLines(home: string): string[] {
   try {
     return store.recent().map((v) => {
       const who = v.role === "inviter" ? `for ${v.name}` : `with ${v.name}`;
-      if (v.state === "done") return `  paired ${who} by code at ${clock(v.updatedAt)}`;
+      if (v.state === "done") return `  paired with ${v.name} by code at ${clock(v.updatedAt)}`;
       if (v.state === "failed") return `  pairing ${who} failed at ${clock(v.updatedAt)}: ${v.detail ?? ""}`;
       if (v.state === "open") return `  code ${v.code} ${who} works until ${clock(v.expiresAt)}${v.claimed ? "; someone has entered it" : ""}`;
       if (v.state === "confirmed") return `  pairing ${who}: both sides proved the code; waiting for the contact request`;
