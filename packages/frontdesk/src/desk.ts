@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { Counterpart } from "@counterpart/daemon";
+import { type Counterpart, isHeld } from "@counterpart/daemon";
 import { readBundle } from "./bundle.ts";
 import type { Model } from "./model.ts";
 import { ASK, systemPrompt, userPrompt } from "./prompt.ts";
@@ -331,7 +331,16 @@ export class FrontDesk {
     }
     if (reply.length > REPLY_CHARS) reply = `${reply.slice(0, REPLY_CHARS)}\n[cut short]`;
 
-    const replyEventId = await post(reply);
+    let replyEventId: string;
+    try {
+      replyEventId = await post(reply);
+    } catch (e) {
+      // The outbound guard held the reply. It waits for the owner in `cpart held`.
+      if (!isHeld(e)) throw e;
+      record("failed", { bundleHash: bundle.hash, detail: `reply held by the outbound guard (${e.reasons.join(", ")}); see cpart held` });
+      setAnswered(inputOrd);
+      return false;
+    }
     if (asks.length > 0) this.db.prepare("INSERT INTO asks (at, contact_root, thread_id, question) VALUES (?, ?, ?, ?)").run(this.now(), contact.rootKey, threadId, asks[0]!);
     record(asks.length > 0 ? "asked_human" : "answered", { bundleHash: bundle.hash, files: bundle.files.map((f) => f.name).filter((n) => reply.includes(n)), replyEventId });
     return true;
