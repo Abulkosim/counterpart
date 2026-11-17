@@ -7,7 +7,7 @@
 // hex, decimal character codes, URL escapes, and spelled out as words (NATO
 // alphabet, digit names). Pieces of at least MIN characters count, so a value
 // split across messages is still found when every piece is.
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -52,11 +52,11 @@ function spelled(s: string): string {
     .join("");
 }
 
+// Decoded bytes as text. Bytes that are not printable become breaks, so
+// padding or junk around a value cannot hide it.
 function printable(b: Buffer): string | null {
-  const s = b.toString("latin1");
-  // Mostly printable ASCII, or it was not text.
-  const ok = s.replace(/[^\x20-\x7e\n\r\t]/g, "").length;
-  return s.length >= 6 && ok / s.length > 0.85 ? s : null;
+  const s = b.toString("latin1").replace(/[^\x20-\x7e]+/g, "|");
+  return s.replace(/\|/g, "").length >= 6 ? s : null;
 }
 
 // Strings hidden in a string: base64 (also base64url and glued to other text), hex, decimal codes, URL escapes.
@@ -86,13 +86,7 @@ function decoded(s: string): { form: string; text: string }[] {
     const codes = run.split(/[\s,;]+/).map(Number);
     if (codes.every((c) => c >= 32 && c < 127)) out.push({ form: "decimal codes", text: String.fromCharCode(...codes) });
   }
-  if (/%[0-9a-f]{2}/i.test(s)) {
-    try {
-      out.push({ form: "url escapes", text: decodeURIComponent(s) });
-    } catch {
-      /* not valid escapes */
-    }
-  }
+  if (/%[0-9a-f]{2}/i.test(s)) out.push({ form: "url escapes", text: s.replace(/%([0-9a-f]{2})/gi, (_, h: string) => String.fromCharCode(parseInt(h, 16))) });
   return out;
 }
 
@@ -181,9 +175,10 @@ export function homeCorpus(dir: string): string[] {
   const walk = (d: string): void => {
     for (const name of readdirSync(d)) {
       const p = join(d, name);
-      const st = statSync(p);
+      // Links are not followed: a link to the victim's files is not something that was sent.
+      const st = lstatSync(p);
       if (st.isDirectory()) walk(p);
-      else if (st.isFile() && st.size < 50_000_000) {
+      else if (st.isFile()) {
         const bytes = readFileSync(p);
         if (bytes.subarray(0, 16).toString("latin1") === "SQLite format 3\0") out.push(...sqliteCorpus(p));
         out.push(bytes.toString("utf8"));
