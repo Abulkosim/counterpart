@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Counterpart, RelayLink } from "@counterpart/daemon";
 import { type Relay, startRelay } from "@counterpart/relay";
-import { type Model, type ModelRequest, FrontDesk, addShare, checkCitations, findSecret, globToRegExp, readShare, removeShare, select, shareRules } from "../src/index.ts";
+import { DatabaseSync } from "node:sqlite";
+import { type Model, type ModelRequest, FrontDesk, addShare, checkCitations, compose, findSecret, globToRegExp, readShare, removeShare, select, shareRules } from "../src/index.ts";
 
 const dirs: string[] = [];
 const stops: (() => Promise<void> | void)[] = [];
@@ -293,4 +294,61 @@ test("a repository that disappears is reported to the owner and the thread is no
   assert.equal(desk.runs().length, 1);
   assert.match(desk.runs()[0]!.detail!, /could not read what is shared/);
   assert.equal(texts(alice, thread).length, 1);
+});
+
+// ---- found in review ----
+
+test("ignore rules are read from the commit, not from the index or the working tree", () => {
+  const r = repo({ ".gitignore": "docs/db.txt\nbuild/\n", "docs/api.md": "ok\n" });
+  put(r, { "docs/db.txt": "dump\n", "build/out.js": "x\n" });
+  sh(r, "add", "-f", "docs/db.txt", "build/out.js");
+  sh(r, "commit", "-qm", "oops");
+  // Unstage the file and delete the ignore file: HEAD still has both.
+  sh(r, "rm", "-q", "--cached", "docs/db.txt");
+  rmSync(join(r, ".gitignore"));
+  const s = addShare(tmp(), ROOT, r, ["docs", "build"]);
+  assert.deepEqual(s.files.map((f) => f.path), ["docs/api.md"]);
+  assert.deepEqual(s.skipped.map((k) => [k.path, k.reason]), [["build/out.js", "matched by an ignore rule"], ["docs/db.txt", "matched by an ignore rule"]]);
+});
+
+test("a path that is credentials stays refused even when another rule also matches it", () => {
+  const r = repo({ "docs/.env.secret": "PASSWORD=hunter2\n", "docs/a.md": "a\n" });
+  const s = addShare(tmp(), ROOT, r, ["docs"], ["docs/.env.secret"]);
+  assert.deepEqual(s.files.map((f) => f.path), ["docs/a.md"]);
+  assert.match(s.skipped[0]!.reason, /credentials; never shared/);
+});
+
+test("the secret scan sees assigned passwords with symbols, and stays fast on hostile input", () => {
+  assert.ok(findSecret('{"db_password":"N7!vP2@xQ8#kL4$sT9"}'));
+  assert.ok(findSecret("PASSWORD=hunter2x9"));
+  assert.ok(findSecret('client_secret: "abcdefghijklmnopqrstuvwxyz"'));
+  for (const evil of ["a.".repeat(100_000) + "secret=x", "eyJ".repeat(80_000), "github_pat_".repeat(20_000), "sk-".repeat(80_000), `${"password=".repeat(20_000)}x`]) {
+    const t = Date.now();
+    findSecret(evil);
+    assert.ok(Date.now() - t < 1500, `took ${Date.now() - t} ms on ${evil.slice(0, 12)}`);
+  }
+});
+
+test("a long reply is cut between checked lines, never through a citation", () => {
+  const share = { repo: "/r", commit: "c".repeat(40), files: [], skipped: [], bytes: 0, hash: "h", rulesHash: "r" };
+  const files = new Map([["docs/a.md", "Safe material here\n"]]);
+  const m = { kind: "repo" as const, hash: "h", rulesHash: "r", bundleHash: "b", system: "", share, files, shown: 1, ranked: false };
+  const raw = `${"X".repeat(6001)} [docs/a.md:1 "Safe material"]\nShort [docs/a.md:1 "Safe material"]`;
+  const c = compose(m, raw, "Alice", "q");
+  assert.ok(c.reply!.length <= 6000);
+  assert.ok(!c.reply!.includes("XXXX"));
+  const many = Array.from({ length: 200 }, (_, i) => `Point ${i} [docs/a.md:1 "Safe material"]`).join("\n");
+  const c2 = compose(m, many, "Alice", "q");
+  assert.ok(c2.reply!.length <= 6000);
+  for (const l of c2.reply!.split("\n").slice(0, -2)) assert.match(l, /\[docs\/a\.md:1 "Safe material"\]$/);
+  assert.match(c2.reply!, /\[cut short\]/);
+});
+
+test("rules naming two repositories are refused when read", () => {
+  const home = tmp();
+  addShare(home, ROOT, repo({ "a.md": "a\n" }), ["a.md"]);
+  const d = new DatabaseSync(join(home, "frontdesk.db"));
+  d.prepare("INSERT INTO shares (contact_root, repo, pattern, kind, at) VALUES (?, ?, ?, ?, ?)").run(ROOT, "/elsewhere", "b.md", "path", 0);
+  d.close();
+  assert.throws(() => readShare(home, ROOT), /more than one repository/);
 });

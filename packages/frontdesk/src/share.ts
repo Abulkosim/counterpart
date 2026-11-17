@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { lstatSync, realpathSync } from "node:fs";
-import { join } from "node:path";
+import { lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { git, sensitive } from "@counterpart/worker";
 import { findSecret } from "./secrets.ts";
@@ -10,7 +11,7 @@ import { findSecret } from "./secrets.ts";
 // files they match from the commit HEAD points to, through Git's object store.
 // The working tree is never read, so uncommitted edits, untracked files and
 // ignored files are never seen. A committed file that matches an ignore rule
-// is left out too. Each file is checked before the model can see it: paths the
+// committed in the same commit is left out too. Each file is checked before the model can see it: paths the
 // worker treats as sensitive are refused, credential files always, and content
 // that looks like a secret is skipped and reported.
 
@@ -137,8 +138,19 @@ export function addShare(home: string, contactRoot: string, repoPath: string, pa
   }
   const d = db(home);
   try {
-    const ins = d.prepare("INSERT OR REPLACE INTO shares (contact_root, repo, pattern, kind, at) VALUES (?, ?, ?, ?, ?)");
-    for (const r of rows) ins.run(contactRoot, repo, r.pattern, r.kind, Date.now());
+    // Checked again inside the write, so two commands run at once cannot
+    // leave rules for two repositories.
+    d.exec("BEGIN IMMEDIATE");
+    try {
+      const other = d.prepare("SELECT repo FROM shares WHERE contact_root = ? AND repo != ? LIMIT 1").get(contactRoot, repo) as { repo: string } | undefined;
+      if (other) throw new Error(`this contact already has files shared from ${other.repo}. One repository per contact: remove those first with cpart share remove <contact> --all`);
+      const ins = d.prepare("INSERT OR REPLACE INTO shares (contact_root, repo, pattern, kind, at) VALUES (?, ?, ?, ?, ?)");
+      for (const r of rows) ins.run(contactRoot, repo, r.pattern, r.kind, Date.now());
+      d.exec("COMMIT");
+    } catch (e) {
+      d.exec("ROLLBACK");
+      throw e;
+    }
   } finally {
     d.close();
   }
@@ -164,6 +176,7 @@ export function removeShare(home: string, contactRoot: string, patterns: string[
 export function readShare(home: string, contactRoot: string): Share | null {
   const rules = shareRules(home, contactRoot);
   if (rules.length === 0) return null;
+  if (new Set(rules.map((r) => r.repo)).size > 1) throw new Error("the share rules for this contact name more than one repository; run cpart share remove <contact> --all and share again");
   return readShareFrom(rules[0]!.repo, rules).share;
 }
 
@@ -176,6 +189,52 @@ export function rulesHash(rules: ShareRule[]): string {
 // that did not change between runs.
 const blobCache = new Map<string, { text: string } | { reason: string }>();
 let cachedBytes = 0;
+
+// Read blobs by id from the object store, in one Git process.
+function readBlobs(repo: string, ids: string[]): Map<string, Buffer> {
+  const got = new Map<string, Buffer>();
+  if (ids.length === 0) return got;
+  const out = git(repo, ["cat-file", "--batch"], { input: ids.join("\n") + "\n", maxBuffer: SHARE_LIMITS.bytes + 4 * 1024 * 1024 });
+  let at = 0;
+  for (const want of ids) {
+    const nl = out.indexOf(10, at);
+    const [id, type, size] = out.subarray(at, nl).toString("utf8").split(" ") as [string, string, string];
+    if (nl < 0 || id !== want || type !== "blob") throw new Error("git returned something other than the requested file");
+    got.set(want, out.subarray(nl + 1, nl + 1 + Number(size)));
+    at = nl + 1 + Number(size) + 1;
+  }
+  return got;
+}
+
+// Which of `paths` the ignore rules committed at this commit cover, plus the
+// repository's own info/exclude. The .gitignore files are copied out of the
+// commit into an empty directory and Git is pointed at that, so edits to the
+// working tree or the index change nothing. If this cannot be done, nothing is
+// shared: an error is thrown rather than skipping the check.
+function ignoredAt(repo: string, tree: { mode: string; type: string; blob: string; path: string }[], paths: string[]): Set<string> {
+  if (paths.length === 0) return new Set();
+  const gitDir = git(repo, ["rev-parse", "--absolute-git-dir"]).toString("utf8").trim();
+  const rules = tree.filter((e) => e.type === "blob" && (e.mode === "100644" || e.mode === "100755") && (e.path === ".gitignore" || e.path.endsWith("/.gitignore")) && !e.path.split("/").some((s) => s === ".." || s === "." || s === ""));
+  const blobs = readBlobs(repo, [...new Set(rules.map((e) => e.blob))]);
+  const work = mkdtempSync(join(tmpdir(), "cpart-ignore-"));
+  try {
+    for (const e of rules) {
+      mkdirSync(dirname(join(work, e.path)), { recursive: true });
+      writeFileSync(join(work, e.path), blobs.get(e.blob)!);
+    }
+    let out: string;
+    try {
+      out = git(work, ["--git-dir", gitDir, "--work-tree", work, "check-ignore", "--no-index", "-z", "--stdin"], { input: paths.join("\0") + "\0", maxBuffer: 64 * 1024 * 1024 }).toString("utf8");
+    } catch (e) {
+      // Exit status 1 means none of the paths is ignored.
+      if ((e as { status?: number }).status === 1) return new Set();
+      throw new Error(`could not check the repository's ignore rules: ${String((e as { stderr?: Buffer }).stderr ?? (e as Error).message).slice(0, 200)}`);
+    }
+    return new Set(out.split("\0").filter(Boolean));
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+}
 
 function readShareFrom(repo: string, rules: ShareRule[]): { share: Share; all: string[] } {
   let commit: string;
@@ -193,23 +252,18 @@ function readShareFrom(repo: string, rules: ShareRule[]): { share: Share; all: s
       const [mode, type, blob, size] = line.slice(0, tab).split(/ +/) as [string, string, string, string];
       return { mode, type, blob, size: Number(size), path: line.slice(tab + 1) };
     });
-  // Committed files that an ignore rule covers were most likely added by
-  // mistake. Ignore rules come from the repository's own files; this can only
-  // take files away.
-  let ignored = new Set<string>();
-  try {
-    ignored = new Set(git(repo, ["ls-files", "-z", "--cached", "--ignored", "--exclude-standard"], { maxBuffer: 64 * 1024 * 1024 }).toString("utf8").split("\0").filter(Boolean));
-  } catch {
-    /* no working tree: nothing more to exclude */
-  }
   const paths = rules.filter((r) => r.kind === "path").map((r) => globToRegExp(r.pattern));
   const allowed = new Set(rules.filter((r) => r.kind === "allow").map((r) => r.pattern));
+  // Committed files that an ignore rule covers were most likely added by mistake.
+  const ignored = ignoredAt(repo, tree, tree.filter((e) => paths.some((re) => re.test(e.path)) || allowed.has(e.path)).map((e) => e.path));
   const skipped: Skipped[] = [];
   const wanted: typeof tree = [];
   for (const e of tree) {
     if (!paths.some((re) => re.test(e.path)) && !allowed.has(e.path)) continue;
-    const priv = PRIVATE.find(([re]) => re.test(e.path.toLowerCase()))?.[1];
-    const sens = priv ?? sensitive(e.path);
+    // Every rule that applies is looked at, so a path that is both
+    // credentials and something else is still never shared.
+    const kinds = [...PRIVATE.filter(([re]) => re.test(e.path.toLowerCase())).map(([, what]) => what), sensitive(e.path)].filter((k): k is string => !!k);
+    const sens = kinds.find((k) => NEVER.has(k)) ?? kinds[0];
     if (e.type !== "blob") skipped.push({ path: e.path, reason: "a submodule" });
     else if (e.mode === "120000") skipped.push({ path: e.path, reason: "a symbolic link" });
     else if (e.mode !== "100644" && e.mode !== "100755") skipped.push({ path: e.path, reason: "not a regular file" });
@@ -228,36 +282,35 @@ function readShareFrom(repo: string, rules: ShareRule[]): { share: Share; all: s
       total += e.size;
     }
   }
-  const missing = [...new Set(take.map((e) => e.blob).filter((b) => !blobCache.has(b)))];
-  if (missing.length) {
-    const out = git(repo, ["cat-file", "--batch"], { input: missing.join("\n") + "\n", maxBuffer: SHARE_LIMITS.bytes + 1024 * 1024 });
-    let at = 0;
-    for (const want of missing) {
-      const nl = out.indexOf(10, at);
-      const [id, type, size] = out.subarray(at, nl).toString("utf8").split(" ") as [string, string, string];
-      if (id !== want || type !== "blob") throw new Error("git returned something other than the requested file");
-      const bytes = out.subarray(nl + 1, nl + 1 + Number(size));
-      at = nl + 1 + Number(size) + 1;
-      let entry: { text: string } | { reason: string };
-      try {
-        const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-        if (text.includes("\0")) throw new Error();
-        const hit = findSecret(text);
-        entry = hit ? { reason: `looks like it holds ${hit.what} (line ${hit.line})` } : { text };
-      } catch {
-        entry = { reason: "not UTF-8 text" };
-      }
-      if (cachedBytes > 64 * 1024 * 1024) {
-        blobCache.clear();
-        cachedBytes = 0;
-      }
-      blobCache.set(want, entry);
-      cachedBytes += bytes.length;
+  // What this read needs is kept here, so clearing the cache part way
+  // through cannot lose an entry.
+  const mine = new Map<string, { text: string } | { reason: string }>();
+  for (const e of take) {
+    const c = blobCache.get(e.blob);
+    if (c) mine.set(e.blob, c);
+  }
+  const loaded = readBlobs(repo, [...new Set(take.map((e) => e.blob).filter((b) => !mine.has(b)))]);
+  if (cachedBytes > 64 * 1024 * 1024) {
+    blobCache.clear();
+    cachedBytes = 0;
+  }
+  for (const [id, bytes] of loaded) {
+    let entry: { text: string } | { reason: string };
+    try {
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      if (text.includes("\0")) throw new Error();
+      const hit = findSecret(text);
+      entry = hit ? { reason: `looks like it holds ${hit.what} (line ${hit.line})` } : { text };
+    } catch {
+      entry = { reason: "not UTF-8 text" };
     }
+    mine.set(id, entry);
+    blobCache.set(id, entry);
+    cachedBytes += bytes.length;
   }
   const files: SharedFile[] = [];
   for (const e of take) {
-    const c = blobCache.get(e.blob)!;
+    const c = mine.get(e.blob)!;
     if ("reason" in c) skipped.push({ path: e.path, reason: c.reason });
     else files.push({ path: e.path, text: c.text, blob: e.blob });
   }

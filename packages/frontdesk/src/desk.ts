@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Counterpart } from "@counterpart/daemon";
-import { TEXT, compose, prepare, queryFrom, unchanged } from "./answer.ts";
+import { REPLY_CHARS, TEXT, compose, prepare, queryFrom, unchanged } from "./answer.ts";
 import type { Model } from "./model.ts";
 import { userPrompt } from "./prompt.ts";
 
@@ -36,7 +36,6 @@ export interface Ask {
   closedAt: number | null;
 }
 
-const REPLY_CHARS = 6000;
 const DAY = 24 * 3600 * 1000;
 const NOTICES_PER_DAY = 3;
 const ROUNDS = 3;
@@ -330,6 +329,8 @@ export class FrontDesk {
       setAnswered(inputOrd);
       return false;
     }
+    // A checked reply is already cut at a line boundary in compose(); this only
+    // ever shortens a bundle reply, which is sent as written anyway.
     if (reply.length > REPLY_CHARS) reply = `${reply.slice(0, REPLY_CHARS)}\n[cut short]`;
 
     const replyEventId = await post(reply);

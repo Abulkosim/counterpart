@@ -12,6 +12,7 @@ import { type Share, readShare, rulesHash, shareRules } from "./share.ts";
 // the same code.
 
 export const ASK_CHARS = 300;
+export const REPLY_CHARS = 6000;
 export const TEXT = {
   noMaterial: (owner: string) => `This is ${owner}'s front desk. Nothing has been shared with you here yet, so I can't answer. ${owner} will see your message.`,
   outOfBudget: (owner: string) => `This is ${owner}'s front desk. I've used the replies ${owner} allowed for this thread. ${owner} will see the rest of your messages.`,
@@ -96,7 +97,17 @@ export function compose(m: Material, raw: string, owner: string, question: strin
     const q = asks.length ? asks : [question.replace(/\s+/g, " ").trim().slice(0, ASK_CHARS) || "(an empty message)"];
     return { reply: TEXT.asked(owner), asks: q, files: [], detail };
   }
-  let reply = `${c.text}\n(Quoted from files as committed at ${m.share.commit.slice(0, 12)}.)`;
+  // Cut whole checked lines, never part of one, so a citation cannot be cut
+  // off the text it vouches for. Room is left for the fixed lines below.
+  const kept: string[] = [];
+  let size = 0;
+  for (const l of c.text.split("\n")) {
+    if (size + l.length + 1 > REPLY_CHARS - 400) break;
+    kept.push(l);
+    size += l.length + 1;
+  }
+  if (kept.length === 0) return { reply: TEXT.asked(owner), asks: asks.length ? asks : [question.replace(/\s+/g, " ").trim().slice(0, ASK_CHARS) || "(an empty message)"], files: [], detail: `${detail}, reply too long` };
+  let reply = `${kept.join("\n")}${kept.length < c.kept ? "\n[cut short]" : ""}\n(Quoted from files as committed at ${m.share.commit.slice(0, 12)}.)`;
   if (asks.length > 0) reply += `\n\n${TEXT.asked(owner)}`;
   return { reply, asks, files: [...new Set(c.citations.map((x) => x.path))], detail };
 }
