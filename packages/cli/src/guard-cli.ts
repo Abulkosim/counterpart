@@ -73,8 +73,19 @@ function preview(h: Held, safe: (s: string) => string): string {
   const first = fields(h.body).find((f) => f.text.trim());
   if (!first) return "";
   let text = first.text;
-  const spans = h.findings.filter((f) => f.field === first.field).sort((a, b) => b.start - a.start);
-  for (const s of spans) text = `${text.slice(0, s.start)}[...]${text.slice(s.end)}`;
+  const here = h.findings.filter((f) => f.field === first.field);
+  // A finding that could not be placed covers the whole field, unless the same
+  // rule also matched at a known place: then that place is what to blank.
+  const placed = (f: Finding): boolean => f.end - f.start < first.text.length;
+  const spans = here.filter((f) => placed(f) || !here.some((g) => g.rule === f.rule && placed(g)));
+  // Blank from the end so earlier offsets stay right; overlapping spans merge.
+  const merged: [number, number][] = [];
+  for (const s of spans.map((f): [number, number] => [f.start, f.end]).sort((a, b) => a[0] - b[0])) {
+    const last = merged.at(-1);
+    if (last && s[0] <= last[1]) last[1] = Math.max(last[1], s[1]);
+    else merged.push(s);
+  }
+  for (const [s, e] of merged.reverse()) text = `${text.slice(0, s)}[...]${text.slice(e)}`;
   const line = safe(text.replace(/\s+/g, " ").trim());
   return line.length > 70 ? `${line.slice(0, 70)}...` : line;
 }
