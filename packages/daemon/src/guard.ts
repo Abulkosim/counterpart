@@ -378,6 +378,8 @@ export function views(text: string): Views {
     for (const [kind, decoded, at, len] of decodings(v.text)) {
       const span: View["span"] = v.how === "plain" ? [at, at + len] : v.span;
       for (const part of readable(decoded)) {
+        // Text that decodes to a piece of itself ("3333" as hex) adds nothing.
+        if (v.text.includes(part)) continue;
         // Something still decodes at the last level: say so rather than stop quietly.
         if (depth >= MAX_DEPTH) {
           if (part.length >= 16 && !seen.has(part)) incomplete = true;
