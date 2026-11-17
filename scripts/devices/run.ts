@@ -393,7 +393,8 @@ class Running {
     const asker = this.s.asker;
     if (asker) {
       const evs = asker === "laptop" ? now.a : now.b;
-      const q = evs.filter((e) => e.mine && e.type === "talk.posted").sort((x, y) => x.receivedAt - y.receivedAt)[0];
+      // The question may be the thread's goal, with no message after it.
+      const q = evs.filter((e) => e.mine && (e.type === "talk.posted" || e.type === "thread.opened")).sort((x, y) => x.receivedAt - y.receivedAt)[0];
       const ans = q && evs.filter((e) => !e.mine && e.status === "applied" && e.type === "talk.posted" && e.threadId === q.threadId && e.receivedAt >= q.receivedAt).sort((x, y) => x.receivedAt - y.receivedAt)[0];
       if (q && ans) this.r.timeToFirstAnswerS = Math.round((ans.receivedAt - q.receivedAt) / 100) / 10;
     }
