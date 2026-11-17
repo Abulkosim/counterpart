@@ -31,6 +31,7 @@ Event { id, threadId, author, authorSeq, parents[], lane, type, body, createdAt 
 | `contact.request` | control | `{ token }` |
 | `contact.accepted` | control | `{}` |
 | `contact.hello` | control | `{}`. Sent after a device renews its credential, so contacts receive the new one |
+| `contact.relays` | control | `{ relays, version, seen }`. The relays the sender can be reached on, best first: 1 to 16 plain `ws://` or `wss://` addresses, no two the same. `version` only grows. `seen` is the version of the recipient's own list the sender holds. See [connectivity.md](connectivity.md) |
 | `thread.opened` | control | `{ goal, participants: [rootKey, rootKey] }` |
 | `thread.resend` | control | `{ ids }`, 1 to 16 event ids. Asks the other side to send those events again |
 | `thread.received` | control | `{ ids }`, 1 to 64 event ids. Says the sender's daemon applied those events |
@@ -125,7 +126,8 @@ Because the signature covers the header, a recipient cannot re-encrypt a signed 
 A daemon applies an event only if all hold:
 
 - The sender's root key is an active contact, or the event is a `contact.request` carrying an unused, unexpired invite token.
-- Contact events (`contact.request`, `contact.accepted`, `contact.hello`) stand alone: sequence 0, no parents, and a thread id nothing else uses.
+- Contact events (`contact.request`, `contact.accepted`, `contact.hello`, `contact.relays`) stand alone: sequence 0, no parents, and a thread id nothing else uses.
+- A `contact.relays` changes only the sender's own entry. It is refused if its version is lower than the one held, equal with a different list, more than ten minutes ahead of the clock, or if `seen` names a version of the recipient's list that does not exist. It is accepted from a contact whose pairing is still pending.
 - A thread belongs to one contact. An event naming it from anyone else is refused, never held.
 - The event id is new. The same id with the same content is a duplicate and is ignored. The same id with different content is refused.
 - No other event has the same thread, author and sequence number.
@@ -161,14 +163,16 @@ JSON frames over WebSocket.
 ```
 relay  -> { t: "challenge", nonce }
 client -> { t: "auth", credential, relay, sig }     sig over canonical({ nonce, relay }), domain relay-auth/v1
-relay  -> { t: "ready", device }
+relay  -> { t: "ready", device, features? }        features: ["ping"] on relays that answer pings
 client -> { t: "send", wire }
 relay  -> { t: "stored", id } | { t: "error", code, id }
 relay  -> { t: "deliver", wire }
 client -> { t: "ack", id, ok }                     ok: the message was accepted, not refused
+client -> { t: "ping", n }                         only if ready listed "ping"
+relay  -> { t: "pong", n }
 ```
 
-`relay` is the URL the client dialled. The relay accepts a login only for its own configured URL, so another relay cannot forward a challenge to its clients and log in as them. The relay stores a message until the recipient acknowledges it or it expires (seven days at most). Delivery is at least once. Sending the same message again is accepted; reusing an id for different bytes returns `conflict`. The relay sends a limited window of deliveries and sends more as they are acknowledged. Other codes: `mailbox_full`, `expired`, `ttl_too_long`, `too_large`, `bad_wire`.
+`relay` is the URL the client dialled. The relay accepts a login only for one of the addresses it was configured with, compared after lower-casing the host and dropping a default port and a lone trailing slash, so another relay cannot forward a challenge to its clients and log in as them. A relay can have several addresses (repeated `--url`); with none given, a relay on loopback answers to `ws://127.0.0.1:PORT`, `ws://localhost:PORT`, `ws://[::1]:PORT` and `ws://host.docker.internal:PORT`. A client pings a quiet connection: with a `ping` frame if the relay listed the feature, otherwise with a WebSocket ping, because older relays close the connection on a frame they do not know. See [connectivity.md](connectivity.md). The relay stores a message until the recipient acknowledges it or it expires (seven days at most). Delivery is at least once. Sending the same message again is accepted; reusing an id for different bytes returns `conflict`. The relay sends a limited window of deliveries and sends more as they are acknowledged. Other codes: `mailbox_full`, `expired`, `ttl_too_long`, `too_large`, `bad_wire`.
 
 A client acknowledges only after it has durably recorded its decision about the message. A message that fails locally three times is acknowledged as refused so it cannot block the ones behind it.
 
