@@ -4,7 +4,8 @@
 // settings; we never write them.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -116,4 +117,127 @@ export function removeClaudeHooks(home: string): HooksResult {
   claude(["plugin", "marketplace", "remove", MARKET]);
   rmSync(pluginRoot(home), { recursive: true, force: true });
   return { ...claudeHooks(home), changed: "removed" };
+}
+
+// ---- both, for cpart setup and cpart hook install|remove
+
+export interface BothHooks {
+  claude: HooksResult;
+  codex: HooksResult & { file: string };
+}
+
+export const installHooks = (home: string): BothHooks => ({ claude: installClaudeHooks(home), codex: installCodexHooks(home) });
+export const removeHooks = (home: string): BothHooks => ({ claude: removeClaudeHooks(home), codex: removeCodexHooks(home) });
+
+// One line each, as `cpart setup` prints them. `safe` escapes text from elsewhere.
+export function hookLines(r: BothHooks, safe: (s: string) => string): string[] {
+  const out: string[] = [];
+  const c = r.claude;
+  if (c.found)
+    out.push(
+      c.error ? `--  Claude Code hooks: ${c.state === "here" ? "could not update them" : "could not add them"} (${safe(c.error)})`
+      : c.state === "elsewhere" ? `--  Claude Code already has a plugin named ${ID} from another identity or checkout. It was left alone. To switch: claude plugin uninstall ${ID}, then cpart setup`
+      : c.state === "here" ? `ok  Claude Code ${c.changed === "none" ? "already has" : c.changed === "updated" ? "has updated" : "now has"} the hooks that tell a session when a reply arrives${c.enabled === false ? ", but the plugin is disabled" : ""}${c.changed === "none" ? "" : ". Sessions started from now on use them"}`
+      : c.changed === "removed" ? "ok  Claude Code hooks removed"
+      : "--  Claude Code has no Counterpart hooks",
+    );
+  const x = r.codex;
+  if (x.found)
+    out.push(
+      x.error ? `--  Codex hooks: could not change ${safe(x.file)} (${safe(x.error)})`
+      : x.state === "here" ? `ok  Codex ${x.changed === "none" ? "already has" : x.changed === "updated" ? "has updated" : "now has"} the hooks in ${safe(x.file)}${x.changed === "none" ? "" : ". Codex runs them only once you trust them: start codex, type /hooks, and trust the three Counterpart hooks"}`
+      : x.changed === "removed" ? `ok  Codex hooks removed from ${safe(x.file)}`
+      : "--  Codex has no Counterpart hooks",
+    );
+  return out;
+}
+
+// ---- Codex
+//
+// Codex reads hooks from $CODEX_HOME/hooks.json and runs them only after the
+// person has trusted them in Codex (/hooks), against their hash. It has no way
+// to wake an idle session, so there is no watch. Its hook input and output
+// for these three events are the ones Claude Code uses.
+
+const codexFile = (): string => join(process.env.CODEX_HOME ?? join(homedir(), ".codex"), "hooks.json");
+
+type Group = { matcher?: string; hooks?: { command?: unknown }[] };
+type CodexHooks = { hooks?: Record<string, Group[]> } & Record<string, unknown>;
+
+export function codexHooksConfig(home: string): Record<string, Group[]> {
+  const all = hooksConfig(home) as { hooks: Record<string, Group[]> };
+  return {
+    UserPromptSubmit: all.hooks.UserPromptSubmit!,
+    PostToolUse: all.hooks.PostToolUse!.map((g) => ({ ...g, hooks: g.hooks!.filter((h) => !String(h.command).endsWith(" watch")) })),
+    Stop: all.hooks.Stop!,
+  };
+}
+
+// An entry is ours when its command runs our hook entry for this home.
+const ours =
+  (home: string) =>
+  (g: Group): boolean =>
+    (g.hooks ?? []).some((h) => typeof h.command === "string" && h.command.startsWith(`CPART_HOME=${sh(resolve(home))} `) && h.command.includes("hook-main.ts"));
+
+function readCodex(): CodexHooks {
+  if (!existsSync(codexFile())) return {};
+  const j = JSON.parse(readFileSync(codexFile(), "utf8")) as unknown;
+  if (!j || typeof j !== "object" || Array.isArray(j)) throw new Error(`${codexFile()} is not a JSON object`);
+  return j as CodexHooks;
+}
+
+function writeCodex(j: CodexHooks): void {
+  mkdirSync(dirname(codexFile()), { recursive: true });
+  const tmp = `${codexFile()}.cpart-${process.pid}`;
+  writeFileSync(tmp, `${JSON.stringify(j, null, 2)}\n`, { mode: 0o600 });
+  renameSync(tmp, codexFile());
+}
+
+const codexFound = (): boolean => spawnSync("codex", ["--version"], { stdio: "ignore", timeout: 30_000 }).status === 0;
+
+export function codexHooks(home: string): HooksState & { file: string } {
+  if (!codexFound()) return { found: false, state: "no", file: codexFile() };
+  try {
+    const j = readCodex();
+    const want = codexHooksConfig(home);
+    const have = Object.keys(want).every((ev) => (j.hooks?.[ev] ?? []).some(ours(home)));
+    const same = Object.entries(want).every(([ev, groups]) => JSON.stringify((j.hooks?.[ev] ?? []).filter(ours(home))) === JSON.stringify(groups));
+    return { found: true, state: have ? "here" : "no", ...(have ? { version: same ? "current" : "old" } : {}), file: codexFile() };
+  } catch {
+    return { found: true, state: "no", file: codexFile() };
+  }
+}
+
+// Adds our entries to hooks.json, replacing older ones for this home and
+// keeping everything else. A file that does not parse is left alone.
+export function installCodexHooks(home: string): HooksResult & { file: string } {
+  const before = codexHooks(home);
+  if (!before.found) return { ...before, changed: "none" };
+  if (before.state === "here" && before.version === "current") return { ...before, changed: "none" };
+  try {
+    const j = readCodex();
+    const hooks: Record<string, Group[]> = { ...(j.hooks ?? {}) };
+    for (const [ev, groups] of Object.entries(codexHooksConfig(home))) hooks[ev] = [...(hooks[ev] ?? []).filter((g) => !ours(home)(g)), ...groups];
+    writeCodex({ ...j, hooks });
+  } catch (e) {
+    return { ...before, changed: "none", error: (e as Error).message };
+  }
+  return { ...codexHooks(home), changed: before.state === "here" ? "updated" : "installed" };
+}
+
+export function removeCodexHooks(home: string): HooksResult & { file: string } {
+  const before = codexHooks(home);
+  if (!before.found || before.state !== "here") return { ...before, changed: "none" };
+  try {
+    const j = readCodex();
+    const hooks: Record<string, Group[]> = {};
+    for (const [ev, groups] of Object.entries(j.hooks ?? {})) {
+      const left = groups.filter((g) => !ours(home)(g));
+      if (left.length) hooks[ev] = left;
+    }
+    writeCodex({ ...j, hooks });
+  } catch (e) {
+    return { ...before, changed: "none", error: (e as Error).message };
+  }
+  return { ...codexHooks(home), changed: "removed" };
 }

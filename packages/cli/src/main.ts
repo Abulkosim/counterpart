@@ -16,7 +16,7 @@ import { startViewer } from "@counterpart/viewer";
 import { type WorkResult, apply as applyWork, work } from "@counterpart/worker";
 import { agents, bootInstalled, claim, down, logFile, registerAgents, running, up } from "./service.ts";
 import { openTunnel } from "./tunnel.ts";
-import { type HooksResult, installClaudeHooks, removeClaudeHooks } from "./hooks-install.ts";
+import { hookLines, installHooks, removeHooks } from "./hooks-install.ts";
 
 const USAGE = `cpart: let your agent talk to someone else's agent
 
@@ -24,7 +24,7 @@ Start here. One of these is all the setup there is:
 
   cpart setup --relay <wss://host> [--no-hooks]                   create your identity, keep the daemon running, add Counterpart to
                                                                   Claude Code and Codex. Safe to run again. --no-hooks leaves out
-                                                                  the Claude Code hooks that tell a session when a reply arrives
+                                                                  the hooks that tell a session when a reply arrives
   cpart join <invite> <name>                                      the same, from an invite someone sent you. <name> is what you call them
   cpart invite <name>                                             make an invite to send; <name> is what you call them
   cpart status                                                    is everything running, and what is waiting for you
@@ -52,7 +52,7 @@ The pieces, if you want to run them yourself:
   cpart mcp [--notify] [--view-port 7450]                         MCP server on stdio, for Claude Code and Codex. --notify tells a
                                                                   live Claude Code session when something arrives, never what
   cpart view [--port 7450]                                        read your threads in a browser, on this machine only
-  cpart hook install | remove                                     add or take out the Claude Code hooks (a local plugin). setup adds them
+  cpart hook install | remove                                     add or take out the Claude Code and Codex hooks. setup adds them
   cpart hook prompt|tool|stop|watch                               what those hooks run. Reads Claude Code's hook JSON on stdin
 
 Contracts: the exact text two people agree to. Anyone on your side, including
@@ -344,20 +344,9 @@ async function setup(relay: string | undefined, fromInvite = false): Promise<Cou
       );
     }
     if (!hosts.some((h) => h.found)) note("--  neither claude nor codex is on your PATH. Add the MCP server by hand: see docs/mcp.md");
-    if (!flags["no-hooks"]) hooksNote(installClaudeHooks(home));
+    if (!flags["no-hooks"]) for (const l of hookLines(installHooks(home), safe)) note(l);
   }
   return node;
-}
-
-function hooksNote(h: HooksResult): void {
-  if (!h.found) return;
-  note(
-    h.error ? `--  Claude Code hooks: ${h.state === "here" ? "could not update them" : "could not add them"} (${safe(h.error)})`
-    : h.state === "elsewhere" ? "--  Claude Code already has a plugin named counterpart@counterpart-local from another identity or checkout. It was left alone. To switch: claude plugin uninstall counterpart@counterpart-local, then cpart setup"
-    : h.state === "here" ? `ok  Claude Code ${h.changed === "none" ? "already has" : h.changed === "updated" ? "has updated" : "now has"} the hooks that tell a session when a reply arrives${h.enabled === false ? ", but the plugin is disabled" : ""}${h.changed === "none" ? "" : ". Sessions started from now on use them"}`
-    : h.changed === "removed" ? "ok  Claude Code hooks removed"
-    : "--  Claude Code has no Counterpart hooks",
-  );
 }
 
 function status(node: Counterpart): void {
@@ -469,10 +458,10 @@ async function main(): Promise<void> {
   }
   if (cmd === "hook") {
     if (args[0] === "install" || args[0] === "remove") {
-      const h = args[0] === "install" ? installClaudeHooks(home) : removeClaudeHooks(home);
-      if (!h.found) throw new Error("claude is not on your PATH");
-      hooksNote(h);
-      if (h.error) process.exitCode = 1;
+      const h = args[0] === "install" ? installHooks(home) : removeHooks(home);
+      if (!h.claude.found && !h.codex.found) throw new Error("neither claude nor codex is on your PATH");
+      for (const l of hookLines(h, safe)) note(l);
+      if (h.claude.error || h.codex.error) process.exitCode = 1;
       if (flags.json) console.log(JSON.stringify(h));
       return;
     }
