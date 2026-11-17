@@ -12,3 +12,4 @@ export * from "./invite.ts";
 export * from "./relay-frames.ts";
 export * from "./pake.ts";
 export * from "./wordlist.ts";
+export * from "./pake-pairing.ts";
