@@ -75,7 +75,7 @@ const SENSITIVE: [RegExp, string][] = [
   [/(^|\/)\.(husky|githooks)\//, "Git hooks"],
 ];
 
-function sensitive(path: string): string | null {
+export function sensitive(path: string): string | null {
   const lower = path.toLowerCase();
   for (const [re, what] of SENSITIVE) if (re.test(lower)) return what;
   return null;
