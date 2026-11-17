@@ -40,6 +40,7 @@ const CLOCK_SKEW = 10 * 60_000;
 const RETRY = 60_000; // an unconfirmed list is sent again after this, doubling
 const RETRY_MAX = 3600_000;
 const TRIES = 8;
+const KEEP_TRYING = 7 * 24 * 3600_000; // past TRIES, hourly until a week after the change
 const SPACING = 5_000; // at most one list to a contact in this time
 
 export class RelayBook {
@@ -191,31 +192,38 @@ export class RelayBook {
     return { relays: r?.relays ? (JSON.parse(r.relays) as string[]) : [paired], version: r?.version ?? 0, seen: r?.seen ?? 0 };
   }
 
-  // A contact's signed list. Returns why it is refused, or null once applied.
+  // A contact's signed list. Refused with a reason, or applied; `newer` says
+  // whether it changed what we hold (only those are worth keeping in the log).
   // It changes only this contact's entry.
-  apply(root: string, body: EventBodies["contact.relays"], now: number): string | null {
+  apply(root: string, body: EventBodies["contact.relays"], now: number): { refused: string } | { newer: boolean } {
     const mine = this.version();
-    if (body.version > now + CLOCK_SKEW) return "relay list dated in the future";
-    if (body.seen > mine) return "relay list confirms a version of mine that does not exist";
-    const row = this.db.prepare("SELECT relays, version, seen FROM contact_relays WHERE root_key = ?").get(root) as { relays: string | null; version: number; seen: number } | undefined;
+    if (body.version > now + CLOCK_SKEW) return { refused: "relay list dated in the future" };
+    if (body.seen > mine) return { refused: "relay list confirms a version of mine that does not exist" };
+    const row = this.db.prepare("SELECT relays, version, seen, sent_at, sent_version FROM contact_relays WHERE root_key = ?").get(root) as
+      | { relays: string | null; version: number; seen: number; sent_at: number; sent_version: number }
+      | undefined;
     const had = row?.relays ? (JSON.parse(row.relays) as string[]) : null;
-    if (had && body.version < row!.version) return "relay list is older than the one already held";
-    if (had && body.version === row!.version && JSON.stringify(had) !== JSON.stringify(body.relays)) return "relay list changed without a new version";
+    if (had && body.version < row!.version) return { refused: "relay list is older than the one already held" };
+    if (had && body.version === row!.version && JSON.stringify(had) !== JSON.stringify(body.relays)) return { refused: "relay list changed without a new version" };
     const newer = !had || body.version > row!.version;
-    // Confirm a list that is new to us, and resend ours to a contact who lacks it.
-    const reply = (newer && body.version > 0) || (mine > 0 && body.seen < mine);
+    // Confirm a list that is new to us. Resend ours to a contact who lacks it,
+    // unless we just did: repeating a stale confirmation earns no extra replies.
+    const lacksMine = mine > 0 && body.seen < mine && !(row && row.sent_version === mine && now - row.sent_at < RETRY);
+    const reply = (newer && body.version > 0) || lacksMine;
     this.db
       .prepare(
         `INSERT INTO contact_relays (root_key, relays, version, seen, reply) VALUES (?, ?, ?, ?, ?)
          ON CONFLICT (root_key) DO UPDATE SET relays = excluded.relays, version = excluded.version, seen = MAX(seen, excluded.seen), reply = MAX(reply, excluded.reply)`,
       )
       .run(root, JSON.stringify(body.relays), body.version, body.seen, reply ? 1 : 0);
-    return null;
+    return { newer };
   }
 
   // Contacts (of those given) that should be sent my list now: to confirm
   // theirs, or because they have not confirmed mine. Unconfirmed lists are sent
-  // again with a growing wait, a few times.
+  // again with a growing wait, up to an hour, for a week after the change: a
+  // copy can be stored on a relay the contact does not read (see link.ts), so
+  // a few tries are not enough.
   owed(active: string[], now: number): string[] {
     const mine = this.version();
     const get = this.db.prepare("SELECT reply, seen, sent_at, sent_version, tries FROM contact_relays WHERE root_key = ?");
@@ -225,12 +233,27 @@ export class RelayBook {
       if (r.reply) return true;
       if (mine === 0 || r.seen >= mine) return false;
       if (r.sent_version !== mine) return true;
-      return r.tries < TRIES && now >= r.sent_at + Math.min(RETRY * 2 ** (r.tries - 1), RETRY_MAX);
+      return (r.tries < TRIES || now - mine < KEEP_TRYING) && now >= r.sent_at + Math.min(RETRY * 2 ** (r.tries - 1), RETRY_MAX);
     });
   }
 
+  // Read in one snapshot, so names and version always belong together even
+  // while `cpart relay` changes them from another process.
   announcement(root: string, paired: string): EventBodies["contact.relays"] {
-    return { relays: this.names(), version: this.version(), seen: this.their(root, paired).version };
+    return this.atomic(() => ({ relays: this.names(), version: this.version(), seen: this.their(root, paired).version }));
+  }
+
+  // The end of a move: if every contact has confirmed and uses a relay I keep,
+  // drop the leaving relays. Checked and done in one transaction, so a contact
+  // or a change that arrives meanwhile is not missed. Returns what was dropped,
+  // or null if someone is not ready.
+  finishMove(active: () => { rootKey: string; relay: string }[], version: number, now: number): string[] | null {
+    return this.atomic(() => {
+      if (this.version() !== version || this.unconfirmed(active()).length) return null;
+      const gone = this.leaving().map((r) => r.url);
+      for (const url of gone) this.removeIn(url, now);
+      return gone;
+    });
   }
 
   sent(root: string, version: number, now: number): void {

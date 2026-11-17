@@ -936,9 +936,10 @@ export class Counterpart {
         this.refreshCredential(contact, credential);
         // Where to reach this contact. It touches their entry and nobody else's.
         if (event.type === "contact.relays") {
-          const why = this.relayBook.apply(contact.root_key, (event as ThreadEvent<"contact.relays">).body, this.now());
-          if (why) throw new Reject(why);
-          this.insertEvent(event, credential.rootKey, false, "applied");
+          const r = this.relayBook.apply(contact.root_key, (event as ThreadEvent<"contact.relays">).body, this.now());
+          if ("refused" in r) throw new Reject(r.refused);
+          // Only a list that changed something is kept: repeats cannot grow the log.
+          if (r.newer) this.insertEvent(event, credential.rootKey, false, "applied");
           return { result: "applied", event, promoted: [] };
         }
         const hold = (): Verdict => {

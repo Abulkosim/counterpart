@@ -11,7 +11,7 @@ import { type ContractPart, type Evidence, canonicalize, decodeInvite, isHttpsUr
 import { FrontDesk, addToBundle, anthropicApi, claudeCli, cliPrivateValues, readBundle, removeFromBundle } from "@counterpart/frontdesk";
 import { startMcpServer } from "@counterpart/mcp";
 import { type Binding, collectEvidence, preparePublication, publish, repoInit } from "@counterpart/publish";
-import { relayNames, splitUrls, startRelay } from "@counterpart/relay";
+import { splitUrls, startRelay } from "@counterpart/relay";
 import { startViewer } from "@counterpart/viewer";
 import { type WorkResult, apply as applyWork, work } from "@counterpart/worker";
 import { agents, bootInstalled, claim, down, logFile, registerAgents, running, up } from "./service.ts";
@@ -396,8 +396,10 @@ async function main(): Promise<void> {
     if (flags.tunnel) await portFree(port, host);
     const tunnel = flags.tunnel ? await openTunnel(port) : undefined;
     const given = flags.url?.length ? flags.url : splitUrls(process.env.CPART_RELAY_URL);
-    // Behind a tunnel it still answers on this machine by its local names, which do not change on restart.
-    const urls = tunnel ? [tunnel.url, ...given, ...relayNames(host, port, []).all] : given;
+    // Behind a tunnel it answers to the tunnel's address and to --url, never to
+    // loopback names by default: those are shared by every machine, and the
+    // public address would let a relay elsewhere log in with them. See connectivity.md.
+    const urls = tunnel ? [tunnel.url, ...given] : given;
     const relay = await startRelay({ port, host, dbPath: flags.db ?? "relay.db", urls, log: (l) => console.log(l) }).catch((e: Error) => {
       tunnel?.close();
       throw e;

@@ -182,6 +182,25 @@ export const relayChange: Case[] = [
     },
   },
   {
+    id: "RLY-10",
+    category: "relay-change",
+    attacker: "contact",
+    title: "Send the same stale relay list over and over",
+    claim: "Repeating a relay list makes Bob store nothing more and answer at most once a minute.",
+    async run(ctx) {
+      const { bob, alice } = await scene(ctx);
+      bob.relayBook.add("ws://127.0.0.1:19/b", null, Date.now());
+      const body = list([bob.relay], Date.now(), 0); // never confirms Bob's list
+      assert.equal((await bob.receive(await send(alice, bob, relaysEvent(alice, body)))).result, "applied");
+      assert.equal(await bob.sendRelayLists(), 1, "the first one is answered");
+      const events = ctx.counts(bob).events;
+      for (let i = 0; i < 20; i++) assert.equal((await bob.receive(await send(alice, bob, relaysEvent(alice, body)))).result, "applied");
+      assert.equal(ctx.counts(bob).events, events, "repeats were stored");
+      await pause(5100); // past the spacing between two lists to one contact
+      assert.equal(await bob.sendRelayLists(), 0, "a repeat earned another answer within the minute");
+    },
+  },
+  {
     id: "RLY-09",
     category: "relay-change",
     attacker: "contact",

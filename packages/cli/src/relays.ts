@@ -148,7 +148,9 @@ export async function relayCommand(node: Counterpart, args: string[], io: Io): P
       await new Promise((r) => setTimeout(r, 500));
       left = book.unconfirmed(active());
     }
-    if (left.length || book.version() !== version) {
+    const gone = left.length ? null : book.finishMove(active, version, Date.now());
+    if (!gone) {
+      left = book.unconfirmed(active());
       const why = active()
         .filter((c) => left.includes(c.rootKey))
         .map((c) => {
@@ -160,8 +162,7 @@ export async function relayCommand(node: Counterpart, args: string[], io: Io): P
         { home: book.home(), done: false, unconfirmed: active().filter((c) => left.includes(c.rootKey)).map((c) => c.name) },
       );
     }
-    for (const r of leaving) book.remove(r.url, Date.now());
-    return io.out(`Done. Every contact confirmed. ${leaving.map((r) => safe(r.url)).join(", ")} removed; your daemon tells contacts that too.`, { home: book.home(), done: true, removed: leaving.map((r) => r.url) });
+    return io.out(`Done. Every contact confirmed. ${gone.map(safe).join(", ")} removed; your daemon tells contacts that too.`, { home: book.home(), done: true, removed: gone });
   }
 
   throw new Error(`usage:\n${RELAY_USAGE}`);

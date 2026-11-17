@@ -5,6 +5,7 @@ import { type ClientFrame, type ServerFrame, type ThreadEvent, RELAY_AUTH_DOMAIN
 import type { Counterpart, Verdict } from "./node.ts";
 
 const MAX_BACKLOG = 256;
+const MAX_BUFFERED = 1024 * 1024; // bytes written to a relay and not yet taken by the network
 const INFLIGHT_MS = 10_000; // a send the relay has not answered in this time is tried again, on the next relay if there is one
 
 // The relay's error codes are printed and stored. Only plain ones are kept.
@@ -307,6 +308,9 @@ export class RelayLink extends EventEmitter<LinkEvents> {
         this.node.markOutbox(frame.id, "stored");
         return;
       case "error":
+        // About a send, it counts only from the relay that send last went to:
+        // one relay cannot fail mail that is on its way through another.
+        if (isId(frame.id) && this.inflight.get(frame.id)?.url !== c.url) return;
         if (!isId(frame.id)) {
           if (!c.ready) {
             c.why = `refused the login: ${code(frame.code)}`;
@@ -325,7 +329,7 @@ export class RelayLink extends EventEmitter<LinkEvents> {
         // without acknowledging; the relay still holds the message.
         if (this.backlog >= MAX_BACKLOG) return;
         this.backlog++;
-        this.inbound = this.inbound.then(async () => {
+        this.chain(async () => {
           this.backlog--;
           try {
             const verdict = await this.node.receive(wire);
@@ -361,6 +365,18 @@ export class RelayLink extends EventEmitter<LinkEvents> {
         return;
       }
     }
+  }
+
+  // Deliveries and housekeeping run one at a time. A step that throws, even
+  // from its own error handling, must not stop the ones after it.
+  private chain(fn: () => Promise<void>): void {
+    this.inbound = this.inbound.then(fn).catch((e: unknown) => {
+      try {
+        this.emit("error", e instanceof Error ? e : new Error(String(e)));
+      } catch {
+        // nobody listening for errors
+      }
+    });
   }
 
   // ---- liveness
@@ -419,7 +435,7 @@ export class RelayLink extends EventEmitter<LinkEvents> {
   private tend(): void {
     if (!this.online || this.tending) return;
     this.tending = true;
-    this.inbound = this.inbound.then(async () => {
+    this.chain(async () => {
       try {
         if (this.stopped) return;
         await this.node.sendReceipts();
@@ -458,7 +474,11 @@ export class RelayLink extends EventEmitter<LinkEvents> {
         const f = this.inflight.get(id);
         if (f && now - f.at < INFLIGHT_MS) continue;
         const route = routes.get(wire.header.to) ?? { preferred: [], fallback: [this.node.relay] };
-        const live = (url: string): boolean => !!this.conns.get(url)?.ready;
+        // A relay that stops reading must not make us buffer without end.
+        const live = (url: string): boolean => {
+          const c = this.conns.get(url);
+          return !!c?.ready && !!c.ws && c.ws.bufferedAmount < MAX_BUFFERED;
+        };
         // A relay the contact reads, in their order. My other relays only when
         // none of theirs has been reachable for a while: a relay that restarts
         // must not send their mail somewhere they never look.

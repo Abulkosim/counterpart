@@ -149,7 +149,8 @@ test("relay move: add, announce, wait for the contact, then drop the old one", a
   bob.relayBook.add(r2.url, null, Date.now());
   await until("bob is on r2", () => lb.connected().includes(r2.url));
   await until("alice sees bob uses r2", () => alice.relayBook.unconfirmed(contacts()).length === 0);
-  alice.relayBook.remove(r1.url, Date.now());
+  assert.equal(alice.relayBook.finishMove(contacts, alice.relayBook.version() - 1, Date.now()), null, "a move checked against an older version does not finish");
+  assert.deepEqual(alice.relayBook.finishMove(contacts, alice.relayBook.version(), Date.now()), [r1.url]);
   await until("alice left r1", () => la.connected().join() === r2.url);
 
   const thread = await bob.openThread("alice", "after the move");
