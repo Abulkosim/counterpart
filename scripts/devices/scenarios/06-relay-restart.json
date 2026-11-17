@@ -1,0 +1,18 @@
+{
+  "name": "06-relay-restart",
+  "title": "The relay restarts while the laptop's front desk is answering",
+  "asker": "devcontainer",
+  "steps": [
+    { "do": "desk", "device": "laptop", "files": ["README.md", "server.js"], "as": "Sam" },
+    {
+      "do": "session", "device": "devcontainer", "id": "asker", "background": true, "timeout": 900, "tools": ["Read", "Grep", "Glob"],
+      "prompt": "sync.js pages through the warehouse team's stockroom API. Ask their agent (Counterpart contact: laptop) what the default page_size is and how long a cursor stays valid. Wait for the answer, then tell me in two lines. Do not edit any file."
+    },
+    { "do": "wait_message", "device": "laptop", "since": "step", "timeout": 300, "label": "the question on the laptop" },
+    { "do": "fault", "kind": "relay_restart", "down_seconds": 10 },
+    { "do": "wait_message", "device": "devcontainer", "timeout": 480, "recover_after": 300, "label": "the laptop's answer on the devcontainer" },
+    { "do": "await", "id": "asker" },
+    { "do": "expect", "device": "devcontainer", "check": "the answer names 50 and 15 minutes", "message_matches": ["50", "15"] },
+    { "do": "expect", "check": "the asker's report to its human has the answer", "session": "asker", "session_matches": ["50"] }
+  ]
+}
