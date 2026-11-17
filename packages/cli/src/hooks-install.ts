@@ -173,11 +173,16 @@ export function codexHooksConfig(home: string): Record<string, Group[]> {
   };
 }
 
-// An entry is ours when its command runs our hook entry for this home.
+// A hook is ours when its command runs our hook entry for this home.
+const mine = (home: string, h: { command?: unknown }): boolean => typeof h.command === "string" && h.command.startsWith(`CPART_HOME=${sh(resolve(home))} `) && h.command.includes("hook-main.ts");
 const ours =
   (home: string) =>
   (g: Group): boolean =>
-    (g.hooks ?? []).some((h) => typeof h.command === "string" && h.command.startsWith(`CPART_HOME=${sh(resolve(home))} `) && h.command.includes("hook-main.ts"));
+    (g.hooks ?? []).some((h) => mine(home, h));
+// The same groups without our hooks. A group left with none is dropped;
+// anything else in a group, someone else's hook or a field, stays.
+const without = (home: string, groups: Group[]): Group[] =>
+  groups.flatMap((g) => (!ours(home)(g) ? [g] : (g.hooks ?? []).every((h) => mine(home, h)) ? [] : [{ ...g, hooks: g.hooks!.filter((h) => !mine(home, h)) }]));
 
 function readCodex(): CodexHooks {
   if (!existsSync(codexFile())) return {};
@@ -217,7 +222,7 @@ export function installCodexHooks(home: string): HooksResult & { file: string } 
   try {
     const j = readCodex();
     const hooks: Record<string, Group[]> = { ...(j.hooks ?? {}) };
-    for (const [ev, groups] of Object.entries(codexHooksConfig(home))) hooks[ev] = [...(hooks[ev] ?? []).filter((g) => !ours(home)(g)), ...groups];
+    for (const [ev, groups] of Object.entries(codexHooksConfig(home))) hooks[ev] = [...without(home, hooks[ev] ?? []), ...groups];
     writeCodex({ ...j, hooks });
   } catch (e) {
     return { ...before, changed: "none", error: (e as Error).message };
@@ -227,12 +232,14 @@ export function installCodexHooks(home: string): HooksResult & { file: string } 
 
 export function removeCodexHooks(home: string): HooksResult & { file: string } {
   const before = codexHooks(home);
-  if (!before.found || before.state !== "here") return { ...before, changed: "none" };
+  if (!before.found) return { ...before, changed: "none" };
   try {
     const j = readCodex();
+    // Any of ours goes, even when someone took out the rest by hand.
+    if (!Object.values(j.hooks ?? {}).some((groups) => groups.some(ours(home)))) return { ...before, changed: "none" };
     const hooks: Record<string, Group[]> = {};
     for (const [ev, groups] of Object.entries(j.hooks ?? {})) {
-      const left = groups.filter((g) => !ours(home)(g));
+      const left = without(home, groups);
       if (left.length) hooks[ev] = left;
     }
     writeCodex({ ...j, hooks });
