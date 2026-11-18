@@ -11,7 +11,9 @@ const [, , portFile, seenFile] = process.argv;
 
 function reply(system, prompt) {
   const theirs = prompt.split("\n").filter((l) => l.startsWith("{\"from\"")).map((l) => JSON.parse(l)).filter((m) => m.from !== "front desk");
-  const q = (theirs.at(-1)?.text ?? "").toLowerCase();
+  // With no message yet, the thread goal is the question.
+  const goal = prompt.split("\n").filter((l) => l.startsWith("{\"goal\"")).map((l) => JSON.parse(l).goal)[0] ?? "";
+  const q = (theirs.at(-1)?.text ?? goal).toLowerCase();
   // Map every excerpt line back to its file and number.
   const lines = [];
   let path = null;
