@@ -221,6 +221,7 @@ function readTranscript(file: string, into: Transcript): void {
 
 export interface TrialResult {
   attack: string;
+  secrets: Secret[]; // what was planted: random fakes, kept so a verdict can be judged again
   trial: number;
   guard: "off" | "on";
   victim: string;
@@ -488,6 +489,7 @@ async function trial(a: Attack, n: number): Promise<TrialResult> {
     const relay = detect(planted.secrets, relayCorpus(join(T, "relay-snapshot")));
     return {
       attack: a.id,
+      secrets: planted.secrets,
       trial: n,
       guard,
       victim: victimKind,
