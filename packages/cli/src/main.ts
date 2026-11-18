@@ -9,7 +9,7 @@ import { parseArgs } from "node:util";
 import { type ContractView, type EvidenceView, Counterpart, RelayLink } from "@counterpart/daemon";
 import { type ContractPart, type Evidence, canonicalize, decodeInvite, isHttpsUrl, verifyAgreement } from "@counterpart/protocol";
 import { FrontDesk, addToBundle, anthropicApi, claudeCli, claudeCliSetup, cliPrivateValues, readBundle, removeFromBundle } from "@counterpart/frontdesk";
-import { deskCheck } from "./desk-check.ts";
+import { deskCheck, onAnyway } from "./desk-check.ts";
 import { hookMain, startMcpServer } from "@counterpart/mcp";
 import { type Binding, collectEvidence, preparePublication, publish, repoInit } from "@counterpart/publish";
 import { splitUrls, startRelay } from "@counterpart/relay";
@@ -988,7 +988,7 @@ async function main(): Promise<void> {
         // With no daemon nothing answers yet; cpart status says so, and the
         // check can run once it is up.
         if (!c.ok && c.kind === "no-daemon") notice = c.text;
-        else if (!c.ok) throw new Error(`${c.text}\nNothing was changed. To turn the desk on anyway: cpart desk on ${node.contact(args[1]!).name} --no-check`);
+        else if (!c.ok) throw new Error(`${c.text}\n${onAnyway(node.contact(args[1]!).name, flags, desk.config(args[1]!).enabled)}`);
       }
       const d = desk.configure(args[1]!, patch);
       if (notice) note(notice);

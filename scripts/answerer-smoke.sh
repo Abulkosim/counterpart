@@ -196,7 +196,7 @@ grep -q "cannot run from the daemon: claude is not logged in (CLAUDE_CONFIG_DIR=
 grep -q "^  claude      $STUB/claude$" "$WORK/check1.out"
 grep -q "^  PATH        $STUB:" "$WORK/check1.out"
 grep -q "^Fix: log claude in for the daemon's config: CLAUDE_CONFIG_DIR=$WORK/alice-claude claude auth login$" "$WORK/check1.out"
-grep -q "^Nothing was changed. To turn the desk on anyway: cpart desk on bob --no-check$" "$WORK/check1.out"
+grep -q "^Nothing was changed. To turn the desk on anyway: cpart desk on bob --as Alice --no-check$" "$WORK/check1.out"
 cpart alice desk status | grep -q "^bob  *off " || fail "a refused desk on turned the desk on"
 [ "$(calls)" -eq 1 ] || fail "the check should be one call"
 
@@ -214,6 +214,11 @@ grep -q "front desk failed .*claude is not logged in" "$WORK/alice.log"
 [ "$(calls)" -eq 2 ] || fail "expected the check and one answer"
 sleep 3
 [ "$(calls)" -eq 2 ] || fail "the desk tried the message again"
+
+step "with the desk on, a change is refused too, and the desk stays on as it was"
+if cpart alice desk on bob --slots 3 >"$WORK/check3.out" 2>&1; then fail "desk on did not refuse a model that cannot run"; fi
+grep -q "^Nothing was changed. The desk is still on as before. To make the change anyway: cpart desk on bob --slots 3 --no-check$" "$WORK/check3.out"
+cpart alice desk status | grep -q "^bob  *on .* 6 replies per thread" || fail "a refused desk on changed the desk"
 
 step "alice logs claude in; the check passes and the status clears"
 touch "$WORK/alice-claude/logged-in"

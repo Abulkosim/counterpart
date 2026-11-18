@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { CheckResult, FrontDesk } from "@counterpart/frontdesk";
-import { deskCheck, explain } from "../src/desk-check.ts";
+import { deskCheck, explain, onAnyway } from "../src/desk-check.ts";
 
 const io = { boot: () => undefined, safe: (s: string) => s, log: "/h/daemon.log" };
 const cli = (over: Partial<Extract<CheckResult["setup"], { kind: "claude-cli" }>> = {}): CheckResult["setup"] => ({ kind: "claude-cli", bin: "claude", found: "/opt/bin/claude", path: "/usr/bin:/bin", configDir: null, defaultConfigDir: "/home/a/.claude", ...over });
@@ -47,4 +47,10 @@ test("the check waits for the daemon, and says so when there is none or it does 
   assert.deepEqual(silent.cancelled, [7], "a request no daemon took is withdrawn");
   const failed = await deskCheck(fakeDesk(() => ({ ok: false, short: "claude exited 1", detail: "claude exited 1: boom", setup: cli() })), { ...io, daemon: async () => true, wait });
   assert.ok(!failed.ok && failed.kind === "failed" && /claude exited 1: boom/.test(failed.text));
+});
+
+test("the command to turn the desk on without the check keeps what was asked for", () => {
+  assert.equal(onAnyway("bob", { as: "Alice", slots: "2", daily: "10" }, false), "Nothing was changed. To turn the desk on anyway: cpart desk on bob --as Alice --slots 2 --daily 10 --no-check");
+  assert.equal(onAnyway("bob", { as: "Alice B." }, false), "Nothing was changed. To turn the desk on anyway: cpart desk on bob --as 'Alice B.' --no-check");
+  assert.equal(onAnyway("bob", {}, true), "Nothing was changed. The desk is still on as before. To make the change anyway: cpart desk on bob --no-check");
 });

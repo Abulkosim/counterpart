@@ -36,6 +36,16 @@ export async function deskCheck(desk: FrontDesk, io: CheckIo): Promise<DeskCheck
   }
 }
 
+// The command that does what `cpart desk on` was asked to do, without the
+// check. It keeps --as, --slots and --daily: without them a first desk would
+// answer as "the owner" with the default limits. The owner name is 1-40
+// letters, digits, spaces, dots, dashes and underscores, so single quotes hold it.
+export function onAnyway(contact: string, opts: { as?: string | undefined; slots?: string | undefined; daily?: string | undefined }, wasOn: boolean): string {
+  const q = (s: string): string => (/^[\w.-]+$/.test(s) ? s : `'${s}'`);
+  const cmd = ["cpart desk on", q(contact), ...(opts.as ? ["--as", q(opts.as)] : []), ...(opts.slots ? ["--slots", q(opts.slots)] : []), ...(opts.daily ? ["--daily", q(opts.daily)] : []), "--no-check"].join(" ");
+  return wasOn ? `Nothing was changed. The desk is still on as before. To make the change anyway: ${cmd}` : `Nothing was changed. To turn the desk on anyway: ${cmd}`;
+}
+
 // What failed, where the daemon looked, and what to do about it.
 export function explain(r: CheckResult, io: Pick<CheckIo, "boot" | "safe">): string {
   const s = io.safe;
