@@ -15,6 +15,7 @@ export const CATEGORIES = {
   output: "Terminal output",
   storage: "Local storage",
   pairing: "Pairing with a short code",
+  outbound: "What leaves the machine",
 } as const;
 
 export type Category = keyof typeof CATEGORIES;

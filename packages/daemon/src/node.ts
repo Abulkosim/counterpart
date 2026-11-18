@@ -6,9 +6,10 @@ import {
   type Agreement, type Approval, type CheckedPart, type Contract, type ContractPart, type DeviceCredential, type DeviceSecrets, type EventBodies, type EventType,
   type Evidence, type KeyPair, type ThreadEvent, type Via, type Wire,
   EVIDENCE_STATE, LIMITS, checkEvidenceParts, contractHash, decodeInvite, deviceId, encodeInvite, generateSigningKey, hashOf, humanId, issueDevice, laneOf, open, parseContract, parseEvidence,
-  randomId, renewDevice, safetyCode, seal, signApproval, verifyAgreement, verifyApproval,
+  randomId, renewDevice, safetyCode, seal, sign, signApproval, verifyAgreement, verifyApproval,
 } from "@counterpart/protocol";
 import { type SealedRoot, DEFAULT_LOG_N, sealRoot, unsealRoot } from "./rootkey.ts";
+import { type GuardOptions, type Held, GUARD_OFF_DOMAIN, MAX_OFF_MINUTES, Guard, Recheck, guardOffMessage } from "./guard.ts";
 import { RelayBook } from "./relays.ts";
 
 const DAY = 24 * 3600 * 1000;
@@ -147,6 +148,8 @@ export class Counterpart {
   private now: () => number;
   private resendAfter: number;
   private receiptDelay: number;
+  // Every body this side sends passes it before it is sealed. See guard.ts.
+  readonly guard: Guard;
   // My relays and my contacts' relays. See relays.ts.
   readonly relayBook: RelayBook;
 
@@ -241,6 +244,7 @@ export class Counterpart {
         if (!/duplicate column/.test((e as Error).message)) throw e;
       }
     }
+    this.guard = new Guard(this.db, opts.guard ?? {}, now, keys.rootKey);
     this.relayBook = new RelayBook(this.db, keys.relay);
   }
 
@@ -293,7 +297,7 @@ export class Counterpart {
 
   // Throws unless the passphrase unlocks the root key. For commands that must
   // come from the owner and not from their agent.
-  checkPassphrase(passphrase: string): void {
+  checkPassphrase(passphrase?: string): void {
     if (!this.keys.sealedRoot) throw new Error("this identity has no passphrase");
     this.unlock(passphrase);
   }
@@ -382,6 +386,8 @@ export class Counterpart {
     checkName(name);
     const inv = decodeInvite(invite, this.now());
     if (inv.credential.rootKey === this.keys.rootKey) throw new Error("that is your own invite");
+    // The token goes back to the inviter. Someone could have made it out of a secret.
+    if (this.guard.check({ token: inv.token }).length && !this.guard.off) throw new Error("this invite's token looks like it carries a secret. It was not accepted.");
     if (!this.relayBook.find(inv.relay)) throw new Error(`invite is for relay ${inv.relay}, which this identity does not use. Add it first: cpart relay add ${inv.relay}`);
     if (this.db.prepare("SELECT 1 FROM contacts WHERE name = ? OR root_key = ?").get(name, inv.credential.rootKey)) throw new Error("you already have this contact, or that name is taken");
     const out = await this.build(inv.credential, randomId(), "contact.request", { token: inv.token }, 0, []);
@@ -414,13 +420,26 @@ export class Counterpart {
   // ---- threads ----
 
   async openThread(contactName: string, goal: string): Promise<string> {
+    return this.open(contactName, goal);
+  }
+
+  // `released` names the held message this is, once its owner let it go. Only releaseHeld passes it.
+  private async open(contactName: string, goal: string, released?: string): Promise<string> {
     const c = this.activeContact(contactName);
+    const screened = { contactRoot: c.rootKey, threadId: null, type: "thread.opened", body: { goal } };
+    const ticket = released ? null : this.guard.screen(screened);
     const threadId = randomId();
     const out = await this.build(c.credential, threadId, "thread.opened", { goal, participants: [this.keys.rootKey, c.rootKey] }, 0, []);
-    this.tx(() => {
-      this.db.prepare("INSERT INTO threads (id, goal, contact_root, opened_by_me, created_at, genesis) VALUES (?, ?, ?, 1, ?, ?)").run(threadId, goal, c.rootKey, this.now(), hashOf(out.event));
-      this.commitOut(out);
-    });
+    try {
+      this.tx(() => {
+        this.guard.recheck(screened, ticket);
+        this.db.prepare("INSERT INTO threads (id, goal, contact_root, opened_by_me, created_at, genesis) VALUES (?, ?, ?, 1, ?, ?)").run(threadId, goal, c.rootKey, this.now(), hashOf(out.event));
+        this.commitOut(out);
+        if (released) this.guard.released(released, out.event.id);
+      });
+    } catch (e) {
+      throw e instanceof Recheck ? this.guard.hold(e) : e;
+    }
     return threadId;
   }
 
@@ -430,10 +449,13 @@ export class Counterpart {
 
   // Add one of my events to a thread. `body` may depend on the thread's state,
   // so it can be given as a function that runs once the contact is known.
-  private async post<T extends EventType>(threadId: string, type: T, body: EventBodies[T], extraParents: string[] = []): Promise<ThreadEvent<T>> {
+  // `released` names the held message this is, once its owner let it go.
+  private async post<T extends EventType>(threadId: string, type: T, body: EventBodies[T], extraParents: string[] = [], released?: string): Promise<ThreadEvent<T>> {
     const t = this.db.prepare("SELECT contact_root FROM threads WHERE id = ?").get(threadId) as { contact_root: string } | undefined;
     if (!t) throw new Error(`no thread ${threadId}`);
     const c = this.activeContact(t.contact_root);
+    const screened = { contactRoot: c.rootKey, threadId, type, body };
+    const ticket = released ? null : this.guard.screen(screened);
     const mine = deviceId(this.keys.device.credential);
     // Sequence numbers are allocated here and committed below; a clash with a
     // concurrent writer fails the unique index and the caller retries.
@@ -443,15 +465,51 @@ export class Counterpart {
       const out = await this.build(c.credential, threadId, type, body, seq, parents);
       try {
         this.tx(() => {
+          // Again inside the commit, so two messages sent at once cannot each carry half of a value.
+          this.guard.recheck(screened, ticket);
           this.checkAct(out.event, this.keys.rootKey);
           this.commitOut(out);
+          if (released) this.guard.released(released, out.event.id);
         });
         return out.event as ThreadEvent<T>;
       } catch (e) {
+        if (e instanceof Recheck) throw this.guard.hold(e);
         if (e instanceof Reject) throw new Error(e.message);
         if (attempt >= 5 || !/UNIQUE constraint failed: events/.test((e as Error).message)) throw e;
       }
     }
+  }
+
+  // Send a message the outbound guard held, as it was written. Only the owner
+  // may: the passphrase is checked first, and an identity without one cannot
+  // release at all, since nothing would tell its owner from an agent. The CLI
+  // also insists on a terminal. Sending and marking it released are one transaction.
+  async releaseHeld(ref: string, passphrase?: string): Promise<{ held: Held; eventId: string; threadId: string }> {
+    if (!this.keys.sealedRoot) throw new Error("this identity was made without a passphrase, so nothing can tell you from an agent here, and held messages cannot be released. Drop it, and send what you meant to send in words that do not carry the secret.");
+    this.checkPassphrase(passphrase);
+    const h = this.guard.claim(this.guard.find(ref).id);
+    try {
+      let threadId: string;
+      if (h.type === "thread.opened") threadId = await this.open(h.contactRoot, (h.body as { goal: string }).goal, h.id);
+      else threadId = (await this.post(h.threadId!, h.type as EventType, h.body as never, [], h.id)).threadId;
+      const eventId = this.guard.find(h.id).eventId!;
+      return { held: h, eventId, threadId };
+    } catch (e) {
+      this.guard.unclaim(h.id);
+      throw e;
+    }
+  }
+
+  // Turn the outbound guard off for a while. Only the owner may: the
+  // passphrase unlocks the root key, which signs the end time. An identity
+  // without a passphrase cannot, for the same reason it cannot release.
+  guardOff(minutes: number, passphrase?: string): number {
+    if (!this.keys.sealedRoot) throw new Error("this identity was made without a passphrase, so nothing here can tell you from an agent, and the guard cannot be turned off.");
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > MAX_OFF_MINUTES) throw new Error(`give the minutes as a whole number from 1 to ${MAX_OFF_MINUTES}`);
+    const root = this.unlock(passphrase);
+    const until = this.now() + minutes * 60_000;
+    this.guard.setOff(until, sign(root, GUARD_OFF_DOMAIN, guardOffMessage(this.keys.rootKey, until)));
+    return until;
   }
 
   // ---- contracts ----
@@ -1116,6 +1174,7 @@ export class Counterpart {
 
 export interface NodeOptions {
   now?: () => number;
+  guard?: GuardOptions; // the outbound guard; by default it reads this process's environment and working directory
   resendAfterMs?: number; // how long an event is held before its missing parents are asked for
   receiptDelayMs?: number; // how long a receipt waits for more events to cover
 }
