@@ -7,11 +7,15 @@ export const RELAY_LIMITS = {
   names: 16,
 } as const;
 
-// A plain ws:// or wss:// address: a host, an optional port and path, nothing
-// else. It is shown to people and stored, so nothing invisible either.
+// A plain ws:// or wss:// address: a host name or IP address, an optional port
+// and path, nothing else. Contacts choose these and they are printed as part of
+// commands to run (`cpart relay add <url>`), so only characters that mean
+// nothing to a shell: letters, digits and . - _ ~ / % (and [ ] : for IPv6).
+const PLAIN = /^wss?:\/\/(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::[0-9]{1,5})?(?:\/[A-Za-z0-9._~%/-]*)?$/i;
+
 export function isRelayUrl(x: unknown): x is string {
   if (typeof x !== "string" || x.length < 1 || x.length > RELAY_LIMITS.url) return false;
-  if (!/^[\x21-\x7e]+$/.test(x) || /[#?@\\]/.test(x)) return false;
+  if (!PLAIN.test(x)) return false;
   let u: URL;
   try {
     u = new URL(x);

@@ -55,12 +55,16 @@ export async function reachable(relay: string): Promise<{ relay: string; as?: st
   return { relay: alt, as: relay };
 }
 
+// A command for a person to run, with an address a contact chose in it. Only a
+// plain address (see isRelayUrl) is ever put in one.
+const addCommand = (url: string | undefined): string => (url && isRelayUrl(url) ? `cpart relay add ${url}` : "cpart relay add <their relay>");
+
 // Lines for `cpart status`: contacts whose relays this identity does not use.
 export function relayNotices(node: Counterpart, safe: (s: string) => string): string[] {
   const contacts = node.contacts().filter((c) => c.state === "active");
   return node.relayBook.missing(contacts).map((m) => {
     const c = contacts.find((x) => x.rootKey === m.rootKey)!;
-    return `  ${c.name} can be reached on ${m.relays.map(safe).join(", ")}, and you use none of them\n      cpart relay add ${safe(m.relays[0]!)}`;
+    return `  ${c.name} can be reached on ${m.relays.map(safe).join(", ")}, and you use none of them\n      ${addCommand(m.relays[0])}`;
   });
 }
 
@@ -102,7 +106,7 @@ export async function relayCommand(node: Counterpart, args: string[], io: Io): P
         const t = book.their(c.rootKey, c.relay);
         const shared = book.route(t.relays).preferred.length > 0;
         const knows = !shared
-          ? `\n${" ".repeat(19)}you use none of these, so your mail to them may not arrive: cpart relay add ${safe(t.relays[0]!)}`
+          ? `\n${" ".repeat(19)}you use none of these, so your mail to them may not arrive: ${addCommand(t.relays[0])}`
           : book.version() === 0 || c.state !== "active" ? "" : t.seen < book.version() ? "  has NOT confirmed your current list" : "  has your current list";
         return `  ${c.name.padEnd(16)} reach them on ${t.relays.map(safe).join(", ")}${knows}`;
       }),
