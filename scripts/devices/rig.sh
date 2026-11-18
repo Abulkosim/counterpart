@@ -55,7 +55,10 @@ remove_rig() {
     echo "WARNING: containers of this run are still there and may hold a copy of the Claude Code login. Remove them: docker rm -f \$(docker ps -aq --filter name=^two-devices-$RUN_ID-)" >&2
   fi
 }
-trap 'code=$?; remove_rig; (exit $code); cleanup' EXIT
+# The (exit $code) hands the code to smoke-lib's cleanup. Under set -e it
+# would end the trap before cleanup ran, and the ERR trap would report it as a
+# failing line, so both are off by then.
+trap 'code=$?; trap - ERR; set +e; remove_rig; (exit $code); cleanup' EXIT
 
 command -v docker >/dev/null || fail "this needs docker"
 login=()
@@ -88,9 +91,22 @@ cp -r scripts/devices/repos "$WORK/ctx/seed"
 docker build -q -t two-devices:latest -f scripts/devices/Dockerfile "$WORK/ctx" >/dev/null
 
 step "run the scenarios"
-code=0
+# In the background so that a signal to this script reaches run.ts too, and
+# the cleanup waits for it: run.ts must not go on alone after the devices
+# and the login are gone.
 node scripts/devices/run.ts --work "$WORK" --out "$OUT" --image two-devices:latest --port "$PORT" --mode "$MODE" --id "$RUN_ID" \
-  ${login[@]+"${login[@]}"} $([ "$SESSIONS" = 0 ] && echo --no-sessions) ${args[@]+"${args[@]}"} || code=$?
+  ${login[@]+"${login[@]}"} $([ "$SESSIONS" = 0 ] && echo --no-sessions) ${args[@]+"${args[@]}"} &
+RUN_PID=$!
+stopped=
+trap 'stopped=1; kill -TERM "$RUN_PID" 2>/dev/null || true' TERM INT HUP
+code=0
+wait "$RUN_PID" || code=$?
+# A trapped signal ends the wait early. Wait again until run.ts has exited.
+while kill -0 "$RUN_PID" 2>/dev/null; do
+  code=0
+  wait "$RUN_PID" || code=$?
+done
+trap - TERM INT HUP
 # Transcripts and logs stay next to the results; they are not committed.
 mkdir -p "$OUT/logs"
 cp -r "$WORK/sessions" "$OUT/logs/" 2>/dev/null || true
