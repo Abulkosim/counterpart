@@ -278,10 +278,13 @@ function readable(s: string): string[] {
 
 const MAX_INFLATE = 1024 * 1024;
 class TooBig extends Error {}
+// What may still be inflated in the field being read; views() sets it. All
+// compressed runs in one field together get MAX_INFLATE.
+let inflateLeft = MAX_INFLATE;
 
 // Decoded bytes as text. Compressed bytes (gzip or zlib) are inflated too,
 // and what comes out follows a NUL, which `readable` splits on. Output past
-// MAX_INFLATE throws TooBig: the caller holds rather than send it unread.
+// the bound throws TooBig: the caller holds rather than send it unread.
 function bytesText(b: Buffer): string {
   const plain = b.toString("utf8");
   if (b.length < 10) return plain;
@@ -290,8 +293,10 @@ function bytesText(b: Buffer): string {
   if (!gzip && !deflate) return plain;
   try {
     // A cut-off stream still gives what it has.
-    const opts = { maxOutputLength: MAX_INFLATE, finishFlush: zlib.Z_SYNC_FLUSH };
-    return `${plain}\u0000${(gzip ? gunzipSync(b, opts) : inflateSync(b, opts)).toString("utf8")}`;
+    const opts = { maxOutputLength: Math.max(1, inflateLeft), finishFlush: zlib.Z_SYNC_FLUSH };
+    const out = gzip ? gunzipSync(b, opts) : inflateSync(b, opts);
+    inflateLeft -= out.length;
+    return `${plain}\u0000${out.toString("utf8")}`;
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "ERR_BUFFER_TOO_LARGE" || e instanceof RangeError) throw new TooBig();
     return plain; // not compressed after all
@@ -389,6 +394,7 @@ export function views(text: string): Views {
   const list: View[] = [];
   const seen = new Set<string>();
   let bytes = Math.max(MIN_DECODED, 12 * text.length);
+  inflateLeft = MAX_INFLATE;
   const maxViews = Math.max(MIN_VIEWS, Math.ceil(text.length / 2));
   let incomplete = false;
   const queue: { v: View; depth: number; surface: number }[] = [];
@@ -459,7 +465,7 @@ export interface Exact {
 // Any name with KEY or PASS as a word of its own counts (OPENAI_KEY, HMAC_KEY,
 // SMTP_PASS), as well as the names below.
 const SECRET_NAME = /secret|token|passw|pwd|passphrase|(?:^|[_.-])(?:key|pass)(?:$|[_.-])|api[_-]?key|apikey|access[_-]?key|private[_-]?key|credential|auth(?!or)|session|cookie|signing|salt|dsn|database[_-]?url|db[_-]?url|conn(?:ection)?[_-]?str|webhook|bearer|jwt|encryption[_-]?key|master[_-]?key|license[_-]?key/i;
-const NOT_SECRET_NAME = /^(?:XDG_|DBUS_|SSH_AUTH_SOCK$|SSH_AGENT_PID$|GPG_|DESKTOP_SESSION$|SESSION_MANAGER$|TERM_SESSION_ID$|ITERM_SESSION_ID$|TMUX|KITTY_|WINDOWID$)|(?:_SOCK|_SOCKET|_PATH|_DIR|_FILE|_HOME|_PID|_HOST|_PORT|_USER|_USERNAME|_NAME|_EMAIL|_REGION|_ENDPOINT|_ID)$/i;
+const NOT_SECRET_NAME = /^(?:XDG_|DBUS_|SSH_AUTH_SOCK$|SSH_AGENT_PID$|GPG_|DESKTOP_SESSION$|SESSION_MANAGER$|TERM_SESSION_ID$|ITERM_SESSION_ID$|TMUX|KITTY_|WINDOWID$)|(?:_SOCK|_SOCKET|_PATH|_DIR|_FILE|_HOME|_PID|_HOST|_PORT|_USER|_USERNAME|_NAME|_EMAIL|_REGION|_ENDPOINT|_ID|_PREFIX|_SUFFIX|_FORMAT|_TYPE|_LENGTH|_SIZE|_TTL|_VERSION)$/i;
 const DULL = /^(?:true|false|null|none|yes|no|on|off|localhost|development|production|staging|test|debug|info|warn|warning|error|enabled|disabled)$/i;
 
 // Is this value worth holding a message over when it shows up exactly?

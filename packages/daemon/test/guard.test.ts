@@ -390,8 +390,8 @@ test("names with KEY or PASS as a word count, as they do in .env files", () => {
   const g = guardOn({ env: values, cwd: null });
   for (const [k, v] of Object.entries(values)) assert.ok(g.check({ text: `value: ${v}` }).some((f) => f.rule === `env:${k}`), k);
   // A path, an id, or KEY inside another word is left alone.
-  const other = guardOn({ env: { SSH_KEY_PATH: "/home/me/.ssh/id_ed25519", MONKEY: "Zz9yY8xX7wW6vV5u", SORT_KEY_ID: "Pq7wE2rT9yU4iO1p" }, cwd: null });
-  assert.deepEqual(other.check({ text: "/home/me/.ssh/id_ed25519 Zz9yY8xX7wW6vV5u Pq7wE2rT9yU4iO1p" }).filter((f) => f.rule.startsWith("env:")), []);
+  const other = guardOn({ env: { SSH_KEY_PATH: "/home/me/.ssh/id_ed25519", MONKEY: "Zz9yY8xX7wW6vV5u", SORT_KEY_ID: "Pq7wE2rT9yU4iO1p", CACHE_KEY_PREFIX: "orders-cache-v2" }, cwd: null });
+  assert.deepEqual(other.check({ text: "/home/me/.ssh/id_ed25519 Zz9yY8xX7wW6vV5u Pq7wE2rT9yU4iO1p orders-cache-v2" }).filter((f) => f.rule.startsWith("env:")), []);
 });
 
 test("encodings a fooled agent might be told to use: UTF-16, HTML references, octal, binary, gzip", () => {
@@ -409,6 +409,9 @@ test("encodings a fooled agent might be told to use: UTF-16, HTML references, oc
   for (const [name, text] of Object.entries(forms)) assert.ok(g.check({ text: `here: ${text}` }).some((f) => f.category === "env-secret"), name);
   // A compression bomb is not inflated past its bound; it is held as too much to check.
   assert.ok(g.check({ text: gzipSync(Buffer.alloc(4 * 1024 * 1024, 65)).toString("base64") }).some((f) => f.category === "too-much-to-check"));
+  // So are many small ones that add up: the bound is for all of a field.
+  const small = gzipSync(Buffer.alloc(300 * 1024, 65)).toString("base64");
+  assert.ok(g.check({ text: Array.from({ length: 8 }, () => small).join(" ") }).some((f) => f.category === "too-much-to-check"));
   // Ordinary text with the same shapes passes.
   assert.deepEqual(g.check({ text: "Use &amp; and &#169; in the footer; modes 0644 and 0755; mask 11111111 00000000." }), []);
 });
