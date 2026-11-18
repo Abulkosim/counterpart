@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { refusedLine, unansweredLines } from "../src/waiting.ts";
 
-const u = { thread: "Kd8f2a1bXXXXXXXXXXXXXX", contact: "maya", opened: true, messages: 2, firstOrd: 3, lastOrd: 5, lastAt: 0 };
+const u = { thread: "Kd8f2a1bXXXXXXXXXXXXXX", contact: "maya", opened: true, openedHere: false, messages: 2, firstOrd: 3, lastOrd: 5, lastAt: 0 };
 const safe = (s: string): string => s;
 
 test("status names the contact, the thread and the counts, with the next command", () => {

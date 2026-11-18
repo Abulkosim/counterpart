@@ -14,6 +14,9 @@ export interface Unanswered {
   contact: string;
   // The contact opened the thread and this side has written nothing in it.
   opened: boolean;
+  // This side opened the thread, so its id is one this side made. When the
+  // contact opened it, the contact chose the id, up to 64 characters.
+  openedHere: boolean;
   // Messages from the contact after this side's last event and last read.
   messages: number;
   firstOrd: number;
@@ -33,7 +36,7 @@ export function unanswered(db: DatabaseSync, since: number): Unanswered[] {
   const rows = db
     .prepare(
       `WITH mine AS (SELECT thread_id, MAX(ord) AS ord FROM events WHERE mine = 1 AND status = 'applied' AND ord IS NOT NULL GROUP BY thread_id)
-       SELECT t.id AS thread, c.name AS contact,
+       SELECT t.id AS thread, c.name AS contact, t.opened_by_me AS opened_here,
          SUM(json_extract(e.json, '$.type') = 'thread.opened') AS opened,
          SUM(json_extract(e.json, '$.type') = 'talk.posted') AS messages,
          MIN(e.ord) AS first_ord, MAX(e.ord) AS last_ord, MAX(e.received_at) AS last_at
@@ -46,8 +49,8 @@ export function unanswered(db: DatabaseSync, since: number): Unanswered[] {
        GROUP BY t.id HAVING MAX(e.received_at) >= ?
        ORDER BY last_at DESC`,
     )
-    .all(since) as { thread: string; contact: string; opened: number; messages: number; first_ord: number; last_ord: number; last_at: number }[];
-  return rows.map((r) => ({ thread: r.thread, contact: r.contact, opened: r.opened > 0, messages: r.messages, firstOrd: r.first_ord, lastOrd: r.last_ord, lastAt: r.last_at }));
+    .all(since) as { thread: string; contact: string; opened_here: number; opened: number; messages: number; first_ord: number; last_ord: number; last_at: number }[];
+  return rows.map((r) => ({ thread: r.thread, contact: r.contact, opened: r.opened > 0, openedHere: r.opened_here === 1, messages: r.messages, firstOrd: r.first_ord, lastOrd: r.last_ord, lastAt: r.last_at }));
 }
 
 // The same, from a home's store, opened read-only. An empty list when there is no store.

@@ -278,7 +278,12 @@ export function waitingNotice(list: Unanswered[], now: number): { context: strin
   const head = `${who} wrote in ${plural(ok.length, "thread")} nobody on this side has read or answered`;
   const shown = ok.slice(0, MAX_THREADS).map((u) => {
     const what = [...(u.opened ? ["new thread"] : []), ...(u.messages || !u.opened ? [plural(u.messages, "message")] : [])].join(", ");
-    return `- ${u.contact}, thread ${u.thread}: ${what}, the last ${ago(now - u.lastAt)}. To read it: counterpart_read_thread with thread="${u.thread}" and after=${u.firstOrd - 1}`;
+    // The contact chose the id of a thread it opened: up to 64 characters it
+    // could make read like an instruction. Only its start goes in, as in cpart status.
+    const read = u.openedHere
+      ? `counterpart_read_thread with thread="${u.thread}" and after=${u.firstOrd - 1}`
+      : `counterpart_threads gives the full id, then counterpart_read_thread with that id and after=${u.firstOrd - 1}`;
+    return `- ${u.contact}, thread ${u.openedHere ? u.thread : `${u.thread.slice(0, 8)}...`}: ${what}, the last ${ago(now - u.lastAt)}. To read it: ${read}`;
   });
   return {
     context: [

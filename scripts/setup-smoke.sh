@@ -153,7 +153,7 @@ B=$(cpart bob contacts --json | node -pe 'JSON.parse(require("fs").readFileSync(
 [ "$A" = "$B" ] || fail "safety codes differ: $A and $B"
 
 step "bob opens a thread and asks twice; alice has no front desk and no session that used Counterpart"
-cpart bob open alice "QMARK which page size?" --say "QMARK first question" >/dev/null
+QTHREAD=$(cpart bob open alice "QMARK which page size?" --say "QMARK first question" --json | node -pe 'JSON.parse(require("fs").readFileSync(0,"utf8")).threadId')
 cpart bob say alice "QMARK second question" >/dev/null
 wait_for "alice's status to show bob waiting" sh -c "CPART_HOME='$WORK/alice' node packages/cli/src/main.ts status | grep -q '^  bob wrote in thread [A-Za-z0-9_-]*: new thread, 2 messages'"
 cpart alice status | tee "$WORK/alice.waiting"
@@ -168,6 +168,9 @@ echo '{"session_id":"mac-session-1","hook_event_name":"UserPromptSubmit"}' | cpa
 echo '{"session_id":"mac-session-2","hook_event_name":"UserPromptSubmit"}' | cpart alice hook prompt | tee "$WORK/prompt2.json"
 grep -q '"hookEventName":"UserPromptSubmit","additionalContext":"Counterpart: bob wrote in 1 thread' "$WORK/prompt2.json" || fail "a second session was not told"
 if grep -q QMARK "$WORK/start.json" "$WORK/prompt2.json"; then fail "bob's words reached a hook"; fi
+# Bob chose the id of the thread he opened: only its start reaches a session.
+grep -q "bob, thread ${QTHREAD:0:8}\.\.\.: new thread, 2 messages" "$WORK/start.json" || fail "the thread is not named by the start of its id"
+if grep -q -- "$QTHREAD" "$WORK/start.json" "$WORK/prompt2.json"; then fail "the full id bob chose reached a hook"; fi
 cpart bob status | tee "$WORK/bob.asked"
 if grep -q "wrote in thread" "$WORK/bob.asked"; then fail "the asker is told its own question is waiting"; fi
 
