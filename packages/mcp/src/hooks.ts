@@ -117,7 +117,8 @@ export class HookState {
         seen INTEGER NOT NULL DEFAULT 0, told INTEGER NOT NULL DEFAULT 0,
         follow_at INTEGER, blocks INTEGER NOT NULL DEFAULT 0, touched_at INTEGER NOT NULL,
         PRIMARY KEY (session, thread));
-      CREATE TABLE IF NOT EXISTS session_notices (session TEXT NOT NULL, at INTEGER NOT NULL);`);
+      CREATE TABLE IF NOT EXISTS session_notices (session TEXT NOT NULL, at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS session_watch (session TEXT PRIMARY KEY, gen INTEGER NOT NULL, at INTEGER NOT NULL);`);
   }
 
   static exists(home: string): boolean {
@@ -143,6 +144,17 @@ export class HookState {
       .run(session, thread, now);
     this.db.prepare("DELETE FROM session_threads WHERE touched_at < ? AND (follow_at IS NULL OR follow_at < ?)").run(now - KEEP, now - KEEP);
     this.db.prepare("DELETE FROM session_notices WHERE at < ?").run(now - HOUR);
+    this.db.prepare("DELETE FROM session_watch WHERE at < ?").run(now - KEEP);
+  }
+
+  // Each new watch of a session takes a new number. Only the watch holding the
+  // newest one keeps watching, so the latest tool call sets how long it runs.
+  claimWatch(session: string, now: number): number {
+    return (this.db.prepare("INSERT INTO session_watch (session, gen, at) VALUES (?, 1, ?) ON CONFLICT (session) DO UPDATE SET gen = gen + 1, at = excluded.at RETURNING gen").get(session, now) as { gen: number }).gen;
+  }
+
+  watchGen(session: string): number {
+    return (this.db.prepare("SELECT gen FROM session_watch WHERE session = ?").get(session) as { gen: number } | undefined)?.gen ?? 0;
   }
 
   set(session: string, thread: string, fields: Partial<Pick<Row, "seen" | "told" | "follow_at" | "blocks">>): void {
@@ -341,15 +353,25 @@ export async function runHook(event: HookEvent, input: HookInput, opts: HookOpti
 
     // watch: runs in the background (asyncRewake) and exits 2 with a notice on
     // stderr when something arrives, which wakes the session even when idle.
-    const lock = watchLock(opts.home, session);
-    if (!lock) return none;
+    // Every Counterpart tool call starts one. The newest takes over: the one
+    // already running sees it has been replaced at its next poll and ends,
+    // and the new one starts once it has the lock.
+    const start = now();
+    const end = start + l.watchMs;
+    const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    const gen = state.tx(() => state.claimWatch(session, start));
+    const current = (): boolean => state.watchGen(session) === gen;
+    let lock = watchLock(opts.home, session);
+    while (!lock) {
+      if (!current() || now() >= end || !(opts.alive?.() ?? true)) return none;
+      await sleep(Math.min(l.pollMs, 250));
+      lock = watchLock(opts.home, session);
+    }
     try {
-      const start = now();
-      const end = start + l.watchMs;
-      const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
       while (now() < end && (opts.alive?.() ?? true)) {
         const told = state.tx(() => {
           const t = now();
+          if (!current()) return null;
           const rows = state.rows(session).filter((r) => (r.follow_at !== null && t - r.follow_at < l.followMs) || t - r.touched_at < RECENT);
           // The tool hook that records the thread runs at the same time as
           // this one, so give it a moment before deciding there is nothing.
@@ -372,7 +394,7 @@ export async function runHook(event: HookEvent, input: HookInput, opts: HookOpti
   }
 }
 
-// One background watch per session. The lock is SQLite's, held for the life
+// One background watch at a time per session. The lock is SQLite's, held for the life
 // of the process, so it goes when the process does, however it ends.
 function watchLock(home: string, session: string): DatabaseSync | null {
   const dir = join(home, "hooks");

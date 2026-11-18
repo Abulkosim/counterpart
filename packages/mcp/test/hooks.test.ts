@@ -215,12 +215,19 @@ test("the other side cannot keep a session from stopping: refusals for news are 
   assert.match(ctx(await s.hook("prompt", {})), /sent \d+ message/, "still told when the human next types");
 });
 
-test("watch: wakes the session with a notice on stderr, once, and only one runs per session", async () => {
+test("watch: wakes the session with a notice on stderr, once, and a newer watch takes over", async () => {
   const s = await scene();
   await s.call("say", { thread: s.thread, text: "q" });
+  const t0 = s.clock.t;
+  const older = s.hook("watch", {}, { watchMs: 20_000 });
+  await until("the first watch polls", () => s.clock.t > t0);
+  // A later tool call starts another watch. The running one ends at its next
+  // poll, long before its own 20 seconds are up, and the new one runs on.
   const first = s.hook("watch", {});
-  // A second watch for the same session gives up at once.
-  assert.deepEqual(await s.hook("watch", {}), { code: 0, stdout: "", stderr: "" });
+  assert.deepEqual(await older, { code: 0, stdout: "", stderr: "" });
+  assert.ok(s.clock.t - t0 < 10_000, `ended after ${s.clock.t - t0} ms`);
+  // Past the end of the first watch, within the second's.
+  s.clock.t += 25_000;
   await s.arrive(() => s.alice.say(s.thread, "TEXTMARK reply"));
   const r = await first;
   assert.equal(r.code, 2);
