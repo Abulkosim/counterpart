@@ -15,7 +15,7 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, openSync, closeSync, readFileSync, readSync, readdirSync, realpathSync, statSync, fstatSync, constants } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { constants as zlib, gunzipSync, inflateSync } from "node:zlib";
 import { randomId, utf8, verify } from "@counterpart/protocol";
@@ -102,6 +102,10 @@ const toAllow = (a: NonNullable<RuleData["allowlists"]>[number]): Allow => ({
   and: a.condition === "AND",
 });
 
+// Placeholders and the stock passwords of local development databases, as a
+// URL's password.
+const STOCK_PASSWORD = /^(?:\*+|x+|\.+|password|passwd|pass|pwd|secret|changeme|example|postgres|root|admin|guest|test|dev|user|mysql|redis|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?|<[^>]*>|\[[^\]]*\]|\{\{.*\}\}|%[A-Za-z_]+%)$/i;
+
 // Rules of our own, for what the vendored set leaves to file paths or misses.
 const OWN: { id: string; re: RegExp; category: GuardCategory; group?: number; allow?: RegExp }[] = [
   // A key block with or without its end line or body.
@@ -118,7 +122,7 @@ const OWN: { id: string; re: RegExp; category: GuardCategory; group?: number; al
     re: /\b[a-z][a-z0-9+.-]{1,20}:\/\/[^\s:@/'"`<>]{1,64}:([^\s@/'"`<>]{3,128})@[a-z0-9.[\]-]+/gi,
     category: "generic-secret",
     group: 1,
-    allow: /^(?:\*+|x+|\.+|password|passwd|pass|pwd|secret|changeme|example|postgres|root|admin|guest|test|dev|user|mysql|redis|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?|<[^>]*>|\[[^\]]*\]|\{\{.*\}\}|%[A-Za-z_]+%)$/i,
+    allow: STOCK_PASSWORD,
   },
 ];
 
@@ -165,9 +169,13 @@ function allowed(a: Allow, secret: string, match: string, line: string): boolean
   return checks.length > 0 && checks.every(Boolean);
 }
 
-// What the generic rule finds that is plainly not a value: a variable name
-// followed by "=", an ellipsis, a template, an obvious stand-in.
-const PLACEHOLDER = /\.\.\.|…|^[A-Z][A-Z0-9_]*=|^\$\{?[A-Za-z_]|<[^>]*>|\{\{|your[_-]|[_-]here$|example|placeholder|changeme|dummy|redacted|x{6,}|\*{3,}/i;
+// An obvious stand-in for a value: an ellipsis, a template, "your-key-here",
+// "REPLACE_ME", "changeme", "TODO". Used for what the generic rule finds and
+// for values in .env files and URL passwords.
+const STAND_IN = /\.\.\.|…|^\$\{?[A-Za-z_]|<[^>]*>|\{\{|your[_-]|[_-]here$|example|placeholder|change[_-]?(?:me|this)|replace[_-]?(?:me|this)|fill[_-]?(?:me|in)|set[_-]?me|insert[_-]|(?:^|[_.\s-])(?:todo|fixme|tbd|xxx+)(?:$|[_.\s-])|dummy|redacted|x{6,}|\*{3,}/i;
+// What the generic rule finds that is plainly not a value: a stand-in, or a
+// variable name followed by "=". (Not for .env values: base32 ends in "=".)
+const PLACEHOLDER = new RegExp(`^[A-Z][A-Z0-9_]*=|${STAND_IN.source}`, "i");
 // A hex string on a line that talks about digests is a digest.
 const DIGEST_WORDS = /sha-?\d|md5|hash|digest|checksum|commit|etag|integrity|fingerprint/i;
 // A UUID named as an idempotency key or a request id is an id.
@@ -509,21 +517,48 @@ export function worthMatching(value: string, secretName: boolean): boolean {
   if (/^[0-9]+$/.test(value) && value.length < 12) return false;
   if (/^[A-Za-z]+$/.test(value) && value.length < 12) return false;
   if (/^(?:\/|~\/|\.\.?\/|[A-Za-z]:\\)\S*$/.test(value)) return false; // a path
-  // A URL is a secret when it has a user or password in it, or when a
-  // secret-named variable holds it and a part of it looks like a key.
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return /:\/\/[^/\s@]+@/.test(value) || (secretName && urlKeys(value).length > 0);
+  // A URL is a secret when it has a password in it that counts, a user name
+  // that looks like a key, or when a secret-named variable holds it and a part
+  // of it looks like a key.
+  if (isUrl(value)) return urlPassword(value) !== null || tokenLike(urlLogin(value)?.user ?? "") || (secretName && urlKeys(value).length > 0);
   if (secretName) return true;
   return tokenLike(value);
 }
 
 export const tokenLike = (v: string): boolean => v.length >= 16 && v.length <= 512 && !/\s/.test(v) && /[A-Za-z]/.test(v) && /[0-9]/.test(v) && entropy(v) >= 3.0;
 
+const isUrl = (v: string): boolean => /^[a-z][a-z0-9+.-]*:\/\//i.test(v);
+
+// The user, password and host of a URL with a login in it.
+function urlLogin(value: string): { user: string; password: string | null; host: string } | null {
+  const m = /^[a-z][a-z0-9+.-]*:\/\/([^/?#\s@]*)@([^/?#\s]*)/i.exec(value);
+  if (!m) return null;
+  const at = m[1]!.indexOf(":");
+  const host = m[2]!.toLowerCase().replace(/:\d*$/, "").replace(/^\[(.*)\]$/, "$1");
+  return at < 0 ? { user: m[1]!, password: null, host } : { user: m[1]!.slice(0, at), password: m[1]!.slice(at + 1), host };
+}
+
+// A host on this machine or in a local compose network: localhost, a
+// loopback address, or a name with no dot in it ("db", "postgres").
+const localHost = (h: string): boolean => /^(?:localhost|[a-z0-9.-]*\.localhost|127(?:\.\d{1,3}){3}|::1|0\.0\.0\.0|host\.docker\.internal|[a-z0-9_-]+)$/.test(h);
+
+// A URL's password, when it counts as a secret: not a placeholder, and not a
+// local default (the user name again, or a stock password, on a local host).
+function urlPassword(value: string): string | null {
+  const l = urlLogin(value);
+  if (!l?.password) return null;
+  const pw = l.password;
+  if (STAND_IN.test(pw)) return null;
+  if (localHost(l.host) && (pw === l.user || STOCK_PASSWORD.test(pw))) return null;
+  return pw;
+}
+
 // The parts of a URL that look like keys: a password, a path segment, a query value.
 function urlKeys(value: string): string[] {
   const out: string[] = [];
-  const pw = /:\/\/[^/\s:@]*:([^/\s@]+)@/.exec(value)?.[1];
+  const pw = urlPassword(value);
   if (pw && pw.length >= 8) out.push(pw);
-  const user = /:\/\/([^/\s:@]+)@/.exec(value)?.[1];
+  const user = urlLogin(value)?.user;
   if (user && tokenLike(user)) out.push(user);
   const rest = value.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i, "");
   for (const part of rest.split(/[/?&=#]+/)) {
@@ -637,13 +672,22 @@ export function dotenvFiles(root: string, limit: WalkLimit = walkLimit(), config
   return out;
 }
 
+// A template for a .env file: .env.example, .env.sample, .env.template,
+// .env.dist, .env.defaults, app.example.env. It is committed and full of
+// stand-ins, so its values must look like keys to count.
+export const TEMPLATE_ENV = /(?:^|\.)(?:example|sample|template|tmpl|tpl|dist|defaults?)(?:\.|$)/i;
+
 export function dotenvValues(file: string): Exact[] {
   const text = readSmall(file);
   if (text === null) return [];
+  const template = TEMPLATE_ENV.test(basename(file));
   const out: Exact[] = [];
   for (const { name, value } of parseDotenv(text)) {
+    if (!isUrl(value) && STAND_IN.test(value)) continue;
     const secretName = SECRET_NAME.test(name) && !NOT_SECRET_NAME.test(name);
-    if (worthMatching(value, secretName)) out.push(...exact(value, "dotenv-value", `dotenv:${file}:${name}`));
+    // In a template, the stricter test config values get; a URL only for a key-like password.
+    const counts = !template ? worthMatching(value, secretName) : isUrl(value) ? configSecret(urlPassword(value) ?? "") : configSecret(value);
+    if (counts) out.push(...exact(value, "dotenv-value", `dotenv:${file}:${name}`));
   }
   return out;
 }

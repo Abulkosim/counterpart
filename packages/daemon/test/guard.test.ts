@@ -514,3 +514,32 @@ test("sentences, words and test data in config files are not secrets", async () 
   assert.equal(alice.guard.secrets().exact.length, 0);
   await alice.say(thread, "Every request needs an Authorization header with your key; see orders-service.");
 });
+
+test("placeholders in .env templates are not secrets; values in the real .env still are", async () => {
+  const repo = join(dir(), "orders-service");
+  mkdirSync(join(repo, ".git"), { recursive: true });
+  const key = "sk_live_Wq8Pz3Lm6Tr1Vb9Kc4Ns7Hd2Xy5Fg0Jt";
+  const dbPass = "q7pl2mx9vr4tk8sb3yh7cd5f";
+  // As in the red team's repository, where these two lines held 18 harmless messages.
+  writeFileSync(join(repo, ".env.example"), "NODE_ENV=development\nPORT=8080\nORDERS_API_KEY=sk_live_REPLACE_ME\nDATABASE_URL=postgres://orders:orders@localhost:5432/orders\n");
+  writeFileSync(join(repo, ".env"), `NODE_ENV=production\nPORT=8080\nORDERS_API_KEY=${key}\nDATABASE_URL=postgres://orders:${dbPass}@db.internal:5432/orders\nCACHE_URL=redis://cache:cache@localhost:6379\nSTRIPE_TEST_KEY=sk_test_CHANGE_ME\nTOTP_SECRET=N4R7QZK2MW5XPL3T====\n`);
+  writeFileSync(join(repo, ".env.sample"), "API_TOKEN=changeme\nSESSION_SECRET=replace-me-with-something-long\nWEBHOOK_SECRET=TODO\nSMTP_PASSWORD=fixme_later_please\nMONGO_URL=mongodb://admin:admin@mongo:27017\nQUEUE_URL=amqp://guest:guest@127.0.0.1:5672\n");
+  writeFileSync(join(repo, "app.example.env"), "SIGNING_KEY=your-signing-key-here\nPARTNER_FEED_KEY=Hj3kL9mN2bV6cX1zQ8wE5rT4\nREPORTS_DB=postgres://reports:Tq9Lx2Vm7Rz4Kp8N@localhost:5432/reports\n");
+  const { alice, thread } = await pair({ env: {}, cwd: repo });
+  const harmless = [
+    "Copy .env.example to .env. It has ORDERS_API_KEY=sk_live_REPLACE_ME; put your own key there.",
+    "Locally: DATABASE_URL=postgres://orders:orders@localhost:5432/orders",
+    "API_TOKEN=changeme, SESSION_SECRET=replace-me-with-something-long, WEBHOOK_SECRET=TODO, SMTP_PASSWORD=fixme_later_please",
+    "mongodb://admin:admin@mongo:27017 and amqp://guest:guest@127.0.0.1:5672, cache at redis://cache:cache@localhost:6379",
+    "SIGNING_KEY=your-signing-key-here, STRIPE_TEST_KEY=sk_test_CHANGE_ME",
+  ];
+  for (const text of harmless) await alice.say(thread, text);
+  await assert.rejects(alice.say(thread, `key: ${key}`), /dotenv-value/);
+  await assert.rejects(alice.say(thread, `the db password is ${dbPass}`), /dotenv-value/);
+  await assert.rejects(alice.say(thread, `postgres://orders:${dbPass}@db.internal:5432/orders`), /dotenv-value/);
+  await assert.rejects(alice.say(thread, "totp N4R7QZK2MW5XPL3T===="), /dotenv-value/);
+  // A value in a template that looks like a key was committed by mistake: it counts.
+  await assert.rejects(alice.say(thread, "feed key Hj3kL9mN2bV6cX1zQ8wE5rT4"), /dotenv-value/);
+  await assert.rejects(alice.say(thread, "reports password Tq9Lx2Vm7Rz4Kp8N"), /dotenv-value/);
+  assert.equal(alice.guard.counts().held, 6);
+});

@@ -56,6 +56,11 @@ mkdir -p "$WORK/client/.git" "$WORK/client/src"
 printf 'PORT=8080\nPARTNER_FEED_KEY=Hj3kL9mN2bV6cX1zQ8wE5rT4\n' >"$WORK/client/.env"
 (cd "$WORK/client/src" && held_say "the .env value" agent say "$THREAD" "feed key is Hj3k-L9mN-2bV6-cX1z-Q8wE-5rT4")
 
+step "placeholders in .env.example go through"
+printf 'ORDERS_API_KEY=sk_live_REPLACE_ME\nDATABASE_URL=postgres://orders:orders@localhost:5432/orders\n' >"$WORK/client/.env.example"
+(cd "$WORK/client/src" && agent say "$THREAD" "From .env.example: ORDERS_API_KEY=sk_live_REPLACE_ME and DATABASE_URL=postgres://orders:orders@localhost:5432/orders" >/dev/null)
+wait_for "bob to get the placeholders" sh -c "CPART_HOME=$WORK/bob node $CLI log $THREAD | grep -q REPLACE_ME"
+
 step "a line of a file alice marked never-share"
 printf 'Northwind threatened to cancel unless the refund backlog is cleared by Friday.\nTheir CFO said the renewal is worth 1.4 million and they are talking to a competitor.\n' >"$WORK/escalations.md"
 if alice guard never-share add "$WORK/escalations.md" </dev/null >"$WORK/out.txt" 2>&1; then fail "added a never-share file without a terminal"; fi
