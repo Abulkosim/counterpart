@@ -102,19 +102,22 @@ export async function joinByCode(home: string, input: string, name: string, io: 
   }
 }
 
-// Lines for `cpart status`: codes waiting, pairings that ended in the last hour.
-export function pairingLines(home: string): string[] {
-  if (!existsSync(join(home, "pairing.db"))) return [];
+// Lines for `cpart status`: codes waiting, pairings that ended in the last
+// hour. A pairing that worked is news, not something to do.
+export function pairingLines(home: string): { waiting: string[]; news: string[] } {
+  if (!existsSync(join(home, "pairing.db"))) return { waiting: [], news: [] };
   const store = new PairingStore(home);
   try {
-    return store.recent().map((v) => {
+    const all = store.recent();
+    const news = all.filter((v) => v.state === "done").map((v) => `  paired with ${v.name} ${v.detail ? `(${v.detail})` : "by code"} at ${clock(v.updatedAt)}`);
+    const waiting = all.filter((v) => v.state !== "done").map((v) => {
       const who = v.role === "inviter" ? `for ${v.name}` : `with ${v.name}`;
-      if (v.state === "done") return `  paired with ${v.name} ${v.detail ? `(${v.detail})` : "by code"} at ${clock(v.updatedAt)}`;
       if (v.state === "failed") return `  pairing ${who} failed at ${clock(v.updatedAt)}: ${v.detail ?? ""}`;
       if (v.state === "open") return `  code ${v.code} ${who} works until ${clock(v.expiresAt)}${v.claimed ? "; someone has entered it" : ""}`;
       if (v.state === "confirmed") return `  pairing ${who}: both sides proved the code; waiting for the contact request`;
       return `  pairing ${who}: in progress`;
     });
+    return { waiting, news };
   } finally {
     store.close();
   }

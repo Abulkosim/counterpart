@@ -43,6 +43,9 @@ grep -q "^Paired with alice. The code proved who is on each side" "$WORK/bob.joi
 wait_for "alice to see bob active" sh -c "CPART_HOME='$WORK/alice' node packages/cli/src/main.ts contacts | grep -q '^bob .*active'"
 cpart alice status | tee "$WORK/alice.status2"
 grep -q "paired with bob by code" "$WORK/alice.status2" || fail "alice's status does not say the pairing finished"
+# It is news, not something to do.
+sed -n '/^Lately:/,$p' "$WORK/alice.status2" | grep -q "paired with bob by code" || fail "the pairing is not under Lately"
+if sed -n '/^Waiting for you:/,/^$/p' "$WORK/alice.status2" | grep -q "paired with"; then fail "the pairing is listed as waiting for you"; fi
 A=$(cpart alice contacts --json | js '[0].rootKey')
 B=$(cpart bob whoami --json | js rootKey)
 [ "$A" = "$B" ] || fail "alice holds a different key for bob"

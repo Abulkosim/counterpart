@@ -20,6 +20,7 @@ import { GUARD_USAGE, guardCommand } from "./guard-cli.ts";
 import { SHARE_USAGE, shareCommand, sharedSummary } from "./share.ts";
 import { hookLines, installHooks, removeHooks } from "./hooks-install.ts";
 import { inviteByCode, joinByCode, pairingLines } from "./pair.ts";
+import { STATUS_WINDOW, refusedLine, unansweredLines } from "./waiting.ts";
 import { PairingEngine } from "@counterpart/daemon";
 import { looksLikeCode } from "@counterpart/protocol";
 import { RELAY_SUBCOMMANDS, RELAY_USAGE, logLink, reachable, relayCommand, relayNotices } from "./relays.ts";
@@ -65,7 +66,7 @@ ${RELAY_USAGE}
                                                                   live Claude Code session when something arrives, never what
   cpart view [--port 7450]                                        read your threads in a browser, on this machine only
   cpart hook install | remove                                     add or take out the Claude Code and Codex hooks. setup adds them
-  cpart hook prompt|tool|stop|watch                               what those hooks run. Reads Claude Code's hook JSON on stdin
+  cpart hook start|prompt|tool|stop|watch                         what those hooks run. Reads Claude Code's hook JSON on stdin
 
 Contracts: the exact text two people agree to. Anyone on your side, including
 your agent, can propose. Only you can approve, with your passphrase.
@@ -465,14 +466,21 @@ function status(node: Counterpart): void {
   const agreed = threads.flatMap((t) => node.contracts(t.id).filter((c) => c.status === "agreed")).length;
   const pending = contacts.filter((c) => c.state === "pending");
   const guard = node.guard.counts();
+  const pairing = pairingLines(home);
+  // A question the front desk could not answer has its own line.
+  const asked = new Set(asks.map((a) => a.threadId));
+  const unanswered = node.unanswered(Date.now() - STATUS_WINDOW).filter((u) => !asked.has(u.thread));
+  const homeRelay = node.relayBook.find(node.relay)?.url ?? node.relay;
   const waiting = [
+    ...(d ? refusedLine(homeRelay, node.relayBook.status(), d.startedAt, safe) : []),
+    ...unansweredLines(unanswered, Date.now()),
     ...(guard.held ? [`  ${guard.held} message${guard.held > 1 ? "s" : ""} held by the outbound guard. Nothing was sent\n      cpart held`] : []),
     ...toSign.map(({ thread, c }) => `  contract to read, ${c.approvedByThem ? `signed by ${thread.contact}` : c.proposedByMe ? "proposed by your side" : `proposed by ${thread.contact}`}: ${safe(c.contract.title)}\n      cpart contract ${thread.id.slice(0, 8)} ${c.proposalId.slice(0, 8)}`),
     ...(asks.length ? [`  ${asks.length} question${asks.length > 1 ? "s" : ""} your front desk could not answer\n      cpart asks`] : []),
     ...pending.map((c) => `  pairing with ${c.name} has not completed; it does when both daemons are online`),
     ...relayNotices(node, safe),
     ...(node.protected && days < 30 ? [`  device credential runs out in ${days} days\n      cpart renew`] : []),
-    ...pairingLines(home),
+    ...pairing.waiting,
   ];
   const lines = [
     `You       ${node.me.human}  (key ${node.me.rootKey.slice(0, 12)})${node.protected ? "" : "  no passphrase: cannot approve contracts"}`,
@@ -484,8 +492,9 @@ function status(node: Counterpart): void {
     `Guard     ${node.guard.off ? "OFF (cpart guard on turns it back on)" : "on"}, ${guard.held} held${guard.unguarded ? `, ${guard.unguarded} sent unchecked that it would have held` : ""}${node.guard.problems().length ? ". Some things are NOT CHECKED: see cpart guard" : ""}`,
     "",
     waiting.length ? `Waiting for you:\n${waiting.join("\n")}` : "Nothing is waiting for you.",
+    ...(pairing.news.length ? ["", `Lately:\n${pairing.news.join("\n")}`] : []),
   ];
-  out(lines.join("\n"), { me: node.me, daemon: d ?? null, boot: bootInstalled(home) ?? null, agents: hosts, contacts: contacts.map((c) => ({ name: c.name, state: c.state })), threads: threads.length, held: guard.held, unguarded: guard.unguarded, toSign: toSign.map(({ thread, c }) => ({ threadId: thread.id, proposalId: c.proposalId, title: c.contract.title })), asks: asks.length });
+  out(lines.join("\n"), { me: node.me, unanswered: unanswered.map((u) => ({ threadId: u.thread, contact: u.contact, opened: u.opened, messages: u.messages, lastAt: u.lastAt })), daemon: d ?? null, boot: bootInstalled(home) ?? null, agents: hosts, contacts: contacts.map((c) => ({ name: c.name, state: c.state })), threads: threads.length, held: guard.held, unguarded: guard.unguarded, toSign: toSign.map(({ thread, c }) => ({ threadId: thread.id, proposalId: c.proposalId, title: c.contract.title })), asks: asks.length });
 }
 
 async function main(): Promise<void> {
@@ -923,6 +932,8 @@ async function main(): Promise<void> {
         const mark = e.status === "pending" ? "(held) " : e.delivery && e.delivery !== "received" ? `(${e.delivery === "stored" ? "at relay" : e.delivery}) ` : "";
         return `${time(e.receivedAt)}  ${who.padEnd(12)} ${mark}${safe(what)}`;
       });
+      // The human has seen it: cpart status and the hooks stop listing it as unread.
+      node.markRead(t.id, Math.max(0, ...events.map((e) => e.ord ?? 0)));
       return out(lines.join("\n"), events);
     }
     case "bundle": {

@@ -95,6 +95,10 @@ grep -q "passed the question to Alice" "$WORK/r2.txt" || fail "the desk did not 
 grep -q "config/deploy.ts" "$WORK/r2.txt" && fail "the uncheckable line reached bob"
 cpart alice asks | tee "$WORK/asks.out"
 grep -q "deploy key" "$WORK/asks.out"
+# The desk answered in alice's name, so the thread is not also listed as unanswered.
+cpart alice status | tee "$WORK/alice.status"
+grep -q "^  1 question your front desk could not answer" "$WORK/alice.status" || fail "status does not list the question"
+if grep -q "bob wrote in thread" "$WORK/alice.status"; then fail "a thread the desk answered is listed as unanswered"; fi
 
 step "alice commits a change; the next answer reads it without sharing again"
 printf '# Orders API\n\nGET /orders uses cursor pagination.\nThe page size is 75.\n' >"$R/docs/orders.md"
