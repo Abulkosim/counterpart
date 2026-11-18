@@ -294,10 +294,11 @@ export function createMcpServer(node: Counterpart, opts: McpOptions = {}): McpSe
     "counterpart_open_thread",
     {
       title: "Open a thread",
-      description: "Start a thread with a contact. The goal is one or two sentences saying what the two sides need to settle; the other side sees it. Returns the thread id.",
+      description:
+        "Start a thread with a contact. The goal is a short title, one sentence; the other side sees it. Then send your question or request with counterpart_say: the other side answers messages. Returns the thread id and a cursor.",
       inputSchema: {
         contact: contactName,
-        goal: z.string().min(1).max(LIMITS.goal).refine(notBlank, "goal is empty").describe(`What this thread is for, up to ${LIMITS.goal} characters`),
+        goal: z.string().min(1).max(LIMITS.goal).refine(notBlank, "goal is empty").describe(`A short title for the thread, up to ${LIMITS.goal} characters. Put the question itself in counterpart_say`),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
@@ -306,7 +307,7 @@ export function createMcpServer(node: Counterpart, opts: McpOptions = {}): McpSe
       const opened = node.log(id)[0];
       const d = opened ? await delivery(opened.id, contact, signal) : "Delivery: state unknown.";
       const at = opened?.ord ?? 0;
-      return ok(`Opened thread ${id} with ${contact}.\n${d}\ncursor: ${at}`);
+      return ok(`Opened thread ${id} with ${contact}.\n${d}\ncursor: ${at}\nNext: send your question or request with counterpart_say.`);
     }),
   );
 

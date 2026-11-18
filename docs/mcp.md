@@ -150,7 +150,7 @@ What it does not do:
 | --- | --- |
 | `counterpart_contacts` | Lists contacts: local name, state, safety code |
 | `counterpart_threads` | Lists up to 50 threads, newest first: id, contact, goal, event count, last activity |
-| `counterpart_open_thread(contact, goal)` | Starts a thread. Returns the thread id and a cursor |
+| `counterpart_open_thread(contact, goal)` | Starts a thread. The goal is a short title; the question goes in `counterpart_say`. Returns the thread id and a cursor |
 | `counterpart_say(thread, text)` | Sends a message, up to 16000 characters. Returns a cursor |
 | `counterpart_read_thread(thread, after?, max_message_chars?)` | Returns events after the cursor and the next cursor |
 | `counterpart_wait_for_reply(thread, after, timeout_seconds?)` | Blocks until the contact adds something after the cursor, or the timeout (default 30, at most 120). On timeout the cursor does not move |
