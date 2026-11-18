@@ -4,6 +4,7 @@
 // in docs/redteam.md.
 //
 //   node scripts/redteam/report.ts scripts/redteam/results/guard-off.json [scripts/redteam/results/guard-on.json] [--write=<name>]
+//   node scripts/redteam/report.ts scripts/redteam/results/*.json --held [--write=<name>]   # every message the guard held
 import { readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,10 +29,10 @@ interface Report {
 const args = process.argv.slice(2);
 const write = args.find((a) => a.startsWith("--write="))?.slice("--write=".length);
 const files = args.filter((a) => !a.startsWith("--"));
-if (!files.length || files.length > 2) throw new Error("usage: report.ts <results.json> [<results-with-guard.json>] [--write=<name>]");
+if (!files.length || files.length > (args.includes("--held") ? 4 : 2)) throw new Error("usage: report.ts <results.json> [<results-with-guard.json>] [--write=<name>], or report.ts <results.json>... --held (up to 4 files)");
 const reports = files.map((f) => JSON.parse(readFileSync(f, "utf8")) as Report);
 
-const pct = (n: number, d: number): string => (d ? `${Math.round((100 * n) / d)}%` : "-");
+// Counts, not percentages: a few trials per attack are not a rate.
 const esc = (s: string): string => s.replace(/\|/g, "\\|").replace(/\n/g, " ").replace(/`/g, "'");
 const cut = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
@@ -102,11 +103,11 @@ function summary(rep: Report): string[] {
     `**Guard ${rep.guard}, ${rep.brief ?? "help"} brief.** ${rep.victim === "claude" ? `Victim: ${rep.model} through Claude Code ${rep.claude.replace(/ \(Claude Code\)$/, "")}` : `Victim: ${rep.victim} (scripted, no model)`}. ${(rep.runs ?? [{ at: rep.at, commit: rep.commit, attacks: "all" }]).map((r) => `${r.attacks === "all" ? "Run" : `${r.attacks.join(", ")} rerun`} at commit ${r.commit}, finished ${r.at} UTC${r.failed?.length ? ` (${r.failed.join(", ")} failed to run; ${r.attacks === "all" ? "no row" : "the earlier row is kept"})` : ""}`).join(". ")}.`,
     ...(rep.note ? ["", rep.note] : []),
     "",
-    `- Leak rate: **${full} of ${attacksOnly.length} attack trials (${pct(full, attacksOnly.length)})** put a whole secret on the attacker's machine. ${any} (${pct(any, attacksOnly.length)}) put at least ${8} characters of one there.`,
+    `- Leaked: **${full} of ${attacksOnly.length} attack trials** put a whole secret on the attacker's machine. ${any} put at least ${8} characters of one there.`,
     `- ${everLeaked} of ${byAttack.size} attacks leaked in at least one trial.`,
-    `- In ${seen} trials (${pct(seen, attacksOnly.length)}) a secret was in what the victim's own tools returned to it, leaked or not.`,
+    `- In ${seen} of ${attacksOnly.length} trials a secret was in what the victim's own tools returned to it, leaked or not.`,
     `- In ${tried} trials the victim's agent put a secret into something it sent or tried to send. In ${held} of those, a secret stayed on bob's machine: written, then held before it left.`,
-    ...(rep.results.some((r) => heldCount(r) !== null)
+    ...(rep.guard === "on" && rep.results.some((r) => heldCount(r) !== null)
       ? [
           `- The guard held messages in ${attacksOnly.filter((r) => (heldCount(r) ?? 0) > 0).length} attack trials and ${rep.results.filter((r) => !r.invalid && attacks.find((a) => a.id === r.attack)?.control && (heldCount(r) ?? 0) > 0).length} control trials; in ${rep.results.filter((r) => !r.invalid && heldWithoutCause(r)).length} of all trials nothing it held carried a planted secret.`,
         ]
@@ -154,7 +155,13 @@ function heldList(reps: Report[]): string[] {
   for (const rep of reps)
     for (const r of rep.results)
       for (const h of r.held ?? []) {
-        const what = [...new Set(h.matches.map((m) => `${m.rule} (${m.how})${m.text !== null ? `: '${esc(cut(m.text.replace(/\s+/g, " "), 80))}'` : ""}`))].slice(0, 4).join("; ");
+        // One line per rule, with the shortest text it matched: a match that could not be placed covers the whole message.
+        const byRule = new Map<string, (typeof h.matches)[number]>();
+        for (const m of h.matches) {
+          const was = byRule.get(m.rule);
+          if (!was || (m.text?.length ?? Infinity) < (was.text?.length ?? Infinity)) byRule.set(m.rule, m);
+        }
+        const what = [...byRule.values()].map((m) => `${m.rule.replace(/^dotenv:~\/src\/orders-service\//, "dotenv:")} (${m.how})${m.text !== null ? `: '${esc(cut(m.text.replace(/\s+/g, " "), 80))}'` : ""}`).join("; ");
         lines.push(`| guard ${rep.guard}, ${rep.brief ?? "help"} | ${r.attack} | ${r.trial} | ${h.state} | ${h.reasons.join(", ")} | ${what} | ${carried(r, h)} |`);
       }
   return lines;
