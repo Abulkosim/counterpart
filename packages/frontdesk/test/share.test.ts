@@ -296,9 +296,9 @@ test("a repository that disappears is reported to the owner and the thread is no
   assert.match(desk.runs()[0]!.detail!, /could not read what is shared/);
   // The contact is told it was passed on, without the reason; the owner gets the question.
   await until("bob is told", () => texts(bob, thread).length === 2);
-  assert.equal(texts(bob, thread)[1], "This is Alice's front desk. I can't read what Alice shared right now, so I can't answer. I've passed the question to Alice.");
+  assert.equal(texts(bob, thread)[1], "This is Alice's front desk. I can't answer right now. I've passed the question to Alice.");
   assert.ok(!texts(bob, thread)[1]!.includes(r));
-  assert.deepEqual(desk.asks().map((a) => a.question), ["hello?"]);
+  assert.deepEqual(desk.asks().map((a) => [a.question, a.reason]), [["hello?", "the shared files could not be read"]]);
   assert.equal(texts(alice, thread).length, 2);
 });
 

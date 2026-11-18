@@ -8,7 +8,8 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { type ContractView, type EvidenceView, Counterpart, RelayLink } from "@counterpart/daemon";
 import { type ContractPart, type Evidence, canonicalize, decodeInvite, isHttpsUrl, verifyAgreement } from "@counterpart/protocol";
-import { FrontDesk, addToBundle, anthropicApi, claudeCli, cliPrivateValues, readBundle, removeFromBundle } from "@counterpart/frontdesk";
+import { FrontDesk, addToBundle, anthropicApi, claudeCli, claudeCliSetup, cliPrivateValues, readBundle, removeFromBundle } from "@counterpart/frontdesk";
+import { deskCheck, onAnyway } from "./desk-check.ts";
 import { hookMain, startMcpServer } from "@counterpart/mcp";
 import { type Binding, collectEvidence, preparePublication, publish, repoInit } from "@counterpart/publish";
 import { splitUrls, startRelay } from "@counterpart/relay";
@@ -111,9 +112,11 @@ ${SHARE_USAGE}
   cpart bundle add <contact> <file...>                            share copies of these files with a contact
   cpart bundle list <contact>
   cpart bundle remove <contact> <name>
-  cpart desk on <contact> [--as <your name>] [--slots 6] [--daily 30]
+  cpart desk on <contact> [--as <your name>] [--slots 6] [--daily 30] [--no-check]
+                                                                  first has the daemon check that the model runs; --no-check skips that
   cpart desk off <contact>
   cpart desk status
+  cpart desk check                                                have the daemon make one tiny model call, and say what is wrong if it fails
   cpart desk refill <thread>                                      allow more replies in a thread
   cpart asks [--all]                                              questions the front desk passed to you that are still open
   cpart asks answer <id> [text]                                   mark one answered. With text, send it to the contact as your own message
@@ -128,7 +131,7 @@ const { values: flags, positionals } = parseArgs({
   options: {
     relay: { type: "string" }, port: { type: "string" }, host: { type: "string" }, db: { type: "string" },
     home: { type: "string" }, evidence: { type: "boolean" }, head: { type: "string" }, base: { type: "string" }, label: { type: "string" }, pr: { type: "string" }, run: { type: "string" }, status: { type: "string" }, bind: { type: "string", multiple: true }, work: { type: "string" }, branch: { type: "string" }, repo: { type: "string" }, paths: { type: "string" }, brief: { type: "string" }, allow: { type: "string", multiple: true }, title: { type: "string" }, file: { type: "string" }, part: { type: "string", multiple: true }, supersedes: { type: "string" },
-    out: { type: "string" }, yes: { type: "boolean" }, all: { type: "boolean" }, notify: { type: "boolean" }, "view-port": { type: "string" }, "no-passphrase": { type: "boolean" }, as: { type: "string" }, slots: { type: "string" }, daily: { type: "string" }, model: { type: "string" }, url: { type: "string", multiple: true }, wait: { type: "string" }, boot: { type: "boolean" }, "no-boot": { type: "boolean" }, "no-agents": { type: "boolean" }, "no-hooks": { type: "boolean" }, tunnel: { type: "boolean" }, "no-wait": { type: "boolean" }, long: { type: "boolean" }, code: { type: "boolean" }, say: { type: "string" }, json: { type: "boolean" }, help: { type: "boolean", short: "h" },
+    out: { type: "string" }, yes: { type: "boolean" }, all: { type: "boolean" }, notify: { type: "boolean" }, "view-port": { type: "string" }, "no-passphrase": { type: "boolean" }, as: { type: "string" }, slots: { type: "string" }, daily: { type: "string" }, model: { type: "string" }, url: { type: "string", multiple: true }, wait: { type: "string" }, boot: { type: "boolean" }, "no-boot": { type: "boolean" }, "no-agents": { type: "boolean" }, "no-hooks": { type: "boolean" }, "no-check": { type: "boolean" }, tunnel: { type: "boolean" }, "no-wait": { type: "boolean" }, long: { type: "boolean" }, code: { type: "boolean" }, say: { type: "string" }, json: { type: "boolean" }, help: { type: "boolean", short: "h" },
   },
 });
 const [cmd, ...args] = positionals;
@@ -461,6 +464,8 @@ function status(node: Counterpart): void {
   const desk = new FrontDesk(node, async () => "");
   const desks = new Map(desk.desks().map((x) => [x.contact, x.enabled]));
   const asks = desk.asks(200).filter((a) => a.state === "open");
+  // Shown only while a desk is on: a model that fails then means contacts get no answers.
+  const health = [...desks.values()].some(Boolean) ? desk.health() : null;
   const threads = node.threads();
   const toSign = threads.flatMap((t) => node.contracts(t.id).filter((c) => c.status === "open" && !c.approvedByMe).map((c) => ({ thread: t, c })));
   const agreed = threads.flatMap((t) => node.contracts(t.id).filter((c) => c.status === "agreed")).length;
@@ -474,6 +479,7 @@ function status(node: Counterpart): void {
   const waiting = [
     ...(d ? refusedLine(homeRelay, node.relayBook.status(), d.startedAt, safe) : []),
     ...unansweredLines(unanswered, Date.now()),
+    ...(health ? [`  front desk failing: ${safe(health.short)}, since ${time(health.since)}. Contacts are told their questions went to you\n      cpart desk check`] : []),
     ...(guard.held ? [`  ${guard.held} message${guard.held > 1 ? "s" : ""} held by the outbound guard. Nothing was sent\n      cpart held`] : []),
     ...toSign.map(({ thread, c }) => `  contract to read, ${c.approvedByThem ? `signed by ${thread.contact}` : c.proposedByMe ? "proposed by your side" : `proposed by ${thread.contact}`}: ${safe(c.contract.title)}\n      cpart contract ${thread.id.slice(0, 8)} ${c.proposalId.slice(0, 8)}`),
     ...(asks.length ? [`  ${asks.length} question${asks.length > 1 ? "s" : ""} your front desk could not answer\n      cpart asks`] : []),
@@ -494,7 +500,7 @@ function status(node: Counterpart): void {
     waiting.length ? `Waiting for you:\n${waiting.join("\n")}` : "Nothing is waiting for you.",
     ...(pairing.news.length ? ["", `Lately:\n${pairing.news.join("\n")}`] : []),
   ];
-  out(lines.join("\n"), { me: node.me, unanswered: unanswered.map((u) => ({ threadId: u.thread, contact: u.contact, opened: u.opened, messages: u.messages, lastAt: u.lastAt })), daemon: d ?? null, boot: bootInstalled(home) ?? null, agents: hosts, contacts: contacts.map((c) => ({ name: c.name, state: c.state })), threads: threads.length, held: guard.held, unguarded: guard.unguarded, toSign: toSign.map(({ thread, c }) => ({ threadId: thread.id, proposalId: c.proposalId, title: c.contract.title })), asks: asks.length });
+  out(lines.join("\n"), { me: node.me, unanswered: unanswered.map((u) => ({ threadId: u.thread, contact: u.contact, opened: u.opened, messages: u.messages, lastAt: u.lastAt })), daemon: d ?? null, boot: bootInstalled(home) ?? null, agents: hosts, contacts: contacts.map((c) => ({ name: c.name, state: c.state })), threads: threads.length, held: guard.held, unguarded: guard.unguarded, toSign: toSign.map(({ thread, c }) => ({ threadId: thread.id, proposalId: c.proposalId, title: c.contract.title })), asks: asks.length, deskFailing: health ? { short: health.short, since: health.since } : null });
 }
 
 async function main(): Promise<void> {
@@ -853,8 +859,13 @@ async function main(): Promise<void> {
       const key = process.env.ANTHROPIC_API_KEY;
       const pick = flags.model ? { model: flags.model } : {};
       const base = process.env.ANTHROPIC_BASE_URL ? { baseUrl: process.env.ANTHROPIC_BASE_URL } : {};
-      const desk = key ? new FrontDesk(node, anthropicApi({ apiKey: key, ...base, ...pick })) : new FrontDesk(node, claudeCli(pick), { forbidden: cliPrivateValues() });
+      // The setup is reported to the owner when a check fails: under systemd,
+      // launchd or in a container this process's PATH is not the shell's.
+      const desk = key
+        ? new FrontDesk(node, anthropicApi({ apiKey: key, ...base, ...pick }), { setup: () => ({ kind: "api", baseUrl: base.baseUrl ?? "https://api.anthropic.com" }) })
+        : new FrontDesk(node, claudeCli(pick), { forbidden: cliPrivateValues(), setup: () => claudeCliSetup() });
       desk.onError = (e) => console.error(`front desk: ${e.message}`);
+      desk.onCheck = (c) => console.log(`front desk check: ${c.ok ? "the model runs" : `failed: ${safe(c.detail ?? "")}`}`);
       desk.onRun = (r) => console.log(`front desk ${r.outcome} for ${r.contact} in thread ${r.threadId}${r.detail ? `: ${safe(r.detail)}` : ""}`);
       desk.start();
       // The home is given up only once nothing here is still sending.
@@ -955,23 +966,43 @@ async function main(): Promise<void> {
       });
       const show = (d: { contact: string; enabled: boolean; owner: string; slotsPerThread: number; slotsPerDay: number }): string =>
         `${d.contact.padEnd(20)} ${d.enabled ? "on " : "off"}  answers as ${d.owner}'s front desk, ${d.slotsPerThread} replies per thread, ${d.slotsPerDay} per day, ${sharedSummary(home, node.contact(d.contact))}`;
+      const io = { daemon: ensureDaemon, boot: () => bootInstalled(home), log: logFile(home), safe };
       if (args[0] === "status" || !args[0]) {
         const list = desk.desks();
-        return out(list.length ? list.map(show).join("\n") : "No contacts yet.", list);
+        const h = desk.health();
+        const failing = h && list.some((d) => d.enabled) ? `\n\nThe model has failed since ${time(h.since)}: ${safe(h.detail)}\nSee why: cpart desk check` : "";
+        return out(list.length ? list.map(show).join("\n") + failing : "No contacts yet.", list);
       }
       if (args[0] === "refill") {
         need(2, "desk refill <thread>");
         desk.refill(args[1]!);
         return out(`Thread ${args[1]} can get replies again.`, { ok: true });
       }
-      if (args[0] !== "on" && args[0] !== "off") throw new Error("usage: cpart desk on|off|status|refill");
+      if (args[0] === "check") {
+        const c = await deskCheck(desk, io);
+        if (!c.ok) throw new Error(c.text);
+        return out("The daemon ran the front desk's model. It works.", c);
+      }
+      if (args[0] !== "on" && args[0] !== "off") throw new Error("usage: cpart desk on|off|status|check|refill");
       need(2, `desk ${args[0]} <contact>`);
-      const d = desk.configure(args[1]!, {
+      const patch = {
         enabled: args[0] === "on",
         ...(flags.as ? { owner: flags.as } : {}),
         ...(flags.slots ? { slotsPerThread: Number(flags.slots) } : {}),
         ...(flags.daily ? { slotsPerDay: Number(flags.daily) } : {}),
-      });
+      };
+      // Settle what is asked before spending a model call on the check.
+      desk.validate(args[1]!, patch);
+      let notice = "";
+      if (args[0] === "on" && !flags["no-check"]) {
+        const c = await deskCheck(desk, io);
+        // With no daemon nothing answers yet; cpart status says so, and the
+        // check can run once it is up.
+        if (!c.ok && c.kind === "no-daemon") notice = c.text;
+        else if (!c.ok) throw new Error(`${c.text}\n${onAnyway(node.contact(args[1]!).name, flags, desk.config(args[1]!).enabled)}`);
+      }
+      const d = desk.configure(args[1]!, patch);
+      if (notice) note(notice);
       return out(show(d), d);
     }
     case "asks": {
@@ -991,7 +1022,7 @@ async function main(): Promise<void> {
       if (args[0]) throw new Error("usage: cpart asks [--all] | cpart asks answer <id> [text] | cpart asks dismiss <id>");
       const all = desk.asks(200);
       const list = flags.all ? all : all.filter((a) => a.state === "open");
-      const row = (a: (typeof all)[number]): string => `${String(a.id).padStart(3)}  ${time(a.at)}  ${a.contact.padEnd(12)} ${flags.all ? a.state.padEnd(10) : ""}thread ${a.threadId}  ${safe(a.question)}`;
+      const row = (a: (typeof all)[number]): string => `${String(a.id).padStart(3)}  ${time(a.at)}  ${a.contact.padEnd(12)} ${flags.all ? a.state.padEnd(10) : ""}thread ${a.threadId}  ${safe(a.question)}${a.reason ? `\n     not answered because ${safe(a.reason)}` : ""}`;
       const none = all.length ? "No open questions. See the closed ones with: cpart asks --all" : "The front desk has not passed you any questions.";
       return out(list.length ? `${list.map(row).join("\n")}\n\nThe wording came from a model that read the other side's messages. Answer with: cpart asks answer <id> <text>` : none, list);
     }

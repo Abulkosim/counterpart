@@ -159,9 +159,11 @@ test("needs-you lists what waits for the owner, each with where to find it", asy
   const sign = o.needs.filter((n) => n.kind === "sign");
   assert.equal(sign.length, 1);
   assert.deepEqual(sign[0], { kind: "sign", at: sign[0]!.at, threadId: paging, contact: "bob", proposalId: second.proposalId, n: 2, title: HOSTILE_TITLE, proposedByMe: false, approvedByThem: true, status: "open" });
-  const asks = o.needs.filter((n) => n.kind === "ask");
-  assert.equal(asks.length, 1);
-  assert.deepEqual(asks[0], { kind: "ask", id: asks[0]!.id, at: asks[0]!.at, threadId: helpdesk, contact: "bob", question: HOSTILE_ASK });
+  // One the model passed on, and one it could not answer because it failed.
+  const asks = o.needs.flatMap((n) => (n.kind === "ask" ? [n] : []));
+  assert.deepEqual(asks.map((a) => a.question).sort(), [HOSTILE_ASK, "hello?"].sort());
+  const hostile = asks.find((a) => a.question === HOSTILE_ASK)!;
+  assert.deepEqual(hostile, { kind: "ask", id: hostile.id, at: hostile.at, threadId: helpdesk, contact: "bob", question: HOSTILE_ASK });
   assert.equal(o.needs.filter((n) => n.kind === "waiting").length, 0);
 });
 
@@ -338,7 +340,7 @@ test("a shared file can be opened, and nothing outside the bundle can", async ()
 test("messages written by a front desk carry that claim", async () => {
   const t = await read<ViewerThread>(`/api/threads/${helpdesk}`);
   const talk = t.events.filter((e) => e.type === "talk.posted");
-  assert.deepEqual(talk.map((e) => [e.mine, e.via]), [[false, null], [true, "frontdesk"], [false, null], [true, "frontdesk"], [false, null]]);
+  assert.deepEqual(talk.map((e) => [e.mine, e.via]), [[false, null], [true, "frontdesk"], [false, null], [true, "frontdesk"], [false, null], [true, "frontdesk"]]);
 });
 
 test("every new route needs the token and the viewer's own host name", async () => {
@@ -403,7 +405,7 @@ test("the page has no HTML-parsing sink, no form and no request that writes", ()
 });
 
 test("a front desk question stays in needs-you until the owner writes in that thread", async () => {
-  assert.equal((await read<ViewerOverview>("/api/overview")).needs.filter((n) => n.kind === "ask").length, 1);
+  assert.equal((await read<ViewerOverview>("/api/overview")).needs.filter((n) => n.kind === "ask").length, 2);
   await new Promise((r) => setTimeout(r, 5));
   await alice.say(helpdesk, "No, it stays at 300.");
   assert.equal((await read<ViewerOverview>("/api/overview")).needs.filter((n) => n.kind === "ask").length, 0);
