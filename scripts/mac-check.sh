@@ -185,7 +185,8 @@ INVITE_PID=
 INVITE_CODE=
 invite() {
   local out=$WORK/invite.$1.out
-  mac invite container >"$out" 2>&1 &
+  # exec, so the pid is node's own and a kill stops the wait, not just a subshell.
+  (CPART_HOME="$WORK/mac" exec node "$REPO/packages/cli/src/main.ts" invite container) >"$out" 2>&1 &
   INVITE_PID=$!
   BG="$BG $INVITE_PID"
   wait_until 30 grep -q 'cpart join ' "$out" || return 1
@@ -452,7 +453,7 @@ if [ "$OS" != Darwin ]; then
   result SKIP 7 "launchd is macOS only"
 elif [ "$TALK_OK" != 1 ]; then
   result SKIP 7 "steps 5 or 6 did not run"
-elif ! ask "7. Install the launchd agent for the temp identity, kill its daemon, check launchd restarts it, then remove it? A plist goes in ~/Library/LaunchAgents and is removed again."; then
+elif ! ask "7. Install the launchd agent for the temp identity, kill its daemon, check launchd restarts it, then remove it? A plist goes in ~/Library/LaunchAgents and is removed again. If macOS shows a notice about a background item, it is this one."; then
   result SKIP 7 "not chosen (or not a terminal)"
 else
   head_line "7. launchd"
