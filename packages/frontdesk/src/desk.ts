@@ -1,8 +1,9 @@
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Counterpart } from "@counterpart/daemon";
-import { REPLY_CHARS, TEXT, compose, prepare, queryFrom, unchanged } from "./answer.ts";
+import { ASK_CHARS, type Material, REPLY_CHARS, TEXT, compose, queryFrom, unchanged } from "./answer.ts";
 import type { Model } from "./model.ts";
+import { Preparer } from "./offload.ts";
 import { userPrompt } from "./prompt.ts";
 
 export interface DeskConfig {
@@ -52,6 +53,8 @@ export class FrontDesk {
   private timer: NodeJS.Timeout | null = null;
   private running: Promise<void> = Promise.resolve();
   private forbidden: string[];
+  private preparer: Preparer;
+  private closed = false;
   onError: (e: Error) => void = () => {};
   // Called after each run is recorded, so the daemon can log it.
   onRun: (run: { outcome: Run["outcome"]; contact: string; threadId: string; detail: string | null }) => void = () => {};
@@ -59,7 +62,8 @@ export class FrontDesk {
   // `forbidden` are exact strings that must never appear in a reply, such as
   // values the model runtime adds to its own context. A reply containing one is
   // dropped. This catches accidents and plain leaks, not a determined encoder.
-  constructor(node: Counterpart, model: Model, opts: { now?: () => number; forbidden?: string[] } = {}) {
+  constructor(node: Counterpart, model: Model, opts: { now?: () => number; forbidden?: string[]; prepareTimeoutMs?: number } = {}) {
+    this.preparer = new Preparer(opts.prepareTimeoutMs !== undefined ? { timeoutMs: opts.prepareTimeoutMs } : {});
     this.forbidden = (opts.forbidden ?? []).filter((f) => f.length >= 4).map((f) => f.toLowerCase());
     this.node = node;
     this.model = model;
@@ -95,6 +99,8 @@ export class FrontDesk {
   }
 
   close(): void {
+    this.closed = true;
+    this.preparer.close();
     this.db.close();
   }
 
@@ -279,13 +285,17 @@ export class FrontDesk {
     }
 
     const latest = (waiting.at(-1)!.body as { text: string }).text;
-    let material: ReturnType<typeof prepare>;
+    let material: Material | null;
     try {
-      material = prepare(this.node.home, contact, cfg.owner, queryFrom(thread.goal, log));
+      material = await this.preparer.run(this.node.home, contact, cfg.owner, queryFrom(thread.goal, log));
     } catch (e) {
-      // A shared repository that moved or cannot be read. Said to the owner, not the contact.
-      record("failed", { detail: `could not read what is shared: ${(e as Error).message.slice(0, 250)}` });
-      setAnswered(inputOrd);
+      // A shared repository that moved, cannot be read, or took too long. The
+      // reason goes to the owner in the run record; the contact is told only
+      // that the question was passed on, and the owner finds it in their asks.
+      if (this.closed || !this.config(contact.name).enabled) return false;
+      const replyEventId = await post(TEXT.unavailable(cfg.owner));
+      this.db.prepare("INSERT INTO asks (at, contact_root, thread_id, question) VALUES (?, ?, ?, ?)").run(this.now(), contact.rootKey, threadId, latest.replace(/\s+/g, " ").trim().slice(0, ASK_CHARS) || "(an empty message)");
+      record("failed", { replyEventId, detail: `could not read what is shared: ${(e as Error).message.slice(0, 250)}` });
       return false;
     }
     if (!material) {

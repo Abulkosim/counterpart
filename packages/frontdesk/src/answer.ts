@@ -17,6 +17,7 @@ export const TEXT = {
   noMaterial: (owner: string) => `This is ${owner}'s front desk. Nothing has been shared with you here yet, so I can't answer. ${owner} will see your message.`,
   outOfBudget: (owner: string) => `This is ${owner}'s front desk. I've used the replies ${owner} allowed for this thread. ${owner} will see the rest of your messages.`,
   asked: (owner: string) => `I can't answer that from what ${owner} has shared. I've passed the question to ${owner}.`,
+  unavailable: (owner: string) => `This is ${owner}'s front desk. I can't read what ${owner} shared right now, so I can't answer. I've passed the question to ${owner}.`,
 };
 
 export interface Contact {

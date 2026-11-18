@@ -2,12 +2,13 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Counterpart, RelayLink } from "@counterpart/daemon";
 import { type Relay, startRelay } from "@counterpart/relay";
 import { DatabaseSync } from "node:sqlite";
-import { type Model, type ModelRequest, FrontDesk, addShare, checkCitations, compose, findSecret, globToRegExp, readShare, removeShare, select, shareRules } from "../src/index.ts";
+import { type Model, type ModelRequest, FrontDesk, Preparer, addShare, checkCitations, compose, findSecret, globToRegExp, readShare, removeShare, select, shareRules } from "../src/index.ts";
 
 const dirs: string[] = [];
 const stops: (() => Promise<void> | void)[] = [];
@@ -293,7 +294,12 @@ test("a repository that disappears is reported to the owner and the thread is no
   assert.equal(model.calls.length, 0);
   assert.equal(desk.runs().length, 1);
   assert.match(desk.runs()[0]!.detail!, /could not read what is shared/);
-  assert.equal(texts(alice, thread).length, 1);
+  // The contact is told it was passed on, without the reason; the owner gets the question.
+  await until("bob is told", () => texts(bob, thread).length === 2);
+  assert.equal(texts(bob, thread)[1], "This is Alice's front desk. I can't read what Alice shared right now, so I can't answer. I've passed the question to Alice.");
+  assert.ok(!texts(bob, thread)[1]!.includes(r));
+  assert.deepEqual(desk.asks().map((a) => a.question), ["hello?"]);
+  assert.equal(texts(alice, thread).length, 2);
 });
 
 // ---- found in review ----
@@ -385,4 +391,29 @@ test("an exact path with brackets can be shared", () => {
   assert.ok(!globToRegExp("app/[id]/page.tsx").test("app/i/page.tsx"));
   const s = addShare(tmp(), ROOT, r, ["app/[id]/page.tsx"]);
   assert.deepEqual(s.files.map((f) => f.path), ["app/[id]/page.tsx"]);
+});
+
+test("a large share is read off the daemon's thread, and a read that takes too long fails", async () => {
+  const files: Record<string, string> = {};
+  for (let i = 0; i < 24; i++) files[`docs/f${i}.md`] = `${randomBytes(120_000).toString("base64").replace(/(.{76})/g, "$1\n")}\n`;
+  const r = repo(files);
+  const home = tmp();
+  addShare(home, ROOT, r, ["docs"]);
+  const p = new Preparer();
+  stops.push(() => p.close());
+  let ticks = 0;
+  const iv = setInterval(() => ticks++, 2);
+  const started = Date.now();
+  const m = await p.run(home, { name: "bob", rootKey: ROOT }, "Alice", "what is in f3");
+  clearInterval(iv);
+  assert.equal(m!.kind, "repo");
+  assert.ok(m!.kind === "repo" && m!.ranked && m!.share.files.length === 24);
+  // Had it run here, no timer could have fired until it was done.
+  assert.ok(ticks >= 5, `${ticks} timer ticks in ${Date.now() - started} ms`);
+
+  const slow = new Preparer({ timeoutMs: 1 });
+  stops.push(() => slow.close());
+  await assert.rejects(slow.run(home, { name: "bob", rootKey: ROOT }, "Alice", "q"), /took longer than/);
+  // The first preparer's thread is still there for the next read.
+  assert.equal(await p.run(home, { name: "bob", rootKey: "nobody" }, "Alice", "q"), null);
 });
