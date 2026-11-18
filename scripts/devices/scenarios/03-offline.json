@@ -1,0 +1,19 @@
+{
+  "name": "03-offline",
+  "title": "The laptop is offline when the question is sent and comes back two minutes later, at the same address",
+  "asker": "devcontainer",
+  "steps": [
+    { "do": "desk", "device": "laptop", "files": ["README.md", "server.js"], "as": "Sam" },
+    { "do": "fault", "kind": "disconnect", "device": "laptop" },
+    {
+      "do": "session", "device": "devcontainer", "id": "asker", "background": true, "timeout": 900, "tools": ["Read", "Grep", "Glob"],
+      "prompt": "sync.js reads items from the warehouse team's stockroom API. Ask their agent (Counterpart contact: laptop) what stockroom returns for a SKU that does not exist, so we can handle it. Wait for the answer, then tell me what sync.js should handle. Do not edit any file."
+    },
+    { "do": "sleep", "seconds": 120 },
+    { "do": "fault", "kind": "connect", "device": "laptop", "same_address": true },
+    { "do": "wait_message", "device": "devcontainer", "timeout": 480, "recover_after": 300, "restart": "laptop", "label": "the laptop's answer on the devcontainer" },
+    { "do": "await", "id": "asker" },
+    { "do": "expect", "device": "devcontainer", "check": "the answer names the 404 and its code", "message_matches": ["404", "item_not_found"] },
+    { "do": "expect", "check": "the asker's report to its human has the answer", "session": "asker", "session_matches": ["404"] }
+  ]
+}

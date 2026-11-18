@@ -48,7 +48,7 @@ alice setup --relay "$RELAY" --no-agents
 step "Bob, in a container that knows nothing yet"
 docker run -d --name "$BOB" --entrypoint sleep counterpart:two infinity >/dev/null
 wait_for "Bob's machine to resolve the relay's name" docker exec "$BOB" node -e "fetch('https://${RELAY#wss://}/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
-INVITE=$(alice invite bob | grep -o 'cpart-invite:[A-Za-z0-9_-]*')
+INVITE=$(alice invite bob --long | grep -o 'cpart-invite:[A-Za-z0-9_-]*')
 bob join "$INVITE" alice --no-agents
 
 step "the safety codes match"

