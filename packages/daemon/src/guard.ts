@@ -28,13 +28,14 @@ export type GuardCategory =
   | "generic-secret"
   | "env-secret"
   | "dotenv-value"
+  | "config-value"
   | "never-share-file"
   // The message holds more encoded text than the guard will decode, so part of it went unchecked.
   | "too-much-to-check"
   // A never-share file the owner registered cannot be read whole, so nothing is checked against it.
   | "never-share-unreadable";
 
-export type Encoding = "plain" | "reversed" | "split" | "base64" | "hex" | "url" | "escaped";
+export type Encoding = "plain" | "reversed" | "split" | "base64" | "hex" | "url" | "escaped" | "spelled";
 
 export interface Finding {
   category: GuardCategory;
@@ -331,6 +332,37 @@ function base32(s: string): string {
 
 const rot13 = (s: string): string => s.replace(/[A-Za-z]/g, (c) => String.fromCharCode(((c.charCodeAt(0) - (c <= "Z" ? 65 : 97) + 13) % 26) + (c <= "Z" ? 65 : 97)));
 
+// Spelled out, as on the phone: "Alfa Kilo India, three", "k as in Kilo",
+// a numbered list with one character a line. Known words become their
+// character, single characters stay, anything else breaks the run.
+const SPOKEN: Record<string, string> = {
+  alpha: "a", alfa: "a", bravo: "b", charlie: "c", delta: "d", echo: "e", foxtrot: "f", golf: "g", hotel: "h", india: "i", juliet: "j", juliett: "j",
+  kilo: "k", lima: "l", mike: "m", november: "n", oscar: "o", papa: "p", quebec: "q", romeo: "r", sierra: "s", tango: "t", uniform: "u", victor: "v",
+  whiskey: "w", whisky: "w", xray: "x", yankee: "y", zulu: "z",
+  zero: "0", one: "1", two: "2", three: "3", four: "4", five: "5", six: "6", seven: "7", eight: "8", nine: "9", niner: "9",
+};
+const SPOKEN_FILLER = new Set(["underscore", "dash", "hyphen", "slash", "plus", "capital", "uppercase", "lowercase", "upper", "lower", "letter", "digit", "number", "then", "as", "in", "for", "like", "the"]);
+const SPOKEN_MIN = 6; // spelled words in a text before it is read this way
+function spoken(s: string): string | null {
+  const words = s
+    .toLowerCase()
+    .replace(/^[ \t]*\d+[.)][ \t]+/gm, "")
+    .replace(/x[\s-]ray/g, "xray")
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w && !SPOKEN_FILLER.has(w));
+  if (words.filter((w) => SPOKEN[w]).length < SPOKEN_MIN) return null;
+  const out: string[] = [];
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i]!;
+    const c = SPOKEN[w] ?? (w.length === 1 ? w : " ");
+    // A character said twice, plain and as its word ("k Kilo"), is one character.
+    const next = words[i + 1];
+    if (c !== " " && next && (w.length === 1) !== (next.length === 1) && (SPOKEN[next] ?? (next.length === 1 ? next : "")) === c) i++;
+    out.push(c);
+  }
+  return out.join("");
+}
+
 const unescape = (s: string): string =>
   s.replace(/\\u([0-9a-fA-F]{4})|\\([nrt"\\/])/g, (_, h: string | undefined, c: string | undefined) => (h ? String.fromCharCode(parseInt(h, 16)) : c === "n" ? "\n" : c === "r" ? "\r" : c === "t" ? "\t" : c!));
 // Pieces put on separate lines, between quotes, or joined with + in code.
@@ -423,6 +455,8 @@ export function views(text: string): Views {
       add(unsplit(v.text), chain(v.how, "split"), v.span, depth, surface + 1);
       add(rot13(v.text), chain(v.how, "rot13"), v.span, depth, surface + 1);
       add(v.text.normalize("NFKC"), chain(v.how, "folded"), v.span, depth, surface + 1);
+      const sp = spoken(v.text);
+      if (sp) add(sp, chain(v.how, "spelled"), v.span, depth, surface + 1);
       if (/\\[nrtu"\\/]/.test(v.text)) add(unescape(v.text), chain(v.how, "escaped"), v.span, depth, surface + 1);
     }
     let runs: ReturnType<typeof decodings>;
@@ -575,7 +609,8 @@ export const walkLimit = (): WalkLimit => ({ dirs: WALK_DIRS, cut: new Set() });
 // .env files anywhere in a repository, without following links. The search
 // is bounded; where it stops early, the repository goes in `limit.cut`, so
 // the gap is reported rather than passed over.
-export function dotenvFiles(root: string, limit: WalkLimit = walkLimit()): string[] {
+// With `configs`, the same walk also collects config files there (see configValues).
+export function dotenvFiles(root: string, limit: WalkLimit = walkLimit(), configs?: string[]): string[] {
   const out: string[] = [];
   const walk = (dir: string, depth: number): void => {
     if (depth > WALK_DEPTH || limit.dirs <= 0) {
@@ -594,6 +629,7 @@ export function dotenvFiles(root: string, limit: WalkLimit = walkLimit()): strin
       if (d.isDirectory()) {
         if (!SKIP_DIRS.has(d.name)) walk(join(dir, d.name), depth + 1);
       } else if (d.isFile() && (/^\.env(?:\..+)?$/.test(d.name) || /.\.env$/.test(d.name))) out.push(join(dir, d.name));
+      else if (configs && d.isFile() && CONFIG_FILE.test(d.name)) configs.push(join(dir, d.name));
     }
   };
   walk(root, 0);
@@ -609,6 +645,65 @@ export function dotenvValues(file: string): Exact[] {
     if (worthMatching(value, secretName)) out.push(...exact(value, "dotenv-value", `dotenv:${file}:${name}`));
   }
   return out;
+}
+
+// Config files: values under secret-named keys count like .env values. Only
+// those, since config files hold many ordinary values. A token found only by
+// its pattern is missed once it is reversed or sent in halves; one known
+// exactly is not.
+const CONFIG_FILE = /\.(?:ya?ml|toml|json|ini|cfg|conf|properties|xml)$|^(?:credentials|secrets?)(?:\..+)?$/i;
+const MAX_CONFIG = 256 * 1024;
+const MAX_CONFIG_VALUES = 200;
+
+export function configValues(file: string): Exact[] {
+  const text = readSmall(file);
+  if (text === null || text.length > MAX_CONFIG) return [];
+  const out: Exact[] = [];
+  let n = 0;
+  for (const raw of text.split(/\r?\n/)) {
+    if (n >= MAX_CONFIG_VALUES) break;
+    // key: value, key = value, "key": "value", <key>value</key>
+    const m = /^\s*(?:-\s+)?["']?([A-Za-z_][\w.\-/:@]*?)["']?\s*[:=]\s*(.+?)\s*,?\s*$/.exec(raw) ?? /^\s*<([A-Za-z_][\w.-]*)>([^<]+)<\/\1>\s*$/.exec(raw);
+    if (!m) continue;
+    const name = m[1]!.split(/[.:/]/).pop()!;
+    let v = m[2]!.trim();
+    const q = v[0];
+    if ((q === '"' || q === "'") && v.indexOf(q, 1) > 0) v = v.slice(1, v.indexOf(q, 1));
+    else v = v.replace(/\s+#.*$/, "");
+    if (!SECRET_NAME.test(name) || NOT_SECRET_NAME.test(name) || !worthMatching(v, true)) continue;
+    out.push(...exact(v, "config-value", `config:${file}:${name}`));
+    n++;
+  }
+  return out;
+}
+
+// Credential files in the home directory the sending program sees. Their
+// values are secret whatever they are called.
+const HOME_FILES = [".aws/credentials", ".netrc", ".pgpass", ".git-credentials", ".npmrc", ".pypirc", ".docker/config.json"];
+
+export function homeValues(home: string | undefined): { files: string[]; exact: Exact[] } {
+  if (!home) return { files: [], exact: [] };
+  const files: string[] = [];
+  const out: Exact[] = [];
+  for (const rel of HOME_FILES) {
+    const file = join(home, rel);
+    const text = readSmall(file);
+    if (text === null || text.length > MAX_CONFIG) continue;
+    files.push(file);
+    const rule = `home:~/${rel}`;
+    const add = (v: string): void => {
+      if (worthMatching(v, true)) out.push(...exact(v, "config-value", rule));
+    };
+    if (rel === ".netrc") for (const m of text.matchAll(/\bpassword\s+(\S+)/g)) add(m[1]!);
+    else if (rel === ".pgpass") for (const line of text.split(/\r?\n/)) add(line.split(":").slice(4).join(":"));
+    else if (rel === ".git-credentials") for (const m of text.matchAll(/:\/\/[^:/\s]*:([^@\s]+)@/g)) add(decodeURIComponent(m[1]!));
+    else
+      for (const line of text.split(/\r?\n/)) {
+        const m = /^\s*["']?([^\s=:"'[]+)["']?\s*[=:]\s*["']?([^"'\s,]+)/.exec(line);
+        if (m && SECRET_NAME.test(m[1]!)) add(m[2]!);
+      }
+  }
+  return { files, exact: out };
 }
 
 // The repository a directory is in: the nearest parent with a .git entry.
@@ -687,16 +782,24 @@ export const pieces = (s: string): string =>
 // reading of the message. COVER characters of one value is a hold, whether
 // they come in one message or spread over the recent ones to that contact.
 const GRAM = 6;
+// A run with no digit (a letters-only token, or the half of one that has no
+// digit) is counted in longer grams with at least LONG_DISTINCT different
+// characters, which words and names do not give.
+const LONG = 12;
+const LONG_DISTINCT = 9;
 const HISTORY = 64_000; // characters of earlier messages looked at
 const COVER = 10;
 type Grams = Map<string, { e: Exact; at: number }[]>;
+const GRAM_SIZES = [GRAM, LONG];
+const gramOk = (g: string): boolean => (g.length === GRAM ? /[a-z]/.test(g) && /[0-9]/.test(g) : /[a-z]/.test(g) && new Set(g).size >= LONG_DISTINCT);
 function grams(exact: Exact[]): Grams {
   const out: Grams = new Map();
   for (const e of exact) {
     if (e.compact.length < 16 || e.whole || entropy(e.compact) < 3) continue;
-    for (let i = 0; i + GRAM <= e.compact.length; i++) {
-      const g = e.compact.slice(i, i + GRAM);
-      if (!/[a-z]/.test(g) || !/[0-9]/.test(g)) continue;
+    for (const n of GRAM_SIZES)
+    for (let i = 0; i + n <= e.compact.length; i++) {
+      const g = e.compact.slice(i, i + n);
+      if (!gramOk(g)) continue;
       const list = out.get(g) ?? [];
       // A gram that repeats inside a value is credited once, at its first place.
       if (list.some((h) => h.e === e)) continue;
@@ -713,13 +816,14 @@ function cover(streams: string[], index: Grams, into = new Map<Exact, Set<number
   if (!index.size) return into;
   const seen = new Set<string>();
   for (const s of streams) {
-    for (let i = 0; i + GRAM <= s.length; i++) {
-      const g = s.slice(i, i + GRAM);
+    for (const n of GRAM_SIZES)
+    for (let i = 0; i + n <= s.length; i++) {
+      const g = s.slice(i, i + n);
       if (seen.has(g)) continue;
       seen.add(g);
       for (const { e, at } of index.get(g) ?? []) {
         const set = into.get(e) ?? new Set<number>();
-        for (let k = at; k < at + GRAM; k++) set.add(k);
+        for (let k = at; k < at + n; k++) set.add(k);
         into.set(e, set);
       }
     }
@@ -1069,19 +1173,23 @@ export class Guard {
   secrets(): Secrets {
     const env = envValues(this.env);
     const limit = walkLimit();
-    const envFiles = this.repos().flatMap((repo) => dotenvFiles(repo, limit));
+    const configs: string[] = [];
+    const envFiles = this.repos().flatMap((repo) => dotenvFiles(repo, limit, configs));
+    const home = homeValues(this.env.HOME);
     if (limit.cut.size && !this.warnedCut) {
       this.warnedCut = true;
       this.log(`Counterpart guard: the .env search stopped early in ${[...limit.cut].join(", ")}. .env files deeper than ${WALK_DEPTH} directories or past the first ${WALK_DIRS} directories are not checked. See: cpart guard`);
     }
     const files = this.paths("never-share");
     const key = createHash("sha256")
-      .update(JSON.stringify([env.map((e) => [e.rule, e.value]), envFiles.map((f) => [f, statKey(f)]), files.map((f) => [f, statKey(f)])]))
+      .update(JSON.stringify([env.map((e) => [e.rule, e.value]), envFiles.map((f) => [f, statKey(f)]), configs.map((f) => [f, statKey(f)]), home.files.map((f) => [f, statKey(f)]), files.map((f) => [f, statKey(f)])]))
       .digest("base64");
     if (this.last?.key === key) return this.last.secrets;
 
     const exactList: Exact[] = [...env];
     for (const f of envFiles) exactList.push(...dotenvValues(f));
+    for (const f of configs) exactList.push(...configValues(f));
+    exactList.push(...home.exact);
     const shingles: Shingles[] = [];
     const parsed = new Map<string, { key: string; result: ReturnType<typeof neverShare> }>();
     for (const file of files) {

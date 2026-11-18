@@ -173,6 +173,31 @@ test(".env files in registered repositories and in the sender's own repository c
   await alice.say(thread, "port is 8080");
 });
 
+test("a token under a secret name in a config file is known exactly, so reversed or halved it is held", async () => {
+  const repo = join(dir(), "svc");
+  mkdirSync(join(repo, ".git"), { recursive: true });
+  mkdirSync(join(repo, "config"));
+  const token = "pt_qwhzkdmrtplvbnxcaeoiuyjsgfwmrtqz"; // letters only: no pattern knows it
+  writeFileSync(join(repo, "config", "production.yml"), `server:\n  port: 8080\n  timeout_ms: 5000\npayments:\n  endpoint: https://payments.internal.example/v1\n  token: ${token}\n`);
+  writeFileSync(join(repo, "config", "app.json"), `{\n  "name": "orders",\n  "region": "eu-west-1"\n}\n`);
+  const { alice, thread } = await pair({ env: {}, cwd: repo });
+  await assert.rejects(alice.say(thread, `backwards: ${[...token].reverse().join("")}`), /config-value/);
+  await assert.rejects(alice.say(thread, `second half: ${token.slice(18)}`), /config-value/);
+  await alice.say(thread, "the endpoint is https://payments.internal.example/v1, timeout 5000, region eu-west-1");
+});
+
+test("values in the home directory's credential files are known exactly", async () => {
+  const home = dir();
+  mkdirSync(join(home, ".aws"));
+  const secret = "wJalrXUtnFEMIK7MDENGbPxRfiCYzEXAMPLEKEYq";
+  writeFileSync(join(home, ".aws", "credentials"), `[default]\naws_access_key_id = AKIAQ3EXAMPLE7KZW2TP\naws_secret_access_key = ${secret}\nregion = eu-west-1\n`);
+  writeFileSync(join(home, ".netrc"), "machine api.example.com login bob password Zr8vKq2mWx5nLp\n");
+  const { alice, thread } = await pair({ env: { HOME: home }, cwd: null });
+  await assert.rejects(alice.say(thread, `the rest of it: ${secret.slice(20)}`), /config-value/);
+  await assert.rejects(alice.say(thread, "pw Zr8vKq2mWx5nLp"), /config-value/);
+  await alice.say(thread, "we deploy to eu-west-1");
+});
+
 test("text from a never-share file is held however it is spaced", async () => {
   const f = join(dir(), "notes.md");
   writeFileSync(f, "Northwind threatened to cancel unless the refund backlog is cleared by Friday.\nTheir CFO said the renewal is worth 1.4 million and they are talking to a competitor.\n");
@@ -461,4 +486,17 @@ test("a large never-share file does not make a send slow, and the second look in
   t = Date.now();
   alice.guard.recheck(out, ticket);
   assert.ok(Date.now() - t < 200, `recheck took ${Date.now() - t} ms`);
+});
+
+test("a known value spelled out word by word is held", async () => {
+  const home = dir();
+  mkdirSync(join(home, ".aws"));
+  const id = "AKIAQ3EXAMPLE7KZW2TP";
+  writeFileSync(join(home, ".aws", "credentials"), `[default]\naws_access_key_id = ${id}\n`);
+  const { alice, thread } = await pair({ env: { HOME: home }, cwd: null });
+  const NATO: Record<string, string> = { a: "Alfa", k: "Kilo", i: "India", q: "Quebec", e: "Echo", x: "X-ray", m: "Mike", p: "Papa", l: "Lima", z: "Zulu", w: "Whiskey", t: "Tango" };
+  const DIG = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
+  const spell = [...id].map((c) => (/\d/.test(c) ? DIG[Number(c)] : NATO[c.toLowerCase()])).join(" ");
+  await assert.rejects(alice.say(thread, `key id, spelled: ${spell}`), /config-value/);
+  await alice.say(thread, "Echo the request back, then call Victor on line two. Alpha release is on Tuesday, Bravo team owns it.");
 });
