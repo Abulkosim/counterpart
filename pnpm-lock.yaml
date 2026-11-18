@@ -224,6 +224,9 @@ importers:
       '@counterpart/protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@counterpart/worker':
+        specifier: workspace:*
+        version: link:../worker
     devDependencies:
       '@counterpart/relay':
         specifier: workspace:*
@@ -338,9 +341,6 @@ importers:
 
   packages/worker:
     dependencies:
-      '@counterpart/frontdesk':
-        specifier: workspace:*
-        version: link:../frontdesk
       '@counterpart/protocol':
         specifier: workspace:*
         version: link:../protocol

@@ -5,7 +5,6 @@
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
-    "@counterpart/frontdesk": "workspace:*",
     "@counterpart/protocol": "workspace:*"
   }
 }
