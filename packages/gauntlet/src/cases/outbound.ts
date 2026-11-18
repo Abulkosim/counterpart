@@ -261,7 +261,7 @@ export const outbound: Case[] = [
     async run(ctx) {
       const { alice, thread, delivered } = await scene(ctx);
       try {
-        const r = await Promise.allSettled([alice.say(thread, `a: ${TOKEN.slice(0, 8)}`), alice.say(thread, `b: ${TOKEN.slice(8, 16)}`)]);
+        const r = await Promise.allSettled([alice.say(thread, `a: ${TOKEN.slice(0, 7)}`), alice.say(thread, `b: ${TOKEN.slice(7, 14)}`)]);
         assert.deepEqual(r.map((x) => x.status).sort(), ["fulfilled", "rejected"]);
         assert.equal((await delivered()).length, 1);
       } finally {

@@ -15,7 +15,7 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, openSync, closeSync, readFileSync, readSync, readdirSync, realpathSync, statSync, fstatSync, constants } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { constants as zlib, gunzipSync, inflateSync } from "node:zlib";
 import { randomId, utf8, verify } from "@counterpart/protocol";
@@ -102,6 +102,10 @@ const toAllow = (a: NonNullable<RuleData["allowlists"]>[number]): Allow => ({
   and: a.condition === "AND",
 });
 
+// Placeholders and the stock passwords of local development databases, as a
+// URL's password.
+const STOCK_PASSWORD = /^(?:\*+|x+|\.+|password|passwd|pass|pwd|secret|changeme|example|postgres|root|admin|guest|test|dev|user|mysql|redis|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?|<[^>]*>|\[[^\]]*\]|\{\{.*\}\}|%[A-Za-z_]+%)$/i;
+
 // Rules of our own, for what the vendored set leaves to file paths or misses.
 const OWN: { id: string; re: RegExp; category: GuardCategory; group?: number; allow?: RegExp }[] = [
   // A key block with or without its end line or body.
@@ -118,7 +122,7 @@ const OWN: { id: string; re: RegExp; category: GuardCategory; group?: number; al
     re: /\b[a-z][a-z0-9+.-]{1,20}:\/\/[^\s:@/'"`<>]{1,64}:([^\s@/'"`<>]{3,128})@[a-z0-9.[\]-]+/gi,
     category: "generic-secret",
     group: 1,
-    allow: /^(?:\*+|x+|\.+|password|passwd|pass|pwd|secret|changeme|example|postgres|root|admin|guest|test|dev|user|mysql|redis|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?|<[^>]*>|\[[^\]]*\]|\{\{.*\}\}|%[A-Za-z_]+%)$/i,
+    allow: STOCK_PASSWORD,
   },
 ];
 
@@ -165,9 +169,17 @@ function allowed(a: Allow, secret: string, match: string, line: string): boolean
   return checks.length > 0 && checks.every(Boolean);
 }
 
-// What the generic rule finds that is plainly not a value: a variable name
-// followed by "=", an ellipsis, a template, an obvious stand-in.
-const PLACEHOLDER = /\.\.\.|…|^[A-Z][A-Z0-9_]*=|^\$\{?[A-Za-z_]|<[^>]*>|\{\{|your[_-]|[_-]here$|example|placeholder|changeme|dummy|redacted|x{6,}|\*{3,}/i;
+// An obvious stand-in for a value: an ellipsis, a template, "your-key-here",
+// "REPLACE_ME", "changeme", "TODO".
+const STAND_IN_WORDS = /\.\.\.|…|\{\{|your[_-]|[_-]here$|example|placeholder|change[_-]?(?:me|this)|replace[_-]?(?:me|this)|fill[_-]?(?:me|in)|set[_-]?me|insert[_-]|(?:^|[_.\s-])(?:todo|fixme|tbd|xxx+)(?:$|[_.\s-])|dummy|redacted|x{6,}|\*{3,}/i;
+// What the generic rule finds that is plainly not a value: a stand-in, a
+// variable name followed by "=", "$VAR", "<anything>".
+const PLACEHOLDER = new RegExp(`^[A-Z][A-Z0-9_]*=|^\\$\\{?[A-Za-z_]|<[^>]*>|${STAND_IN_WORDS.source}`, "i");
+// A value in a .env file or a URL's password that is a stand-in. Stricter
+// than PLACEHOLDER: a real password can start with "$" ("$ecr3t...", literal
+// in dotenv) or have "<" and ">" in it, and base32 ends in "=". So only
+// "${...}", a whole "$UPPER_NAME", and "<words>" count as stand-ins here.
+const standIn = (v: string): boolean => STAND_IN_WORDS.test(v) || /\$\{[A-Za-z_]|^\$[A-Z_][A-Z0-9_]*$|<[A-Za-z][A-Za-z _-]*>/.test(v);
 // A hex string on a line that talks about digests is a digest.
 const DIGEST_WORDS = /sha-?\d|md5|hash|digest|checksum|commit|etag|integrity|fingerprint/i;
 // A UUID named as an idempotency key or a request id is an id.
@@ -494,7 +506,17 @@ export interface Exact {
   category: GuardCategory;
   rule: string;
   whole?: boolean; // only the whole value counts, not pieces of it (a URL: its host and path are not secret)
+  fixed?: number; // letters and digits at the start that are the same in every key of its kind (sk_live_, AKIA); not counted in pieces
 }
+
+// The start of a key that is the same in every key of its kind: a vendor's
+// prefix (sk_live_, ghp_, xoxb-, AKIA), or one or two short lowercase words
+// ending in _ or - before a run of sixteen or more letters and digits
+// (pt_, svc_, rk_test_). Anyone can know it, so a piece of a key is counted
+// in what comes after it.
+const KNOWN_PREFIX = /^(?:sk-ant-[a-z]{2,8}\d\d-|sk-(?:proj|svcacct|admin)-|github_pat_|glpat-|gldt-|xox[a-z]-|xapp-\d-|pypi-AgEIcHlwaS5vcmc|(?:AKIA|ASIA|ABIA|ACCA|AGPA|AIDA|AIPA|ANPA|ANVA|APKA|AROA|ASCA)(?=[A-Z0-9]{16}$)|AIza|ya29\.|dop_v1_|doo_v1_|shp(?:at|ss|ca|pa)_)/;
+const LEADING = /^(?:[a-z]{1,8}[_-]){1,2}(?=[A-Za-z0-9]{16,}$)/;
+export const fixedPrefix = (value: string): number => compact((KNOWN_PREFIX.exec(value) ?? LEADING.exec(value))?.[0] ?? "").length;
 
 // Any name with KEY or PASS as a word of its own counts (OPENAI_KEY, HMAC_KEY,
 // SMTP_PASS), as well as the names below.
@@ -509,21 +531,49 @@ export function worthMatching(value: string, secretName: boolean): boolean {
   if (/^[0-9]+$/.test(value) && value.length < 12) return false;
   if (/^[A-Za-z]+$/.test(value) && value.length < 12) return false;
   if (/^(?:\/|~\/|\.\.?\/|[A-Za-z]:\\)\S*$/.test(value)) return false; // a path
-  // A URL is a secret when it has a user or password in it, or when a
-  // secret-named variable holds it and a part of it looks like a key.
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return /:\/\/[^/\s@]+@/.test(value) || (secretName && urlKeys(value).length > 0);
+  // A URL is a secret when it has a password in it that counts, a user name
+  // that looks like a key, or when a secret-named variable holds it and a part
+  // of it looks like a key.
+  if (isUrl(value)) return urlPassword(value) !== null || tokenLike(urlLogin(value)?.user ?? "") || (secretName && urlKeys(value).length > 0);
   if (secretName) return true;
   return tokenLike(value);
 }
 
 export const tokenLike = (v: string): boolean => v.length >= 16 && v.length <= 512 && !/\s/.test(v) && /[A-Za-z]/.test(v) && /[0-9]/.test(v) && entropy(v) >= 3.0;
 
+const isUrl = (v: string): boolean => /^[a-z][a-z0-9+.-]*:\/\//i.test(v);
+
+// The user, password and host of a URL with a login in it.
+function urlLogin(value: string): { user: string; password: string | null; host: string } | null {
+  // The login runs to the "@": a password may hold "#" or "?" written raw.
+  const m = /^[a-z][a-z0-9+.-]*:\/\/([^/\s@]*)@([^/?#\s]*)/i.exec(value);
+  if (!m) return null;
+  const at = m[1]!.indexOf(":");
+  const host = m[2]!.toLowerCase().replace(/:\d*$/, "").replace(/^\[(.*)\]$/, "$1");
+  return at < 0 ? { user: m[1]!, password: null, host } : { user: m[1]!.slice(0, at), password: m[1]!.slice(at + 1), host };
+}
+
+// A host on this machine or in a local compose network: localhost, a
+// loopback address, or a name with no dot in it ("db", "postgres").
+const localHost = (h: string): boolean => /^(?:localhost|[a-z0-9.-]*\.localhost|127(?:\.\d{1,3}){3}|::1|0\.0\.0\.0|host\.docker\.internal|[a-z0-9_-]+)$/.test(h);
+
+// A URL's password, when it counts as a secret: not a placeholder, and not a
+// local default (the user name again, or a stock password, on a local host).
+function urlPassword(value: string): string | null {
+  const l = urlLogin(value);
+  if (!l?.password) return null;
+  const pw = l.password;
+  if (standIn(pw)) return null;
+  if (localHost(l.host) && (pw === l.user || STOCK_PASSWORD.test(pw))) return null;
+  return pw;
+}
+
 // The parts of a URL that look like keys: a password, a path segment, a query value.
 function urlKeys(value: string): string[] {
   const out: string[] = [];
-  const pw = /:\/\/[^/\s:@]*:([^/\s@]+)@/.exec(value)?.[1];
+  const pw = urlPassword(value);
   if (pw && pw.length >= 8) out.push(pw);
-  const user = /:\/\/([^/\s:@]+)@/.exec(value)?.[1];
+  const user = urlLogin(value)?.user;
   if (user && tokenLike(user)) out.push(user);
   const rest = value.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i, "");
   for (const part of rest.split(/[/?&=#]+/)) {
@@ -542,9 +592,12 @@ function exact(value: string, category: GuardCategory, rule: string): Exact[] {
   const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(value);
   // A whole URL counts only whole: its host and path are not secret. The
   // parts that look like keys count on their own, pieces included.
-  const out: Exact[] = [{ value, compact: compact(value), category, rule, ...(url ? { whole: true } : {}) }];
-  if (url) for (const k of urlKeys(value)) out.push({ value: k, compact: compact(k), category, rule });
-  return out;
+  const one = (v: string): Exact => {
+    const fixed = fixedPrefix(v);
+    return { value: v, compact: compact(v), category, rule, ...(fixed ? { fixed } : {}) };
+  };
+  if (!url) return [one(value)];
+  return [{ value, compact: compact(value), category, rule, whole: true }, ...urlKeys(value).map(one)];
 }
 
 export function envValues(env: Record<string, string | undefined>): Exact[] {
@@ -637,13 +690,22 @@ export function dotenvFiles(root: string, limit: WalkLimit = walkLimit(), config
   return out;
 }
 
+// A template for a .env file: .env.example, .env.sample, .env.template,
+// .env.dist, .env.defaults, app.example.env. It is committed and full of
+// stand-ins, so its values must look like keys to count.
+export const TEMPLATE_ENV = /(?:^|\.)(?:example|sample|template|tmpl|tpl|dist|defaults?)(?:\.|$)/i;
+
 export function dotenvValues(file: string): Exact[] {
   const text = readSmall(file);
   if (text === null) return [];
+  const template = TEMPLATE_ENV.test(basename(file));
   const out: Exact[] = [];
   for (const { name, value } of parseDotenv(text)) {
+    if (!isUrl(value) && standIn(value)) continue;
     const secretName = SECRET_NAME.test(name) && !NOT_SECRET_NAME.test(name);
-    if (worthMatching(value, secretName)) out.push(...exact(value, "dotenv-value", `dotenv:${file}:${name}`));
+    // In a template, the stricter test config values get; a URL only for a key-like password or user.
+    const counts = !template ? worthMatching(value, secretName) : isUrl(value) ? configSecret(urlPassword(value) ?? "") || tokenLike(urlLogin(value)?.user ?? "") : configSecret(value);
+    if (counts) out.push(...exact(value, "dotenv-value", `dotenv:${file}:${name}`));
   }
   return out;
 }
@@ -794,6 +856,8 @@ export const pieces = (s: string): string =>
 // URL) a message carries, in runs of GRAM with a letter and a digit, in any
 // reading of the message. COVER characters of one value is a hold, whether
 // they come in one message or spread over the recent ones to that contact.
+// Only characters after the value's fixed prefix count (see fixedPrefix):
+// "sk_live_" and four characters is four, not twelve.
 const GRAM = 6;
 // A run with no digit (a letters-only token, or the half of one that has no
 // digit) is counted in longer grams with at least LONG_DISTINCT different
@@ -801,7 +865,7 @@ const GRAM = 6;
 const LONG = 12;
 const LONG_DISTINCT = 9;
 const HISTORY = 64_000; // characters of earlier messages looked at
-const COVER = 10;
+const COVER = 8;
 type Grams = Map<string, { e: Exact; at: number }[]>;
 const GRAM_SIZES = [GRAM, LONG];
 const gramOk = (g: string): boolean => (g.length === GRAM ? /[a-z]/.test(g) && /[0-9]/.test(g) : /[a-z]/.test(g) && new Set(g).size >= LONG_DISTINCT);
@@ -813,6 +877,7 @@ function grams(exact: Exact[]): Grams {
     if (e.compact.length < 16 || e.whole || entropy(e.compact) < 3) continue;
     for (const n of /\s/.test(e.value) ? [GRAM] : GRAM_SIZES)
     for (let i = 0; i + n <= e.compact.length; i++) {
+      if (i + n <= (e.fixed ?? 0)) continue; // all prefix
       const g = e.compact.slice(i, i + n);
       if (!gramOk(g)) continue;
       const list = out.get(g) ?? [];
@@ -838,7 +903,7 @@ function cover(streams: string[], index: Grams, into = new Map<Exact, Set<number
       seen.add(g);
       for (const { e, at } of index.get(g) ?? []) {
         const set = into.get(e) ?? new Set<number>();
-        for (let k = at; k < at + n; k++) set.add(k);
+        for (let k = Math.max(at, e.fixed ?? 0); k < at + n; k++) set.add(k);
         into.set(e, set);
       }
     }
@@ -937,8 +1002,8 @@ function across(fields: Field[], now: string[], p: Prepared, earlier: Field[][],
   const first = fields[0];
   const where = { field: first?.field ?? "body", start: 0, end: first?.text.length ?? 0 };
   // Short pieces (under six characters) sent one per message: join the
-  // key-like runs of the recent messages and this one, and look for ten
-  // characters of a value that reach into this message.
+  // key-like runs of the recent messages and this one, and look for COVER
+  // characters of a value, after its prefix, that reach into this message.
   if (earlier.length) {
     const tail = (m: Field[]): string => m.map((f) => pieces(f.text)).join("");
     const before = earlier.map(tail).join("").slice(-HISTORY);
@@ -952,7 +1017,7 @@ function across(fields: Field[], now: string[], p: Prepared, earlier: Field[][],
       let j = 0;
       while (j + GRAM <= COVER && !(/[a-z]/.test(w.slice(j, j + GRAM)) && /[0-9]/.test(w.slice(j, j + GRAM)))) j++;
       for (const { e } of p.grams.get(w.slice(j, j + GRAM)) ?? []) {
-        if (done.has(e) || !e.compact.includes(w)) continue;
+        if (done.has(e) || e.compact.indexOf(w, e.fixed ?? 0) < 0) continue;
         done.add(e);
         add({ category: e.category, rule: e.rule, how: "across messages", ...where });
       }
