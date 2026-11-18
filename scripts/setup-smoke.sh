@@ -26,7 +26,7 @@ EOF
 done
 export PATH="$WORK/bin:$PATH"
 cpart() { local who=$1; shift; CPART_HOME="$WORK/$who" node packages/cli/src/main.ts "$@"; }
-stop_all() { cpart alice down >/dev/null 2>&1 || true; cpart bob down >/dev/null 2>&1 || true; }
+stop_all() { for w in alice bob dave erin; do cpart "$w" down >/dev/null 2>&1 || true; done; }
 trap 'stop_all; cleanup' EXIT
 
 step "a relay"
@@ -54,6 +54,46 @@ step "an address with anything after the host is refused"
 if cpart carol setup --relay "$RELAY/x#y" >"$WORK/frag.out" 2>&1; then fail "setup took an address with a fragment"; fi
 grep -q "nothing after it but a path" "$WORK/frag.out"
 [ ! -e "$WORK/carol/keys.json" ] || fail "an identity was created for a bad address"
+
+step "a relay that does not know itself by the address: setup and join say so and keep nothing"
+PORT2=$(node -e 'const s=require("net").createServer().listen(0,"127.0.0.1",()=>{console.log(s.address().port);s.close()})')
+WRONG=ws://127.0.0.1:$PORT2
+RELAY2_PID=
+# relay2 <the one address it answers to>: (re)starts a second relay on PORT2, same database.
+relay2() {
+  local before
+  if [ -n "$RELAY2_PID" ]; then kill "$RELAY2_PID"; wait "$RELAY2_PID" 2>/dev/null || true; fi
+  before=$(count "relay listening" "$WORK/relay2.log")
+  node packages/cli/src/main.ts relay --port "$PORT2" --db "$WORK/relay2.db" --url "$1" >>"$WORK/relay2.log" 2>&1 &
+  RELAY2_PID=$!
+  pids+=("$RELAY2_PID")
+  wait_for "the second relay" sh -c "[ \$(grep -c 'relay listening' '$WORK/relay2.log') -gt ${before:-0} ]"
+}
+relay2 "ws://relay.invalid:$PORT2"
+if cpart dave setup --relay "$WRONG" >"$WORK/wrong.out" 2>&1; then fail "setup finished although the relay refused the login"; fi
+cat "$WORK/wrong.out"
+grep -q "refused to log you in (wrong_relay_url)" "$WORK/wrong.out"
+grep -q -- "--url $WRONG" "$WORK/wrong.out"
+grep -q "Nothing was kept" "$WORK/wrong.out"
+[ ! -e "$WORK/dave" ] || fail "a refused identity was left behind: $(ls "$WORK/dave")"
+if cpart erin join "7-cider-otter@$WRONG" alice --yes >"$WORK/wrong-join.out" 2>&1; then fail "join finished although the relay refused the login"; fi
+grep -q "refused to log you in (wrong_relay_url)" "$WORK/wrong-join.out"
+grep -q "Ask whoever runs it" "$WORK/wrong-join.out"
+[ ! -e "$WORK/erin" ] || fail "join left a refused identity behind"
+
+step "once the relay knows the address, setup works; if it forgets, setup says so and keeps the identity"
+relay2 "$WRONG"
+cpart dave setup --relay "$WRONG" | tee "$WORK/dave.setup"
+grep -q "^ok  daemon started, connected" "$WORK/dave.setup"
+relay2 "ws://relay.invalid:$PORT2"
+if cpart dave setup >"$WORK/dave.again" 2>&1; then fail "setup finished although the relay refused the login"; fi
+cat "$WORK/dave.again"
+grep -q "refused to log you in (wrong_relay_url)" "$WORK/dave.again"
+grep -q "Your identity is unchanged" "$WORK/dave.again"
+[ -e "$WORK/dave/keys.json" ] || fail "an identity that had worked was removed"
+relay2 "$WRONG"
+wait_for "dave's daemon to get in by itself" sh -c "CPART_HOME='$WORK/dave' node packages/cli/src/main.ts status | grep -q '^Daemon    running, connected'"
+cpart dave down >/dev/null
 
 step "three daemons started at once: one wins"
 cpart alice down >/dev/null
