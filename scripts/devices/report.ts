@@ -41,7 +41,8 @@ export interface ScenarioResult {
   restartedByHand: boolean;
   lost: { laptopToDevcontainer: number; devcontainerToLaptop: number; held: number; notDelivered: string[] };
   faults: { kind: string; device: string | null; atS: number }[];
-  checks: { name: string; pass: boolean; detail: string }[];
+  // info: a measurement, not a requirement. It never fails the scenario.
+  checks: { name: string; pass: boolean; detail: string; info?: boolean }[];
   sessions: SessionRecord[];
   waits: { label: string; device: string; arrived: boolean; afterS: number | null; recovered: boolean }[];
   reconnects: Record<string, { lost: number; connected: number; errors: string[] }>;
@@ -52,6 +53,11 @@ export interface ScenarioResult {
 export interface SetupResult {
   ok: boolean;
   durationS: number;
+  pairing: "short code" | "long invite";
+  // The line the joiner typed: the short code with its relay, or the start of the long invite.
+  invite: string;
+  // cpart relay list on each side after pairing.
+  relays: Record<string, string>;
   interventions: Intervention[];
   laptop: string;
   devcontainer: string;
@@ -76,7 +82,7 @@ export interface RunResult {
 // ok: done with no help. A restart by hand that got it through is told apart from a failure.
 export const verdict = (s: ScenarioResult): string =>
   s.ok ? "ok"
-  : s.error || s.checks.some((c) => !c.pass) || s.waits.some((w) => !w.arrived) || s.lost.laptopToDevcontainer + s.lost.devcontainerToLaptop ? "**failed**"
+  : s.error || s.checks.some((c) => !c.pass && !c.info) || s.waits.some((w) => !w.arrived) || s.lost.laptopToDevcontainer + s.lost.devcontainerToLaptop ? "**failed**"
   : "**needed a restart**";
 
 const cell = (s: string): string => s.replace(/\|/g, "\\|").replace(/\n/g, " ");
@@ -92,9 +98,10 @@ export function writeReport(dir: string, r: RunResult): void {
   if (r.fatal) lines.push(`**The run stopped early:** ${cell(r.fatal)}`, "");
   if (r.setup) {
     lines.push(
-      `Setup: \`cpart setup\` on the laptop, \`cpart join\` on the devcontainer, paired in ${r.setup.durationS}s. Safety codes ${r.setup.safetyCodesMatch ? "match" : "DIFFER"}. Agents: laptop ${r.setup.agentsRegistered.laptop ?? "?"}; devcontainer ${r.setup.agentsRegistered.devcontainer ?? "?"}.`,
+      `Setup: \`cpart setup\` and \`cpart invite devcontainer${r.setup.pairing === "long invite" ? " --long" : ""}\` on the laptop, \`cpart join ${cell(r.setup.invite)} laptop\` on the devcontainer, paired by ${r.setup.pairing} in ${r.setup.durationS}s.${r.setup.pairing === "long invite" ? ` Safety codes ${r.setup.safetyCodesMatch ? "match" : "DIFFER"}.` : ""} Agents: laptop ${r.setup.agentsRegistered.laptop ?? "?"}; devcontainer ${r.setup.agentsRegistered.devcontainer ?? "?"}.`,
       ...r.setup.interventions.map((i) => `- Human step during setup: ${cell(i.what)}. ${cell(i.why)}`),
       "",
+      ...Object.entries(r.setup.relays ?? {}).flatMap(([d, l]) => [`\`cpart relay list\` on the ${d} after pairing:`, "", "```", l, "```", ""]),
       ...(r.setup.ok ? [] : ["What setup printed on the laptop:", "", "```", r.setup.laptop, "```", "", "On the devcontainer:", "", "```", r.setup.devcontainer, "```", ""]),
     );
   }
@@ -110,7 +117,7 @@ export function writeReport(dir: string, r: RunResult): void {
     lines.push(`## ${s.name}: ${s.title}`, "", `\`${s.file}\`. ${s.ok ? "Ended as expected." : `**Did not end as expected.**${s.error ? ` ${cell(s.error)}` : ""}`}`, "");
     if (s.faults.length) lines.push(`Faults: ${s.faults.map((f) => `${f.kind}${f.device ? ` ${f.device}` : ""} at ${f.atS}s`).join("; ")}.`, "");
     for (const w of s.waits) lines.push(`- Waited for ${cell(w.label)}: ${w.arrived ? `arrived after ${w.afterS}s` : "never arrived"}${w.recovered ? ", after the rig restarted the daemons" : ""}.`);
-    for (const c of s.checks) lines.push(`- Check ${c.name}: ${c.pass ? "pass" : "**fail**"}. ${cell(c.detail.slice(0, 300))}`);
+    for (const c of s.checks) lines.push(`- ${c.info ? "Measured" : "Check"} ${c.name}: ${c.info ? (c.pass ? "yes" : "no") : c.pass ? "pass" : "**fail**"}. ${cell(c.detail.slice(0, 300))}`);
     for (const i of s.interventions) lines.push(`- ${i.by === "human" ? "Human step" : "**Restart by hand**"} at ${i.atS}s: ${cell(i.what)}${i.why ? `. Why: ${cell(i.why)}` : ""}`);
     for (const [d, c] of Object.entries(s.reconnects)) if (c.lost || c.errors.length) lines.push(`- ${d} daemon log: ${c.lost} lost connection(s), ${c.connected} (re)connect(s)${c.errors.length ? `; ${c.errors.map(cell).join("; ")}` : ""}.`);
     if (s.lost.notDelivered.length) lines.push(`- Not delivered: ${s.lost.notDelivered.join(", ")}.`);

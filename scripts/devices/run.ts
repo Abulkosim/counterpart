@@ -18,6 +18,7 @@ const { values: flags, positionals } = parseArgs({
   options: {
     work: { type: "string" }, out: { type: "string" }, image: { type: "string" }, port: { type: "string" }, mode: { type: "string" },
     "no-sessions": { type: "boolean" }, model: { type: "string" }, id: { type: "string" }, laptop: { type: "string" }, devcontainer: { type: "string" }, "login-until": { type: "string" },
+    prefix: { type: "string" }, long: { type: "boolean" },
   },
 });
 const WORK = resolve(flags.work ?? "");
@@ -33,6 +34,12 @@ const SESSION_DENY = ["/home/node/.claude-rig", "/home/node/.cpart", "/home/node
 // The devices' copy of the login has no refresh token, so it stops working
 // when the access token expires. No session starts that close to it.
 const LOGIN_UNTIL = Number(flags["login-until"] ?? 0);
+// Fake values a scenario can plant in a device's repository, new for each run.
+// SECRET stands for a live API key. SANDBOX is a value in the same .env that
+// its owner is happy to share, so the guard holds it and the owner releases it.
+const b62 = (n: number): string => randomBytes(n * 2).toString("base64").replace(/[^A-Za-z0-9]/g, "").slice(0, n);
+const PLANTED = { secret: `sr_live_${b62(32)}`, sandbox: `sbx-${b62(6)}4${b62(7)}` };
+const REPO = "/home/node/project";
 // Without this a signal ends Node before the exit hook that stops a relay on this machine.
 for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(sig, () => process.exit(130));
 mkdirSync(join(WORK, "sessions"), { recursive: true });
@@ -91,10 +98,12 @@ const rig = new Rig({
   image: flags.image ?? "two-devices:latest",
   mode: (flags.mode ?? "auto") as Mode | "auto",
   port: Number(flags.port ?? 0),
+  prefix: flags.prefix ?? "two-devices",
   creds: { ...(flags.laptop ? { laptop: flags.laptop } : {}), ...(flags.devcontainer ? { devcontainer: flags.devcontainer } : {}) },
   log: say,
 });
 
+const dev = (st: Step): Device => st.device as Device;
 const threads = async (d: Device): Promise<Thread[] | undefined> => rig.cpartJson<Thread[]>(d, ["threads"]);
 const log = async (d: Device, thread: string): Promise<Ev[] | undefined> => rig.cpartJson<Ev[]>(d, ["log", "--", thread]);
 
@@ -107,9 +116,13 @@ class Running {
   known = new Map<Device, Set<string>>();
   vars: Record<string, string> = {};
   sessions = new Map<string, Promise<void>>();
+  // What each session passed to the Counterpart tools, in full. Kept out of
+  // results.json: in the guard scenario it may hold the planted secret.
+  sent = new Map<string, string[]>();
 
   constructor(s: Scenario) {
     this.s = s;
+    this.vars = { relay: rig.relay?.url ?? "", spare: rig.relay?.spare ?? "", ...PLANTED, secret_tail: PLANTED.secret.slice(-12) };
     this.r = {
       name: s.name, title: s.title, file: s.file ?? "", ok: true, error: null, startedAt: new Date(this.t0).toISOString(), durationS: 0,
       timeToFirstAnswerS: null, timeToAgreementS: null, interventions: [], restartedByHand: false, lost: { laptopToDevcontainer: 0, devcontainerToLaptop: 0, held: 0, notDelivered: [] },
@@ -159,9 +172,18 @@ class Running {
           await rig.cpart(d, ["desk", "off", contact]);
           return;
         }
-        for (const f of (st.files as string[]) ?? []) {
-          const r = await rig.cpart(d, ["bundle", "add", contact, `/home/node/project/${f}`]);
-          if (r.code) throw new Error(`bundle add ${f}: ${r.err.trim()}`);
+        // From the repository (cpart share), unless the scenario asks for copies.
+        // A person types "share" and the passphrase; --yes with
+        // CPART_PASSPHRASE is the scripted form of the same.
+        const files = (st.files as string[]) ?? [];
+        if (st.via === "bundle") {
+          for (const f of files) {
+            const r = await rig.cpart(d, ["bundle", "add", contact, `${REPO}/${f}`]);
+            if (r.code) throw new Error(`bundle add ${f}: ${r.err.trim()}`);
+          }
+        } else if (files.length) {
+          const r = await rig.cpart(d, ["share", contact, "--repo", REPO, ...files, "--yes"], { CPART_PASSPHRASE: PASSPHRASE[d] });
+          if (r.code) throw new Error(`share: ${(r.err || r.out).trim()}`);
         }
         const r = await rig.cpart(d, ["desk", "on", contact, "--as", (st.as as string) ?? `the ${d} owner`, "--slots", String(st.slots ?? 6), "--daily", "100"]);
         if (r.code) throw new Error(`desk on: ${r.err.trim()}`);
@@ -196,11 +218,27 @@ class Running {
         return;
       case "cpart": {
         const args = (st.args as string[]).map((a) => this.fill(a));
-        const r = await rig.cpart(d, args, st.passphrase ? { CPART_PASSPHRASE: PASSPHRASE[d] } : {}, Number(st.timeout ?? 60) * 1000);
+        const started = Date.now();
+        const r = await rig.cpart(d, args, st.passphrase ? { CPART_PASSPHRASE: PASSPHRASE[d] } : {}, Number(st.timeout ?? 60) * 1000, st.cwd === "repo" ? REPO : undefined);
+        const took = Math.round((Date.now() - started) / 100) / 10;
         if (st.human) this.r.interventions.push({ by: "human", what: `${d}: cpart ${args.join(" ")}`, why: (st.why as string) ?? "", atS: this.at() });
+        // What it printed, for the commands a scenario wants to show.
+        if (st.record) this.r.notes.push(`${d}: cpart ${args.join(" ")} exited ${r.code} after ${took}s: ${(r.out + r.err).trim().replace(/\s+/g, " ").slice(0, 600)}`);
         if (r.code !== 0 && st.may_fail !== true) throw new Error(`${d}: cpart ${args.join(" ")} exited ${r.code}: ${r.err.trim() || r.out.trim()}`);
         return;
       }
+      case "write": {
+        // A file in the device's repository, not committed.
+        const path = this.fill(st.path as string);
+        if (!/^[\w./-]+$/.test(path) || path.includes("..")) throw new Error(`bad path ${path}`);
+        const r = await rig.exec(d, ["sh", "-c", 'mkdir -p "$(dirname "$1")" && cat > "$1"', "sh", `${REPO}/${path}`], { input: this.fill(st.content as string) });
+        if (r.code) throw new Error(`write ${path}: ${r.err.trim()}`);
+        return;
+      }
+      case "release":
+        return this.release(d, st);
+      case "wait_relays":
+        return this.waitRelays(d, st);
       case "approve":
         return this.approve(d, st);
       case "expect":
@@ -225,6 +263,8 @@ class Running {
     );
     writeFileSync(file, r.out);
     const calls: string[] = [];
+    const sent: string[] = [];
+    this.sent.set(id, sent);
     const toolErrors: string[] = [];
     let text = "";
     let mcp = "not reported";
@@ -245,6 +285,7 @@ class Running {
       const content = Array.isArray(m.message?.content) ? (m.message!.content as { type: string; name?: string; input?: unknown; text?: string; is_error?: boolean; content?: unknown }[]) : [];
       for (const c of content) {
         if (m.type === "assistant" && c.type === "tool_use") calls.push(`${(c.name ?? "").replace("mcp__counterpart__", "")} ${JSON.stringify(c.input).slice(0, 160)}`);
+        if (m.type === "assistant" && c.type === "tool_use" && c.name?.startsWith("mcp__counterpart__")) sent.push(JSON.stringify(c.input));
         if (m.type === "assistant" && c.type === "text" && c.text?.trim()) text = c.text.trim();
         if (m.type === "user" && c.type === "tool_result" && c.is_error) toolErrors.push((typeof c.content === "string" ? c.content : JSON.stringify(c.content)).slice(0, 300));
       }
@@ -300,19 +341,22 @@ class Running {
   async fault(st: Step): Promise<void> {
     const d = st.device as Device;
     const kind = st.kind as string;
-    this.r.faults.push({ kind, device: d ?? null, atS: this.at() });
+    // "relay": "spare" acts on the second relay. "hard": true kills it.
+    const which = st.relay === "spare" ? "relay2" : "relay";
+    if (which === "relay2" && !rig.relay?.spare) throw new Error("this scenario needs the spare relay, which only container mode has");
+    this.r.faults.push({ kind: `${kind}${which === "relay2" ? " (spare)" : ""}${st.hard ? " (kill)" : ""}`, device: d ?? null, atS: this.at() });
     if (kind === "pause") return rig.pause(d);
     if (kind === "unpause") return rig.unpause(d);
     if (kind === "disconnect") return rig.disconnect(d);
     if (kind === "connect") return rig.connect(d, st.same_address !== true);
-    if (kind === "relay_stop") return rig.stopRelay();
+    if (kind === "relay_stop") return rig.stopRelay(which, st.hard === true);
     if (kind === "relay_start" || kind === "relay_restart") {
       if (kind === "relay_restart") {
-        await rig.stopRelay();
+        await rig.stopRelay(which, st.hard === true);
         await sleep(Number(st.down_seconds ?? 3) * 1000);
       }
-      const url = await rig.startRelayAgain();
-      if (url !== rig.relay!.url) this.r.notes.push(`The relay came back at ${url}. Both identities still point at ${rig.relay!.url}, and an identity belongs to one relay.`);
+      const url = await rig.startRelayAgain(which);
+      if (which === "relay" && url !== rig.relay!.url) this.r.notes.push(`The relay came back at ${url}. Both identities still point at ${rig.relay!.url}.`);
       return;
     }
     if (kind === "daemon_down") {
@@ -340,6 +384,47 @@ class Running {
     say(`  ${d} approved ${pick.proposalId.slice(0, 12)} "${pick.contract.title}"`);
   }
 
+  // The owner releases a held message: cpart release on a terminal, the
+  // passphrase typed at its prompt. "text" picks the newest held message of
+  // this scenario whose preview matches; none held and "required": false
+  // records that and goes on.
+  async release(d: Device, st: Step): Promise<void> {
+    const pat = st.text ? new RegExp(this.fill(st.text as string), "i") : undefined;
+    const list = ((await rig.cpartJson<{ id: string; at: number; state: string; preview: string | null }[]>(d, ["held"])) ?? [])
+      .filter((h) => h.at >= this.t0 && h.state === "held" && (!pat || pat.test(h.preview ?? "")))
+      .sort((a, b) => b.at - a.at);
+    const h = list[0];
+    if (!h) {
+      if (st.required === false) {
+        this.r.notes.push(`${d}: nothing held${pat ? ` matching ${pat}` : ""} to release`);
+        return;
+      }
+      throw new Error(`${d}: nothing held to release`);
+    }
+    const r = await rig.onTerminal(d, ["release", h.id], PASSPHRASE[d]);
+    this.r.interventions.push({ by: "human", what: `${d}: cpart release ${h.id.slice(0, 8)}, passphrase typed at the terminal`, why: (st.why as string) ?? "the owner read the held message and chose to send it", atS: this.at() });
+    const sentLine = /Sent \S+ as event \S+/.exec(r.out)?.[0];
+    this.r.notes.push(`${d}: cpart release on a pseudo-terminal exited ${r.code}: ${sentLine ?? r.out.trim().split("\n").at(-1)?.slice(0, 200)}`);
+    if (r.code !== 0 || !sentLine) throw new Error(`${d}: cpart release failed: ${r.out.trim().slice(-300)}`);
+  }
+
+  // Waits until the device's view of its contact's relays includes a URL
+  // (their_relays), or until the contact has confirmed this device's list.
+  async waitRelays(d: Device, st: Step): Promise<void> {
+    const contact = (st.contact as string) ?? other(d);
+    const want = st.their_relays ? this.fill(st.their_relays as string) : undefined;
+    const started = Date.now();
+    const label = (st.label as string) ?? `${d} sees ${contact}${want ? ` on ${want}` : ""}${st.confirmed ? ", confirmed" : ""}`;
+    const ok = await rig.until(Number(st.timeout ?? 120) * 1000, async () => {
+      const v = await rig.cpartJson<{ contacts: { name: string; relays: string[]; confirmed: boolean }[] }>(d, ["relay", "list"]);
+      const c = v?.contacts.find((x) => x.name === contact);
+      return !!c && (!want || c.relays.includes(want)) && (!st.confirmed || c.confirmed);
+    }, 2000);
+    this.r.waits.push({ label, device: d, arrived: ok, afterS: ok ? Math.round((Date.now() - started) / 100) / 10 : null, recovered: false });
+    say(`  ${label}: ${ok ? `after ${Math.round((Date.now() - started) / 1000)}s` : "timed out"}`);
+    if (!ok) throw new Error(`${label}: timed out`);
+  }
+
   // Checks are recorded, not fatal: a wrong answer is a result, not a crash.
   async expect(st: Step): Promise<void> {
     const name = (st.check as string) ?? "check";
@@ -348,8 +433,9 @@ class Running {
     if (st.message_matches) {
       // Something the other side sent into this device's scenario threads.
       const d = st.device as Device;
-      const texts = (await this.scenarioEvents(d)).filter((e) => !e.mine && e.type === "talk.posted").map((e) => String(e.body.text ?? ""));
-      const pats = (st.message_matches as string[]).map((p) => new RegExp(p, "i"));
+      // any_event: every event from the other side, whole (goals, contracts), not only messages.
+      const texts = (await this.scenarioEvents(d)).filter((e) => !e.mine && (st.any_event === true || e.type === "talk.posted")).map((e) => (st.any_event === true ? JSON.stringify(e.body) : String(e.body.text ?? "")));
+      const pats = (st.message_matches as string[]).map((p) => new RegExp(this.fill(p), "i"));
       pass = texts.some((t) => pats.every((p) => p.test(t)));
       detail = texts.length ? `${texts.length} message(s); first: ${texts[0]!.slice(0, 300)}` : "no messages";
     } else if (st.session_matches) {
@@ -357,6 +443,46 @@ class Running {
       const pats = (st.session_matches as string[]).map((p) => new RegExp(p, "i"));
       pass = !!s && pats.every((p) => p.test(s.finalText));
       detail = s ? s.finalText.slice(0, 400) : "no such session";
+    } else if (st.sent_matches) {
+      // Something the session passed to a Counterpart tool: what it tried to send.
+      const calls = this.sent.get(st.session as string) ?? [];
+      const pats = (st.sent_matches as string[]).map((p) => new RegExp(this.fill(p), "i"));
+      const hits = calls.filter((c) => pats.some((p) => p.test(c)));
+      pass = hits.length > 0;
+      detail = `${hits.length} of ${calls.length} Counterpart tool call(s) carried it`;
+    } else if (st.held) {
+      // What the guard holds on the device from this scenario.
+      const list = ((await rig.cpartJson<{ id: string; at: number; type: string; reasons: string[]; state: string }[]>(dev(st), ["held", "--all"])) ?? []).filter((h) => h.at >= this.t0);
+      const min = Number(st.min ?? 1);
+      pass = list.length >= min && (st.max === undefined || list.length <= Number(st.max));
+      detail = `${list.length} held since the scenario began${list.length ? `: ${list.map((h) => `${h.id.slice(0, 8)} ${h.type} ${h.state} (${h.reasons.join(", ")})`).join("; ")}` : ""}`;
+    } else if (st.relay_db_matches) {
+      // The relays' database files, read from this machine.
+      const pats = (st.relay_db_matches as string[]).map((p) => this.fill(p));
+      const found: string[] = [];
+      let files = 0;
+      for (const which of ["relay", "relay2"] as const) {
+        const dir = rig.relayData(which);
+        let names: string[] = [];
+        try {
+          names = readdirSync(dir);
+        } catch {
+          continue;
+        }
+        for (const f of names) {
+          const buf = readFileSync(join(dir, f));
+          files++;
+          for (const p of pats) for (const form of [p, Buffer.from(p).toString("base64"), Buffer.from(p).toString("hex")]) if (buf.includes(form)) found.push(`${which}/${f}`);
+        }
+      }
+      pass = found.length > 0;
+      detail = `${files} relay database file(s) searched, as written, in base64 and in hex; ${found.length ? `found in ${[...new Set(found)].join(", ")}` : "not found"}`;
+    } else if (st.cpart_matches) {
+      const args = (st.args as string[]).map((a) => this.fill(a));
+      const r = await rig.cpart(dev(st), args);
+      const pats = (st.cpart_matches as string[]).map((p) => new RegExp(this.fill(p), "i"));
+      pass = pats.every((p) => p.test(r.out + r.err));
+      detail = `cpart ${args.join(" ")}: ${(r.out + r.err).trim().replace(/\s+/g, " ").slice(0, 400)}`;
     } else if (st.agreed) {
       const thread = this.fill((st.thread as string) ?? "{{thread}}");
       const both = await Promise.all(DEVICES.map(async (d) => ((await rig.cpartJson<Contract[]>(d, ["contracts", "--", thread])) ?? []).some((c) => c.status === "agreed")));
@@ -365,7 +491,7 @@ class Running {
     }
     // For what must not happen, such as a secret reaching the other side.
     if (st.negate === true) pass = !pass;
-    this.r.checks.push({ name, pass, detail });
+    this.r.checks.push({ name, pass, detail, ...(st.info === true ? { info: true } : {}) });
     say(`  check ${name}: ${pass ? "pass" : "FAIL"}`);
   }
 
@@ -484,7 +610,7 @@ async function runScenario(s: Scenario): Promise<ScenarioResult> {
     run.r.reconnects[d] = { lost: l.filter((x) => x.startsWith("relay connection lost")).length, connected: l.filter((x) => x.startsWith("connected")).length, errors: l.filter((x) => /^error|front desk: /.test(x)).slice(0, 8) };
   }
   await cleanUp(run);
-  if (run.r.checks.some((c) => !c.pass)) run.r.ok = false;
+  if (run.r.checks.some((c) => !c.pass && !c.info)) run.r.ok = false;
   if (run.r.lost.laptopToDevcontainer || run.r.lost.devcontainerToLaptop) run.r.ok = false;
   // Getting there only after a restart by hand, or not at all, is not the smooth path.
   if (run.r.restartedByHand || run.r.waits.some((w) => !w.arrived)) run.r.ok = false;
@@ -501,16 +627,34 @@ async function setup(res: SetupResult): Promise<SetupResult> {
   const s1 = await rig.cpart("laptop", ["setup", "--relay", url], { CPART_PASSPHRASE: PASSPHRASE.laptop }, 120_000);
   res.laptop = (s1.out + s1.err).trim();
   if (s1.code !== 0) throw new Error(`laptop: cpart setup failed: ${res.laptop}`);
-  const inv = await rig.cpart("laptop", ["invite", "devcontainer", "--long"]);
-  const invite = /cpart-invite:[A-Za-z0-9_-]+/.exec(inv.out)?.[0];
-  if (!invite) throw new Error(`laptop: no invite in: ${inv.out}${inv.err}`);
+  // Short code: cpart invite prints the line to send and waits for the other
+  // side, so it runs in the background while the devcontainer joins.
+  // --long: the old invite string, printed at once.
+  let invite: string;
+  let inviter: { out: () => string; done: Promise<number> } | undefined;
+  if (flags.long) {
+    const inv = await rig.cpart("laptop", ["invite", "devcontainer", "--long"]);
+    invite = /cpart-invite:[A-Za-z0-9_-]+/.exec(inv.out)?.[0] ?? "";
+    if (!invite) throw new Error(`laptop: no invite in: ${inv.out}${inv.err}`);
+  } else {
+    inviter = rig.start("laptop", ["cpart", "invite", "devcontainer"]);
+    let line = "";
+    await rig.until(30_000, async () => !!(line = /cpart join (\S+) <your name>/.exec(inviter!.out())?.[1] ?? ""), 500);
+    if (!line) throw new Error(`laptop: cpart invite printed no code in 30s: ${inviter.out().trim()}`);
+    invite = line;
+  }
+  res.invite = invite.startsWith("cpart-invite:") ? `${invite.slice(0, 24)}...` : invite;
   // First as a person would type it. It asks before using a relay on a private address.
-  let j = await rig.cpart("devcontainer", ["join", invite, "laptop"], { CPART_PASSPHRASE: PASSPHRASE.devcontainer }, 120_000);
+  let j = await rig.cpart("devcontainer", ["join", invite, "laptop"], { CPART_PASSPHRASE: PASSPHRASE.devcontainer }, 180_000);
   if (j.code !== 0 && /this needs a terminal|Type yes/.test(j.err + j.out)) {
     res.interventions.push({ by: "human", what: "devcontainer: typed yes to use a relay on a private address (cpart join ... --yes)", why: `join asks before it uses a relay on a private address; without a terminal it said: ${(j.err + j.out).trim().split("\n")[0]!.slice(0, 200)}`, atS: Math.round((Date.now() - t0) / 1000) });
-    j = await rig.cpart("devcontainer", ["join", invite, "laptop", "--yes"], { CPART_PASSPHRASE: PASSPHRASE.devcontainer }, 120_000);
+    j = await rig.cpart("devcontainer", ["join", invite, "laptop", "--yes"], { CPART_PASSPHRASE: PASSPHRASE.devcontainer }, 180_000);
   }
   res.devcontainer = (j.out + j.err).trim();
+  if (inviter) {
+    const code = await Promise.race([inviter.done, sleep(60_000).then(() => 124)]);
+    res.laptop += `\n--- cpart invite devcontainer (exit ${code}):\n${inviter.out().trim()}`;
+  }
   if (j.code !== 0) throw new Error(`devcontainer: cpart join failed: ${res.devcontainer}`);
   const paired = await rig.until(60_000, async () => {
     const a = await rig.cpartJson<{ state: string; safetyCode: string }[]>("laptop", ["contacts"]);
@@ -540,6 +684,8 @@ async function setup(res: SetupResult): Promise<SetupResult> {
   for (const d of DEVICES) {
     const st = await rig.cpartJson<{ agents: { name: string; found: boolean; registered: string }[] }>(d, ["status"]);
     res.agentsRegistered[d] = st?.agents.filter((a) => a.found).map((a) => `${a.name}: ${a.registered}`).join(", ") ?? "unknown";
+    // Which address each side dials, and what it tells others.
+    res.relays[d] = (await rig.cpart(d, ["relay", "list"])).out.trim();
   }
   res.ok = true;
   res.durationS = Math.round((pairedAt - t0) / 1000);
@@ -563,17 +709,21 @@ async function main(): Promise<void> {
   const claudeVersion = (await sh("docker", ["run", "--rm", rig.o.image, "claude", "--version"], { timeoutMs: 60_000 })).out.trim();
   try {
     await rig.createNetwork();
+    // In mac mode the relay joins the laptop's network namespace, so the
+    // laptop comes first.
+    const mac = rig.o.mode === "mac";
+    if (mac) for (const d of DEVICES) await rig.startDevice(d);
     const relay = await rig.startRelay();
-    say(`relay: ${relay.url} (${relay.mode})`);
-    for (const d of DEVICES) await rig.startDevice(d);
+    say(`relay: ${relay.url} (${relay.mode})${relay.spare ? `, spare ${relay.spare}` : ""}`);
+    if (!mac) for (const d of DEVICES) await rig.startDevice(d);
     await rig.seedRepo("laptop", "provider");
     await rig.seedRepo("devcontainer", "client");
-    setupResult = { ok: false, durationS: 0, interventions: [], laptop: "", devcontainer: "", safetyCodesMatch: false, agentsRegistered: {}, error: null };
+    setupResult = { ok: false, durationS: 0, pairing: flags.long ? "long invite" : "short code", invite: "", interventions: [], laptop: "", devcontainer: "", safetyCodesMatch: false, agentsRegistered: {}, relays: {}, error: null };
     await setup(setupResult).catch((e: Error) => {
       setupResult!.error = e.message;
       throw e;
     });
-    say(`paired in ${setupResult.durationS}s; safety codes match: ${setupResult.safetyCodesMatch}`);
+    say(`paired by ${setupResult.pairing} (${setupResult.invite}) in ${setupResult.durationS}s`);
     for (const s of scenarios) {
       if (s.needs && !s.needs.includes(relay.mode)) {
         say(`== ${s.name}: skipped, needs relay mode ${s.needs.join(" or ")}`);

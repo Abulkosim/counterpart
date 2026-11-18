@@ -8,7 +8,10 @@
 #   ./scripts/devices/rig.sh                      every scenario, relay on this machine (or in a container if the firewall blocks that)
 #   ./scripts/devices/rig.sh --mode tunnel        relay behind cpart relay --tunnel. Needs cloudflared
 #   ./scripts/devices/rig.sh --no-sessions        only the scenarios that use no model (free, about ten minutes)
+#   ./scripts/devices/rig.sh --mode mac           relay in the laptop's network namespace: 127.0.0.1 there, host.docker.internal from the devcontainer
 #   ./scripts/devices/rig.sh scripts/devices/scenarios/01-ask.json
+#   --long                                        pair with the long invite instead of a short code
+#   --prefix NAME                                 start container, network and image names with NAME (default two-devices)
 #
 # Needs docker. Scenarios with live sessions need a Claude Code login in
 # ~/.claude/.credentials.json: a temporary copy is mounted read-only into both
@@ -23,19 +26,22 @@ source scripts/smoke-lib.sh
 export CPART_NO_BOOT=1
 
 MODE=auto
+PREFIX=two-devices
 SESSIONS=1
 OUT=
 args=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --mode) MODE=$2; shift 2 ;;
+    --prefix) PREFIX=$2; shift 2 ;;
     --no-sessions) SESSIONS=0; shift ;;
     --out) OUT=$2; shift 2 ;;
-    -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
     *) args+=("$1"); shift ;;
   esac
 done
-case "$MODE" in auto|host|container|tunnel) ;; *) fail "--mode is auto, host, container or tunnel" ;; esac
+case "$MODE" in auto|host|container|tunnel|mac) ;; *) fail "--mode is auto, host, container, tunnel or mac" ;; esac
+case "$PREFIX" in *[!a-z0-9-]*|"") fail "--prefix takes lower-case letters, digits and dashes" ;; esac
 OUT=${OUT:-scripts/devices/results/$(date -u +%Y%m%d-%H%M)-$MODE}
 mkdir -p "$OUT"
 OUT=$(cd "$OUT" && pwd)
@@ -49,10 +55,10 @@ RUN_ID=$(basename "$WORK" | tr -dc 'a-zA-Z0-9' | tail -c 6)
 # A device still running would keep the login it had mounted, so say so.
 remove_rig() {
   rm -rf "$WORK/creds"
-  docker ps -aq --filter "name=^two-devices-$RUN_ID-(laptop|devcontainer|relay)\$" | xargs -r docker rm -f >/dev/null 2>&1 || true
-  docker network rm "two-devices-$RUN_ID" >/dev/null 2>&1 || true
-  if [ -n "$(docker ps -aq --filter "name=^two-devices-$RUN_ID-" 2>/dev/null)" ]; then
-    echo "WARNING: containers of this run are still there and may hold a copy of the Claude Code login. Remove them: docker rm -f \$(docker ps -aq --filter name=^two-devices-$RUN_ID-)" >&2
+  docker ps -aq --filter "name=^$PREFIX-$RUN_ID-(laptop|devcontainer|relay|relay2)\$" | xargs -r docker rm -f >/dev/null 2>&1 || true
+  docker network rm "$PREFIX-$RUN_ID" >/dev/null 2>&1 || true
+  if [ -n "$(docker ps -aq --filter "name=^$PREFIX-$RUN_ID-" 2>/dev/null)" ]; then
+    echo "WARNING: containers of this run are still there and may hold a copy of the Claude Code login. Remove them: docker rm -f \$(docker ps -aq --filter name=^$PREFIX-$RUN_ID-)" >&2
   fi
 }
 # The (exit $code) hands the code to smoke-lib's cleanup. Under set -e it
@@ -88,13 +94,13 @@ mkdir -p "$WORK/ctx/counterpart"
 # should not read it.
 git ls-files -z --cached --others --exclude-standard | grep -zv '^scripts/devices/' | tar -C "$ROOT" --null -T - -cf - | tar -C "$WORK/ctx/counterpart" -xf -
 cp -r scripts/devices/repos "$WORK/ctx/seed"
-docker build -q -t two-devices:latest -f scripts/devices/Dockerfile "$WORK/ctx" >/dev/null
+docker build -q -t "$PREFIX:latest" -f scripts/devices/Dockerfile "$WORK/ctx" >/dev/null
 
 step "run the scenarios"
 # In the background so that a signal to this script reaches run.ts too, and
 # the cleanup waits for it: run.ts must not go on alone after the devices
 # and the login are gone.
-node scripts/devices/run.ts --work "$WORK" --out "$OUT" --image two-devices:latest --port "$PORT" --mode "$MODE" --id "$RUN_ID" \
+node scripts/devices/run.ts --work "$WORK" --out "$OUT" --image "$PREFIX:latest" --prefix "$PREFIX" --port "$PORT" --mode "$MODE" --id "$RUN_ID" \
   ${login[@]+"${login[@]}"} $([ "$SESSIONS" = 0 ] && echo --no-sessions) ${args[@]+"${args[@]}"} &
 RUN_PID=$!
 stopped=
