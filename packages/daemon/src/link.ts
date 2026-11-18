@@ -345,9 +345,11 @@ export class RelayLink extends EventEmitter<LinkEvents> {
   }
 
   // Bytes on their way to this relay that it has not answered for yet.
+  // A send past its own deadline no longer counts: it is sent again or gone.
   private unanswered(c: Conn): number {
+    const now = Date.now();
     let n = c.ws?.bufferedAmount ?? 0;
-    for (const f of this.inflight.values()) if (f.url === c.url) n += f.bytes;
+    for (const f of this.inflight.values()) if (f.url === c.url && now - f.at < INFLIGHT_MS + slowMs(f.bytes)) n += f.bytes;
     return n;
   }
 
