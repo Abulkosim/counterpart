@@ -1,0 +1,115 @@
+{
+  "startedAt": "2026-11-17T22:22:22.917Z",
+  "finishedAt": "2026-11-17T22:49:34.677Z",
+  "relay": {
+    "mode": "container",
+    "url": "ws://host.docker.internal:7447",
+    "note": "relay in a third container on the devices' network, reached as host.docker.internal"
+  },
+  "model": "claude-sonnet-5-5",
+  "claudeVersion": "2.1.326 (Claude Code)",
+  "image": "two-devices:latest",
+  "host": "linux",
+  "setup": {
+    "ok": true,
+    "durationS": 22,
+    "interventions": [
+      {
+        "by": "human",
+        "what": "devcontainer: typed yes to use a relay on a private address (cpart join ... --yes)",
+        "why": "join asks before it uses a relay on a private address; without a terminal it said: cpart: this needs a terminal",
+        "atS": 8
+      }
+    ],
+    "laptop": "ok  relay ws://host.docker.internal:7447 answers\nok  identity h_c6xdk6x9KDAvXU5eIPbdvA created in /home/node/.cpart\nok  daemon started, connected\nok  Claude Code now has the counterpart tools. Sessions started from now on see them\n\nReady. Next, pair with someone:\n  cpart invite <what you call them>      then send them what it prints",
+    "devcontainer": "ok  relay ws://host.docker.internal:7447 answers\nok  identity h_RAT1Y5NK7BKQueUHeEKBAQ created in /home/node/.cpart\nok  daemon started, connected\nok  Claude Code now has the counterpart tools. Sessions started from now on see them\n\nPaired with laptop. Safety code 8599 5632 3368: ask laptop to read theirs to you. If the two differ, someone is in the middle.\n\nNow, in Claude Code or Codex, say something like:\n  ask laptop's agent what their API returns for an empty page",
+    "safetyCodesMatch": true,
+    "agentsRegistered": {
+      "laptop": "Claude Code: here",
+      "devcontainer": "Claude Code: here"
+    },
+    "error": null
+  },
+  "scenarios": [
+    {
+      "name": "07-drop-no-restart",
+      "title": "No model: after a network drop and a new address, does a message ever arrive without a restart? Takes up to 30 minutes",
+      "file": "scripts/devices/scenarios/07-drop-no-restart.json",
+      "ok": false,
+      "error": null,
+      "startedAt": "2026-11-17T22:22:52.050Z",
+      "durationS": 1602,
+      "timeToFirstAnswerS": 1585.3,
+      "timeToAgreementS": null,
+      "interventions": [],
+      "restartedByHand": false,
+      "lost": {
+        "laptopToDevcontainer": 0,
+        "devcontainerToLaptop": 0,
+        "held": 0,
+        "notDelivered": []
+      },
+      "faults": [
+        {
+          "kind": "disconnect",
+          "device": "laptop",
+          "atS": 5.4
+        },
+        {
+          "kind": "connect",
+          "device": "laptop",
+          "atS": 25.6
+        }
+      ],
+      "checks": [],
+      "sessions": [],
+      "waits": [
+        {
+          "label": "the first message on the laptop",
+          "device": "laptop",
+          "arrived": true,
+          "afterS": 0,
+          "recovered": false
+        },
+        {
+          "label": "a message sent after the laptop came back, with nobody restarting anything",
+          "device": "laptop",
+          "arrived": false,
+          "afterS": null,
+          "recovered": false
+        },
+        {
+          "label": "the laptop's own message, once it has something to send",
+          "device": "devcontainer",
+          "arrived": true,
+          "afterS": 960,
+          "recovered": false
+        },
+        {
+          "label": "the devcontainer's message, after a restart by hand if still needed",
+          "device": "laptop",
+          "arrived": true,
+          "afterS": 0,
+          "recovered": false
+        }
+      ],
+      "reconnects": {
+        "laptop": {
+          "lost": 1,
+          "connected": 1,
+          "errors": []
+        },
+        "devcontainer": {
+          "lost": 0,
+          "connected": 0,
+          "errors": []
+        }
+      },
+      "notes": [],
+      "threads": [
+        "5blqejP8dfdNmirRfc3nNw"
+      ]
+    }
+  ],
+  "fatal": null
+}

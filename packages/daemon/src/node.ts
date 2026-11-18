@@ -6,9 +6,11 @@ import {
   type Agreement, type Approval, type CheckedPart, type Contract, type ContractPart, type DeviceCredential, type DeviceSecrets, type EventBodies, type EventType,
   type Evidence, type KeyPair, type ThreadEvent, type Via, type Wire,
   EVIDENCE_STATE, LIMITS, checkEvidenceParts, contractHash, decodeInvite, deviceId, encodeInvite, generateSigningKey, hashOf, humanId, issueDevice, laneOf, open, parseContract, parseEvidence,
-  randomId, renewDevice, safetyCode, seal, signApproval, verifyAgreement, verifyApproval,
+  randomId, renewDevice, safetyCode, seal, sign, signApproval, verifyAgreement, verifyApproval,
 } from "@counterpart/protocol";
 import { type SealedRoot, DEFAULT_LOG_N, sealRoot, unsealRoot } from "./rootkey.ts";
+import { type GuardOptions, type Held, GUARD_OFF_DOMAIN, MAX_OFF_MINUTES, Guard, Recheck, guardOffMessage } from "./guard.ts";
+import { RelayBook } from "./relays.ts";
 
 const DAY = 24 * 3600 * 1000;
 const RENEW_BEFORE = 30 * DAY;
@@ -146,6 +148,10 @@ export class Counterpart {
   private now: () => number;
   private resendAfter: number;
   private receiptDelay: number;
+  // Every body this side sends passes it before it is sealed. See guard.ts.
+  readonly guard: Guard;
+  // My relays and my contacts' relays. See relays.ts.
+  readonly relayBook: RelayBook;
 
   private constructor(home: string, keys: Keys, opts: NodeOptions) {
     const now = opts.now ?? Date.now;
@@ -223,20 +229,31 @@ export class Counterpart {
     `);
     // Columns added after the first databases were made.
     const cols = new Set((this.db.prepare("PRAGMA table_info(outbox)").all() as { name: string }[]).map((c) => c.name));
-    try {
-      if (!cols.has("received_at")) this.db.exec("ALTER TABLE outbox ADD COLUMN received_at INTEGER");
-      if (!cols.has("resends")) this.db.exec("ALTER TABLE outbox ADD COLUMN resends INTEGER NOT NULL DEFAULT 0");
-    } catch (e) {
-      // Another process opening the same home added them first.
-      if (!/duplicate column/.test((e as Error).message)) throw e;
+    const inviteCols = new Set((this.db.prepare("PRAGMA table_info(invites)").all() as { name: string }[]).map((c) => c.name));
+    for (const [have, sql] of [
+      [cols.has("received_at"), "ALTER TABLE outbox ADD COLUMN received_at INTEGER"],
+      [cols.has("resends"), "ALTER TABLE outbox ADD COLUMN resends INTEGER NOT NULL DEFAULT 0"],
+      // An invite made after a short-code pairing is good only for the root key that proved the code.
+      [inviteCols.has("for_root"), "ALTER TABLE invites ADD COLUMN for_root TEXT"],
+    ] as const) {
+      if (have) continue;
+      try {
+        this.db.exec(sql);
+      } catch (e) {
+        // Another process opening the same home added it first.
+        if (!/duplicate column/.test((e as Error).message)) throw e;
+      }
     }
+    this.guard = new Guard(this.db, opts.guard ?? {}, now, keys.rootKey);
+    this.relayBook = new RelayBook(this.db, keys.relay);
   }
 
   // With a passphrase the root key is locked from the moment it exists, and the
   // identity can approve contracts. Without one it can message but never
   // approve: a root key that has sat on disk unprotected may have been copied,
   // so locking it later would prove nothing.
-  static async init(home: string, opts: NodeOptions & { relay: string; passphrase?: string; logN?: number }): Promise<Counterpart> {
+  // `relayAs` is the address others know `relay` by, when this machine reaches it by another name.
+  static async init(home: string, opts: NodeOptions & { relay: string; relayAs?: string; passphrase?: string; logN?: number }): Promise<Counterpart> {
     const file = join(home, "keys.json");
     if (existsSync(file)) throw new Error(`already initialised at ${home}`);
     const url = new URL(opts.relay);
@@ -249,7 +266,9 @@ export class Counterpart {
       ? { v: 1, relay: opts.relay, rootKey: root.publicKey, sealedRoot: sealRoot(root, opts.passphrase, opts.logN ?? DEFAULT_LOG_N), device }
       : { v: 1, relay: opts.relay, rootKey: root.publicKey, root, device };
     saveKeys(home, keys);
-    return new Counterpart(home, keys, opts);
+    const node = new Counterpart(home, keys, opts);
+    if (opts.relayAs) node.relayBook.add(opts.relay, opts.relayAs, now(), { announce: false });
+    return node;
   }
 
   static open(home: string, opts: NodeOptions = {}): Counterpart {
@@ -274,6 +293,13 @@ export class Counterpart {
       return unsealRoot(this.keys.rootKey, this.keys.sealedRoot, passphrase);
     }
     return this.keys.root!;
+  }
+
+  // Throws unless the passphrase unlocks the root key. For commands that must
+  // come from the owner and not from their agent.
+  checkPassphrase(passphrase?: string): void {
+    if (!this.keys.sealedRoot) throw new Error("this identity has no passphrase");
+    this.unlock(passphrase);
   }
 
   // Renew the device credential now. Needs the passphrase when the root key is locked.
@@ -317,32 +343,52 @@ export class Counterpart {
     this.db.close();
   }
 
+  // The home relay: the one invites name. keys.json keeps the one the identity
+  // was made on; the list itself is in the database.
   get relay(): string {
-    return this.keys.relay;
+    return this.relayBook.home();
+  }
+  // The home relay by the name others know it by. Invites and pairing codes
+  // name this, and pairing binds it into the key, so both sides use the same string.
+  get relayName(): string {
+    return this.relayBook.homeName();
   }
   get device(): DeviceSecrets {
     return this.keys.device;
   }
   get me(): { human: string; device: string; rootKey: string; relay: string } {
-    return { human: humanId(this.keys.rootKey), device: deviceId(this.keys.device.credential), rootKey: this.keys.rootKey, relay: this.keys.relay };
+    return { human: humanId(this.keys.rootKey), device: deviceId(this.keys.device.credential), rootKey: this.keys.rootKey, relay: this.relay };
   }
 
   // ---- contacts ----
 
-  createInvite(name: string, ttlMs = DAY): string {
+  createInvite(name: string, ttlMs = DAY, forRoot?: string): string {
     checkName(name);
     if (this.db.prepare("SELECT 1 FROM contacts WHERE name = ?").get(name)) throw new Error(`contact "${name}" already exists`);
     const token = randomId();
     const expiresAt = this.now() + ttlMs;
-    this.db.prepare("INSERT INTO invites (token, name, expires_at) VALUES (?, ?, ?)").run(token, name, expiresAt);
-    return encodeInvite({ v: 1, relay: this.keys.relay, credential: this.keys.device.credential, token, expiresAt });
+    // The name others know the home relay by, which is not the one this machine
+    // dials when it reaches the relay another way (from a container, say).
+    const relay = this.relayBook.homeName();
+    this.tx(() => {
+      this.db.prepare("INSERT INTO invites (token, name, expires_at, for_root) VALUES (?, ?, ?, ?)").run(token, name, expiresAt, forRoot ?? null);
+      this.relayBook.invited(token, relay);
+    });
+    return encodeInvite({ v: 1, relay, credential: this.keys.device.credential, token, expiresAt });
+  }
+
+  // Unused invites made for one root key (by a short-code pairing that ended).
+  dropInvitesFor(rootKey: string): void {
+    this.db.prepare("DELETE FROM invites WHERE for_root = ? AND used_by IS NULL").run(rootKey);
   }
 
   async acceptInvite(invite: string, name: string): Promise<Contact> {
     checkName(name);
     const inv = decodeInvite(invite, this.now());
     if (inv.credential.rootKey === this.keys.rootKey) throw new Error("that is your own invite");
-    if (inv.relay !== this.keys.relay) throw new Error(`invite is for relay ${inv.relay}, this identity uses ${this.keys.relay}`);
+    // The token goes back to the inviter. Someone could have made it out of a secret.
+    if (this.guard.check({ token: inv.token }).length && !this.guard.off) throw new Error("this invite's token looks like it carries a secret. It was not accepted.");
+    if (!this.relayBook.find(inv.relay)) throw new Error(`invite is for relay ${inv.relay}, which this identity does not use. Add it first: cpart relay add ${inv.relay}`);
     if (this.db.prepare("SELECT 1 FROM contacts WHERE name = ? OR root_key = ?").get(name, inv.credential.rootKey)) throw new Error("you already have this contact, or that name is taken");
     const out = await this.build(inv.credential, randomId(), "contact.request", { token: inv.token }, 0, []);
     this.tx(() => {
@@ -374,13 +420,26 @@ export class Counterpart {
   // ---- threads ----
 
   async openThread(contactName: string, goal: string): Promise<string> {
+    return this.open(contactName, goal);
+  }
+
+  // `released` names the held message this is, once its owner let it go. Only releaseHeld passes it.
+  private async open(contactName: string, goal: string, released?: string): Promise<string> {
     const c = this.activeContact(contactName);
+    const screened = { contactRoot: c.rootKey, threadId: null, type: "thread.opened", body: { goal } };
+    const ticket = released ? null : this.guard.screen(screened);
     const threadId = randomId();
     const out = await this.build(c.credential, threadId, "thread.opened", { goal, participants: [this.keys.rootKey, c.rootKey] }, 0, []);
-    this.tx(() => {
-      this.db.prepare("INSERT INTO threads (id, goal, contact_root, opened_by_me, created_at, genesis) VALUES (?, ?, ?, 1, ?, ?)").run(threadId, goal, c.rootKey, this.now(), hashOf(out.event));
-      this.commitOut(out);
-    });
+    try {
+      this.tx(() => {
+        this.guard.recheck(screened, ticket);
+        this.db.prepare("INSERT INTO threads (id, goal, contact_root, opened_by_me, created_at, genesis) VALUES (?, ?, ?, 1, ?, ?)").run(threadId, goal, c.rootKey, this.now(), hashOf(out.event));
+        this.commitOut(out);
+        if (released) this.guard.released(released, out.event.id);
+      });
+    } catch (e) {
+      throw e instanceof Recheck ? this.guard.hold(e) : e;
+    }
     return threadId;
   }
 
@@ -390,10 +449,13 @@ export class Counterpart {
 
   // Add one of my events to a thread. `body` may depend on the thread's state,
   // so it can be given as a function that runs once the contact is known.
-  private async post<T extends EventType>(threadId: string, type: T, body: EventBodies[T], extraParents: string[] = []): Promise<ThreadEvent<T>> {
+  // `released` names the held message this is, once its owner let it go.
+  private async post<T extends EventType>(threadId: string, type: T, body: EventBodies[T], extraParents: string[] = [], released?: string): Promise<ThreadEvent<T>> {
     const t = this.db.prepare("SELECT contact_root FROM threads WHERE id = ?").get(threadId) as { contact_root: string } | undefined;
     if (!t) throw new Error(`no thread ${threadId}`);
     const c = this.activeContact(t.contact_root);
+    const screened = { contactRoot: c.rootKey, threadId, type, body };
+    const ticket = released ? null : this.guard.screen(screened);
     const mine = deviceId(this.keys.device.credential);
     // Sequence numbers are allocated here and committed below; a clash with a
     // concurrent writer fails the unique index and the caller retries.
@@ -403,15 +465,51 @@ export class Counterpart {
       const out = await this.build(c.credential, threadId, type, body, seq, parents);
       try {
         this.tx(() => {
+          // Again inside the commit, so two messages sent at once cannot each carry half of a value.
+          this.guard.recheck(screened, ticket);
           this.checkAct(out.event, this.keys.rootKey);
           this.commitOut(out);
+          if (released) this.guard.released(released, out.event.id);
         });
         return out.event as ThreadEvent<T>;
       } catch (e) {
+        if (e instanceof Recheck) throw this.guard.hold(e);
         if (e instanceof Reject) throw new Error(e.message);
         if (attempt >= 5 || !/UNIQUE constraint failed: events/.test((e as Error).message)) throw e;
       }
     }
+  }
+
+  // Send a message the outbound guard held, as it was written. Only the owner
+  // may: the passphrase is checked first, and an identity without one cannot
+  // release at all, since nothing would tell its owner from an agent. The CLI
+  // also insists on a terminal. Sending and marking it released are one transaction.
+  async releaseHeld(ref: string, passphrase?: string): Promise<{ held: Held; eventId: string; threadId: string }> {
+    if (!this.keys.sealedRoot) throw new Error("this identity was made without a passphrase, so nothing can tell you from an agent here, and held messages cannot be released. Drop it, and send what you meant to send in words that do not carry the secret.");
+    this.checkPassphrase(passphrase);
+    const h = this.guard.claim(this.guard.find(ref).id);
+    try {
+      let threadId: string;
+      if (h.type === "thread.opened") threadId = await this.open(h.contactRoot, (h.body as { goal: string }).goal, h.id);
+      else threadId = (await this.post(h.threadId!, h.type as EventType, h.body as never, [], h.id)).threadId;
+      const eventId = this.guard.find(h.id).eventId!;
+      return { held: h, eventId, threadId };
+    } catch (e) {
+      this.guard.unclaim(h.id);
+      throw e;
+    }
+  }
+
+  // Turn the outbound guard off for a while. Only the owner may: the
+  // passphrase unlocks the root key, which signs the end time. An identity
+  // without a passphrase cannot, for the same reason it cannot release.
+  guardOff(minutes: number, passphrase?: string): number {
+    if (!this.keys.sealedRoot) throw new Error("this identity was made without a passphrase, so nothing here can tell you from an agent, and the guard cannot be turned off.");
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > MAX_OFF_MINUTES) throw new Error(`give the minutes as a whole number from 1 to ${MAX_OFF_MINUTES}`);
+    const root = this.unlock(passphrase);
+    const until = this.now() + minutes * 60_000;
+    this.guard.setOff(until, sign(root, GUARD_OFF_DOMAIN, guardOffMessage(this.keys.rootKey, until)));
+    return until;
   }
 
   // ---- contracts ----
@@ -775,6 +873,30 @@ export class Counterpart {
     return sent;
   }
 
+  // Send my relay list to contacts who need it (relays.ts decides who). Like a
+  // receipt it is not part of any log: once the relay has it, it is done.
+  async sendRelayLists(): Promise<number> {
+    const now = this.now();
+    const active = this.contacts().filter((c) => c.state === "active");
+    let sent = 0;
+    for (const root of this.relayBook.owed(active.map((c) => c.rootKey), now)) {
+      const c = active.find((x) => x.rootKey === root)!;
+      const body = this.relayBook.announcement(root, c.relay);
+      let out: Outgoing;
+      try {
+        out = await this.build(this.activeContact(root).credential, randomId(), "contact.relays", body, 0, []);
+      } catch {
+        continue; // their credential has expired; it goes when they renew
+      }
+      this.tx(() => {
+        this.db.prepare("INSERT INTO outbox (id, wire, expires_at, state) VALUES (?, ?, ?, 'queued')").run(out.event.id, JSON.stringify(out.wire), out.expiresAt);
+        this.relayBook.sent(root, body.version, now);
+      });
+      sent++;
+    }
+    return sent;
+  }
+
   // A resend request or a receipt from a contact. Neither enters a log, so
   // nothing that reads threads (a person, an agent, the front desk) sees it.
   private async control(event: ThreadEvent<"thread.resend" | "thread.received">, credential: DeviceCredential): Promise<Verdict> {
@@ -847,7 +969,7 @@ export class Counterpart {
 
       // Contact events live outside threads. One that names an existing thread,
       // or reuses an id something else is filed under, is refused.
-      if (event.type === "contact.request" || event.type === "contact.accepted" || event.type === "contact.hello") {
+      if (event.type === "contact.request" || event.type === "contact.accepted" || event.type === "contact.hello" || event.type === "contact.relays") {
         if (event.authorSeq !== 0 || event.parents.length !== 0) throw new Reject("contact events stand alone");
         if (this.db.prepare("SELECT 1 FROM threads WHERE id = ?").get(event.threadId) || this.db.prepare("SELECT 1 FROM events WHERE thread_id = ? AND id != ?").get(event.threadId, event.id))
           throw new Reject("contact event reuses a thread id");
@@ -884,8 +1006,9 @@ export class Counterpart {
 
         if (event.type === "contact.request") {
           const token = (event as ThreadEvent<"contact.request">).body.token;
-          const inv = this.db.prepare("SELECT * FROM invites WHERE token = ?").get(token) as { name: string; expires_at: number; used_by: string | null } | undefined;
+          const inv = this.db.prepare("SELECT * FROM invites WHERE token = ?").get(token) as { name: string; expires_at: number; used_by: string | null; for_root: string | null } | undefined;
           if (!inv) throw new Reject("contact request with unknown invite token");
+          if (inv.for_root && inv.for_root !== credential.rootKey) throw new Reject("invite token was made for someone else");
           if (inv.used_by) throw new Reject("invite token already used");
           if (inv.expires_at <= this.now()) throw new Reject("invite expired");
           if (contact) throw new Reject("contact request from an existing contact");
@@ -893,7 +1016,7 @@ export class Counterpart {
           this.db.prepare("UPDATE invites SET used_by = ? WHERE token = ?").run(credential.rootKey, token);
           this.db
             .prepare("INSERT INTO contacts (root_key, name, credential, relay, state, created_at) VALUES (?, ?, ?, ?, 'active', ?)")
-            .run(credential.rootKey, inv.name, JSON.stringify(credential), this.keys.relay, this.now());
+            .run(credential.rootKey, inv.name, JSON.stringify(credential), this.relay, this.now());
           this.insertEvent(event, credential.rootKey, false, "applied");
           this.commitOut(acceptance!);
           return { result: "applied", event, promoted: [] };
@@ -901,6 +1024,14 @@ export class Counterpart {
 
         if (!contact) throw new Reject("message from an unknown sender");
         this.refreshCredential(contact, credential);
+        // Where to reach this contact. It touches their entry and nobody else's.
+        if (event.type === "contact.relays") {
+          const r = this.relayBook.apply(contact.root_key, (event as ThreadEvent<"contact.relays">).body, this.now());
+          if ("refused" in r) throw new Reject(r.refused);
+          // Only a list that changed something is kept: repeats cannot grow the log.
+          if (r.newer) this.insertEvent(event, credential.rootKey, false, "applied");
+          return { result: "applied", event, promoted: [] };
+        }
         const hold = (): Verdict => {
           const pending = (this.db.prepare("SELECT COUNT(*) AS n FROM events WHERE author_root = ? AND status = 'pending'").get(credential.rootKey) as { n: number }).n;
           if (pending >= MAX_PENDING_PER_CONTACT) throw new Reject("too many out-of-order events held for this contact");
@@ -1043,6 +1174,7 @@ export class Counterpart {
 
 export interface NodeOptions {
   now?: () => number;
+  guard?: GuardOptions; // the outbound guard; by default it reads this process's environment and working directory
   resendAfterMs?: number; // how long an event is held before its missing parents are asked for
   receiptDelayMs?: number; // how long a receipt waits for more events to cover
 }
@@ -1075,7 +1207,7 @@ interface EventRow {
 
 const toStored = (r: EventRow): StoredEvent => ({ ...(JSON.parse(r.json) as ThreadEvent), ord: r.ord, mine: !!r.mine, status: r.status, receivedAt: r.received_at });
 
-function checkName(name: string): void {
+export function checkName(name: string): void {
   if (!/^[a-z0-9][a-z0-9._-]{0,31}$/.test(name)) throw new Error("contact names are 1-32 characters: a-z, 0-9, dot, dash, underscore");
 }
 

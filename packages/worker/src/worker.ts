@@ -2,7 +2,6 @@ import { createHash, randomBytes } from "node:crypto";
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { Model } from "@counterpart/frontdesk";
 import type { Contract } from "@counterpart/protocol";
 import { canonicalize } from "@counterpart/protocol";
 import { allPaths, git, headCommit, lsTree, readBlob } from "./git.ts";
@@ -75,7 +74,7 @@ const SENSITIVE: [RegExp, string][] = [
   [/(^|\/)\.(husky|githooks)\//, "Git hooks"],
 ];
 
-function sensitive(path: string): string | null {
+export function sensitive(path: string): string | null {
   const lower = path.toLowerCase();
   for (const [re, what] of SENSITIVE) if (re.test(lower)) return what;
   return null;
@@ -175,7 +174,16 @@ const TEST_PATH = /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[a-z]+$|_test\
 const ASSERT_RE = /\b(assert|expect|should|require\.|t\.(Error|Fatal)|XCTAssert)\w*/g;
 const countAsserts = (text: string): number => (text.match(ASSERT_RE) ?? []).length;
 
-export async function work(req: WorkRequest, model: Model): Promise<WorkResult> {
+// Text in, text out, no tools: the same shape as the front desk's Model.
+// It is declared here so this package does not depend on the front desk,
+// which depends on this one.
+export interface WorkModelRequest {
+  system: string;
+  prompt: string;
+}
+export type WorkModel = (req: WorkModelRequest) => Promise<string>;
+
+export async function work(req: WorkRequest, model: WorkModel): Promise<WorkResult> {
   if (req.brief.length === 0 || req.brief.length > WORK_LIMITS.brief) throw new Error(`the brief must be 1-${WORK_LIMITS.brief} characters`);
   if (req.paths.length === 0) throw new Error("name at least one file or directory the worker may change");
   const paths = req.paths.map((p) => cleanPath(p.replace(/\/+$/, "")));

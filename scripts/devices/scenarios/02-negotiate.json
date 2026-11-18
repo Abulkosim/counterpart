@@ -1,0 +1,26 @@
+{
+  "name": "02-negotiate",
+  "title": "Two live sessions negotiate a small contract, taking turns; both humans approve it",
+  "asker": "laptop",
+  "steps": [
+    { "do": "desk", "device": "laptop", "on": false },
+    {
+      "do": "session", "device": "laptop", "id": "laptop-1", "timeout": 600, "tools": ["Read", "Grep", "Glob"],
+      "prompt": "I own stockroom, the API in this repo. The shelf-sync team (Counterpart contact: devcontainer) wants bigger pages. I want a short written contract with them. The most I can offer is page_size up to 250, and only if they stay under 300 requests a minute; otherwise it stays at 200 and 600 a minute. Cursors expire after 15 minutes and that does not change. The contract must say what the last page looks like. Open a thread with devcontainer and propose the contract. After proposing, do not wait for an answer. Finish with a short report to me."
+    },
+    { "do": "capture", "device": "laptop", "var": "thread" },
+    { "do": "wait_message", "device": "devcontainer", "type": "contract.proposed", "timeout": 120, "label": "the proposal on the devcontainer" },
+    {
+      "do": "session", "device": "devcontainer", "id": "devcontainer-1", "timeout": 600, "tools": ["Read", "Grep", "Glob"],
+      "prompt": "I own shelf-sync, the repo here. Our job pulls about 400 items, so I need page_size of at least 200, and 250 would be better. We make about 20 requests a minute. My agent and the warehouse team's agent (contact: laptop) are part way through a contract in Counterpart thread {{thread}}. You have no memory of earlier turns. Read the thread and its proposals. Then make the one move that gets us to a contract I could approve: counter-propose, decline with a reason, or leave the latest open proposal as it is if it already gives me what I need. Finish with a short report to me: what is on the table, what you did, and what I should check before I approve."
+    },
+    {
+      "do": "session", "device": "laptop", "id": "laptop-2", "timeout": 600, "tools": ["Read", "Grep", "Glob"],
+      "prompt": "I own stockroom, the API in this repo. The most I can offer shelf-sync is page_size up to 250, and only if they stay under 300 requests a minute; otherwise 200 and 600 a minute. Cursors expire after 15 minutes. My agent and their agent (contact: devcontainer) are part way through a contract in Counterpart thread {{thread}}. You have no memory of earlier turns. Read the thread and its proposals. Then make the one move that gets us to a contract I could approve: counter-propose, decline with a reason, or leave the latest open proposal as it is if it already gives me what I need. Finish with a short report to me."
+    },
+    { "do": "approve", "device": "laptop", "thread": "{{thread}}", "proposal": "latest-open", "timeout": 120 },
+    { "do": "approve", "device": "devcontainer", "thread": "{{thread}}", "proposal": "{{proposal}}", "timeout": 120 },
+    { "do": "sleep", "seconds": 5 },
+    { "do": "expect", "check": "both sides hold the agreement", "agreed": true, "thread": "{{thread}}" }
+  ]
+}

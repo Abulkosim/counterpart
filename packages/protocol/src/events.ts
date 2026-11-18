@@ -1,6 +1,7 @@
 import { isId, isInt, isKey, isObject, isStr, onlyKeys } from "./check.ts";
 import { type Approval, type Contract, CONTRACT_LIMITS, parseApproval, parseContract } from "./contract.ts";
 import { type Evidence, parseEvidence } from "./evidence.ts";
+import { RELAY_LIMITS, isRelayUrl, relayKey } from "./relays.ts";
 
 // One entry in a thread's log. Events form a DAG through `parents`; there is no
 // global order. `lane` separates free talk from control traffic; the act lane
@@ -12,6 +13,10 @@ export interface EventBodies {
   "contact.accepted": Record<string, never>;
   // Carries nothing. Its envelope delivers the sender's renewed device credential.
   "contact.hello": Record<string, never>;
+  // The relays the sender can be reached on, most preferred first. `version`
+  // only grows; an older list is never applied over a newer one. `seen` is the
+  // version of the recipient's own list the sender holds, which confirms it.
+  "contact.relays": { relays: string[]; version: number; seen: number };
   "thread.opened": { goal: string; participants: string[] };
   // Asks the other side to send again events it authored in this thread that
   // never arrived here. Not part of the thread's log: sequence 0, no parents.
@@ -65,6 +70,7 @@ const lanes: Record<EventType, Lane> = {
   "contact.request": "control",
   "contact.accepted": "control",
   "contact.hello": "control",
+  "contact.relays": "control",
   "thread.opened": "control",
   "thread.resend": "control",
   "thread.received": "control",
@@ -80,6 +86,15 @@ const bodies: { [T in EventType]: (b: Record<string, unknown>) => boolean } = {
   "contact.request": (b) => onlyKeys(b, ["token"]) && isId(b.token),
   "contact.accepted": (b) => onlyKeys(b, []),
   "contact.hello": (b) => onlyKeys(b, []),
+  "contact.relays": (b) =>
+    onlyKeys(b, ["relays", "version", "seen"]) &&
+    isInt(b.version) &&
+    isInt(b.seen) &&
+    Array.isArray(b.relays) &&
+    b.relays.length >= 1 &&
+    b.relays.length <= RELAY_LIMITS.names &&
+    b.relays.every(isRelayUrl) &&
+    new Set(b.relays.map((r: string) => relayKey(r))).size === b.relays.length,
   "thread.opened": (b) =>
     onlyKeys(b, ["goal", "participants"]) &&
     isStr(b.goal, 0, LIMITS.goal) &&

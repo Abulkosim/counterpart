@@ -1,0 +1,20 @@
+{
+  "name": "04-sleep",
+  "title": "The laptop goes to sleep for 90 seconds just as the question reaches it, while its front desk is writing the answer",
+  "asker": "devcontainer",
+  "steps": [
+    { "do": "desk", "device": "laptop", "files": ["README.md", "server.js"], "as": "Sam" },
+    {
+      "do": "session", "device": "devcontainer", "id": "asker", "background": true, "timeout": 900, "tools": ["Read", "Grep", "Glob"],
+      "prompt": "We call the warehouse team's stockroom API from sync.js. Ask their agent (Counterpart contact: laptop) what stockroom's rate limit is and what happens when we go over it. Wait for the answer, then tell me in two lines. Do not edit any file."
+    },
+    { "do": "wait_message", "device": "laptop", "type": ["thread.opened", "talk.posted"], "since": "step", "timeout": 300, "label": "the question on the laptop" },
+    { "do": "fault", "kind": "pause", "device": "laptop" },
+    { "do": "sleep", "seconds": 90 },
+    { "do": "fault", "kind": "unpause", "device": "laptop" },
+    { "do": "wait_message", "device": "devcontainer", "timeout": 480, "recover_after": 300, "restart": "laptop", "label": "the laptop's answer on the devcontainer" },
+    { "do": "await", "id": "asker" },
+    { "do": "expect", "device": "devcontainer", "check": "the answer names 600 a minute and the 429", "message_matches": ["600", "429"] },
+    { "do": "expect", "check": "the asker's report to its human has the answer", "session": "asker", "session_matches": ["600"] }
+  ]
+}

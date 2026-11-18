@@ -8,6 +8,8 @@ cd "$(dirname "$0")/.."
 source scripts/smoke-lib.sh
 unset CPART_NO_AUTOSTART
 export CPART_NO_BOOT=1 CPART_PASSPHRASE="correct horse battery"
+# Setup also writes Codex's hooks.json itself, not through the stand-in.
+export CODEX_HOME=$WORK/codex CLAUDE_CONFIG_DIR=$WORK/claude
 
 mkdir -p "$WORK/bin"
 for agent in claude codex; do
@@ -66,7 +68,7 @@ if cpart alice daemon >"$WORK/second.out" 2>&1; then fail "a second daemon start
 grep -q "already running" "$WORK/second.out"
 
 step "alice invites bob; bob joins with one command and no identity"
-JOIN=$(cpart alice invite bob | grep -o 'cpart-invite:[A-Za-z0-9_-]*')
+JOIN=$(cpart alice invite bob --long | grep -o 'cpart-invite:[A-Za-z0-9_-]*')
 # An invite that names a relay on this machine needs a person to say yes.
 if cpart bob join "$JOIN" alice </dev/null >"$WORK/bob.refused" 2>&1; then fail "join used a local relay without asking"; fi
 [ ! -e "$WORK/bob/keys.json" ] || fail "an identity was created before the person agreed"
