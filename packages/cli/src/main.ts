@@ -374,7 +374,7 @@ function status(node: Counterpart): void {
     `Agents    ${hosts.filter((h) => h.found).map((h) => `${h.name}: ${h.registered === "here" ? "has the tools" : h.registered === "elsewhere" ? "has the tools for ANOTHER identity" : "not added (cpart setup adds it)"}`).join("; ") || "neither claude nor codex found on PATH"}`,
     `Contacts  ${contacts.length ? contacts.map((c) => `${c.name}${c.state === "pending" ? " (pending)" : ""}${desks.get(c.name) ? " (front desk on)" : ""}`).join(", ") : "none yet. Pair with: cpart invite <name>"}`,
     `Threads   ${threads.length}${agreed ? `, ${agreed} agreement${agreed > 1 ? "s" : ""} signed by both` : ""}`,
-    `Guard     ${node.guard.off ? "OFF in this shell (CPART_GUARD=off)" : "on"}, ${guard.held} held${guard.unguarded ? `, ${guard.unguarded} sent unchecked that it would have held` : ""}`,
+    `Guard     ${node.guard.off ? "OFF (cpart guard on turns it back on)" : "on"}, ${guard.held} held${guard.unguarded ? `, ${guard.unguarded} sent unchecked that it would have held` : ""}${node.guard.problems().length ? ". Some things are NOT CHECKED: see cpart guard" : ""}`,
     "",
     waiting.length ? `Waiting for you:\n${waiting.join("\n")}` : "Nothing is waiting for you.",
   ];

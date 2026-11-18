@@ -1,8 +1,12 @@
 // `cpart held`, `cpart release`, `cpart drop` and `cpart guard`: what the
-// outbound guard stopped, and the owner's say over it. Releasing, and removing
-// a protection, need the owner at a terminal: the passphrase is read from the
+// outbound guard stopped, and the owner's say over it. Releasing, dropping,
+// adding or removing a never-share file, removing a repository and turning
+// the guard off need the owner at a terminal: the passphrase is read from the
 // keyboard only, never from CPART_PASSPHRASE, so an agent that can run
-// commands on this machine cannot do either.
+// commands on this machine cannot do them. On an identity made without a
+// passphrase nothing can tell the owner from an agent: release and off are
+// refused there, and the rest is allowed, so a missing file cannot stop all
+// sending for good.
 
 import type { Counterpart, Finding, Held } from "@counterpart/daemon";
 
@@ -21,11 +25,13 @@ text from a file you marked never-share is held, not sent.
 
   cpart held [--all]                                              messages held and not sent. --all adds released, dropped and unguarded
   cpart release <id>                                              show it in full and send it. Needs you at a terminal, with your passphrase
-  cpart drop <id>                                                 delete it. Nothing is sent
+  cpart drop <id>                                                 delete it. Nothing is sent. Needs you at a terminal
   cpart guard                                                     what is checked
   cpart guard repo add|remove <path>                              also check the .env files in this repository
   cpart guard never-share add|remove <file>                       hold any message that quotes this file
-                                                                  (remove needs you at a terminal, like release)`;
+  cpart guard off <minutes>                                       send without checking for a while (at most 8 hours)
+  cpart guard on                                                  check again
+  Removing a repository, never-share files and guard off need you at a terminal, like release.`;
 
 const DESCRIBE: Record<string, string> = {
   "private-key": "a private key",
@@ -48,6 +54,15 @@ const HOW: Record<string, string> = {
   hex: "in hex",
   url: "percent-encoded",
   escaped: "with escapes",
+  rot13: "in rot13",
+  folded: "in full-width letters",
+  base32: "in base32",
+  codes: "as character codes",
+  entities: "as HTML character references",
+  octal: "as octal escapes",
+  binary: "in binary",
+  part: "in part",
+  "across messages": "spread over this and earlier messages",
 };
 const how = (h: string): string => h.split(">").map((x) => HOW[x] ?? x).join(", then ");
 
@@ -123,11 +138,17 @@ async function typed(prompt: string, hidden: boolean): Promise<string> {
   }
 }
 
+// The owner at a terminal, on an identity with a passphrase. Without one,
+// nothing can tell the owner from an agent, and nothing is asked.
+async function ownerWhereThereIsOne(node: Counterpart): Promise<void> {
+  if (node.protected) await owner(node);
+}
+
 // The owner, at this terminal, typing their passphrase. An identity without
 // one cannot do this: nothing would tell its owner from an agent that can
 // drive a terminal.
 async function owner(node: Counterpart): Promise<string> {
-  if (!node.protected) throw new Error("this identity was made without a passphrase, so nothing here can tell you from an agent. Held messages cannot be released and protections cannot be removed. Nothing was sent or changed.");
+  if (!node.protected) throw new Error("this identity was made without a passphrase, so nothing here can tell you from an agent, and this cannot be done. Nothing was sent or changed.");
   if (!process.stdin.isTTY) throw new Error("this needs you at a terminal, typing. It does not read CPART_PASSPHRASE. Nothing was sent or changed.");
   const p = await typed("Your passphrase: ", true);
   node.checkPassphrase(p);
@@ -149,6 +170,9 @@ export async function guardCommand(cmd: string, kit: Kit): Promise<void> {
 
   if (cmd === "drop") {
     if (!args[0]) throw new Error("usage: cpart drop <id>");
+    // An agent must not hide its own attempt from the owner.
+    g.find(args[0]);
+    await ownerWhereThereIsOne(node);
     const h = g.drop(args[0]);
     return out(`Dropped ${h.id}. Nothing was sent to ${contactName(node, h.contactRoot)}.`, { id: h.id, state: "dropped" });
   }
@@ -184,14 +208,28 @@ export async function guardCommand(cmd: string, kit: Kit): Promise<void> {
 
   // cpart guard ...
   const [what, verb, path] = args;
+  if (what === "off") {
+    const minutes = Number(verb);
+    if (!verb || !/^\d+$/.test(verb)) throw new Error("usage: cpart guard off <minutes>");
+    if (!node.protected) throw new Error("this identity was made without a passphrase, so nothing here can tell you from an agent, and the guard cannot be turned off. Nothing was changed.");
+    console.error(`Turning the guard off sends everything from this identity unchecked for ${minutes} minute${minutes === 1 ? "" : "s"}, from any program, agents included. Each message is still recorded. End it early with: cpart guard on`);
+    const passphrase = await owner(node);
+    const until = node.guardOff(minutes, passphrase);
+    return out(`The guard is off until ${time(until)}. Turn it back on with: cpart guard on`, { off: true, until });
+  }
+  if (what === "on") {
+    const was = g.clearOff();
+    return out(was ? "The guard is on again." : "The guard was on.", { off: g.off });
+  }
   if (!what || what === "status") {
     const c = g.counts();
+    const until = g.offUntil();
     const repos = g.paths("repo");
     const files = g.paths("never-share");
     return out(
       [
-        `Guard     ${g.off ? "OFF in this process (CPART_GUARD=off). Messages it would hold are sent and recorded" : "on"}`,
-        `Held      ${c.held} message${c.held === 1 ? "" : "s"}${c.unguarded ? `; ${c.unguarded} sent unchecked with CPART_GUARD=off that it would have held` : ""}`,
+        `Guard     ${until !== null ? `OFF until ${time(until)} (cpart guard on turns it back on). Messages it would hold are sent and recorded` : g.off ? "OFF in this process. Messages it would hold are sent and recorded" : "on"}`,
+        `Held      ${c.held} message${c.held === 1 ? "" : "s"}${c.unguarded ? `; ${c.unguarded} sent unchecked while it was off that it would have held` : ""}`,
         "Checks    keys and tokens of known shapes (gitleaks rules), private key blocks, passwords in URLs,",
         "          secret-named variables in the sending program's environment, .env files in the",
         "          sender's repository and in these, and text from these never-share files.",
@@ -199,17 +237,20 @@ export async function guardCommand(cmd: string, kit: Kit): Promise<void> {
         `Never-share ${files.length ? files.map(safe).join(", ") : "none (cpart guard never-share add <file>)"}`,
         ...g.problems().map((p) => `NOT CHECKED ${safe(p)}`),
       ].join("\n"),
-      { off: g.off, ...c, repos, neverShare: files, problems: g.problems() },
+      { off: g.off, offUntil: until, ...c, repos, neverShare: files, problems: g.problems() },
     );
   }
   if ((what !== "repo" && what !== "never-share") || (verb !== "add" && verb !== "remove") || !path) throw new Error(`usage:\n${GUARD_USAGE}`);
   if (verb === "add") {
+    // A never-share file that later goes missing holds everything, so only
+    // the owner may add one; otherwise an agent could add a file and delete it.
+    if (what === "never-share") await ownerWhereThereIsOne(node);
     const abs = g.addPath(what, path);
     return out(what === "repo" ? `Messages that carry a value from a .env file in ${safe(abs)} will be held.` : `Messages that quote ${safe(abs)} will be held.`, { kind: what, path: abs });
   }
   // Taking a protection away is the owner's call, the same as releasing.
   if (!g.paths(what).some((p) => p === path || p.endsWith(`/${path}`))) throw new Error(`${safe(path)} is not on the list. See: cpart guard`);
-  await owner(node);
+  await ownerWhereThereIsOne(node);
   const gone = g.removePath(what, path) || g.removePath(what, g.paths(what).find((p) => p.endsWith(`/${path}`)) ?? path);
   return out(gone ? `Removed ${safe(path)}.` : `${safe(path)} was not on the list.`, { kind: what, path, removed: gone });
 }
