@@ -33,6 +33,21 @@ The code names `ws://127.0.0.1:7447`. Inside a container that is the container i
 
 What was run: this flow on Linux, in `scripts/connectivity-smoke.sh`, with the invite naming `ws://127.0.0.1:PORT` and Bob in a `node:24-slim` container where `host.docker.internal` points at the relay. On that machine a firewall drops traffic from containers to the host, so the relay itself runs in a container with its port published on the host's loopback; each side dials the same names as on a Mac. **Nothing here was run on a Mac.** Docker's documentation says `host.docker.internal` reaches the host from a container on Docker Desktop. Whether it reaches a relay that listens only on 127.0.0.1 there has not been checked. If it does not, start the relay with `--host 0.0.0.0`, which also makes it reachable from your network.
 
+### Checking it on your Mac
+
+`scripts/mac-check.sh` answers that question on a real Mac. It needs Docker Desktop running and Node 24, takes about 10 minutes, and ends with a report to paste back:
+
+```sh
+./install.sh              # once, if this checkout has no node_modules yet
+./scripts/mac-check.sh
+```
+
+It starts a relay on 127.0.0.1 only, makes an identity on the Mac with `cpart setup`, and makes one in a `node:24-slim` container with `cpart join` and the code `cpart invite` printed. If the container cannot reach the relay through `host.docker.internal`, it restarts the relay on `0.0.0.0` and tries again. Then it times messages both ways and restarts the relay to count what is lost. Two steps ask first: installing the launchd agent and killing its daemon to see launchd start it again, and putting the Mac to sleep for a minute.
+
+It leaves nothing behind. Both identities and the relay database live in a temp directory that is removed at the end. It uses `--no-agents`, points `CLAUDE_CONFIG_DIR` and `CODEX_HOME` at empty temp directories, and never reads or writes `~/.counterpart`. The relay, the daemons and the containers are stopped, and the image is removed if the script pulled it. The launchd step writes a plist in `~/Library/LaunchAgents` and removes it; launchd itself keeps a note that the label was enabled and then disabled.
+
+What was run: the script on Linux (x86_64, Docker Engine 29.9.2, node 24.22.2), not Docker Desktop. Steps 1 to 6 ran for real. `host.docker.internal` did not reach the relay on 127.0.0.1 or on 0.0.0.0 there, because this machine's firewall drops traffic from containers to the host. On Docker without Docker Desktop the script then runs the container on the host's network so the later steps still run, and says so in the report. Steps 5 and 6 passed: over four runs, messages showed in the other side's `cpart log` 1.1 to 1.6 s after the send began, and 12 sent around a relay restart arrived with none lost. Step 7 ran against a stand-in `launchctl` that keeps a job alive the way `KeepAlive` does, with `uname` saying Darwin and node told it was on darwin: setup installed the plist, the daemon came back after SIGKILL, and `cpart down` removed it. That shows the script's own logic, not launchd. Step 8 ran with the host daemon stopped by SIGSTOP and the container paused for 40 seconds: both logged the wake, logged in again about 6.5 s after Enter, and nothing was lost. Ctrl-C during the container install and during step 5 left no container, process or temp directory behind. **Nothing has run on a Mac.**
+
 ## Several relays
 
 ```sh
@@ -130,4 +145,4 @@ Not tested: a real laptop sleeping, real Wi-Fi, macOS, a relay behind a real tun
 | `KeepAlive` | true | start again if it exits |
 | `StandardOutPath`, `StandardErrorPath` | `<home>/daemon.log`, absolute | the same log as the other ways of running it |
 
-It parsed, with a home path containing `&`, `<`, `>` and a space. Comparing the parsed fields with the code turned up one fault, now fixed: the log paths were written as given, so a relative `CPART_HOME` would have given launchd a relative path (the systemd unit already made them absolute). A relative home was not run through the check itself. Not checked: that launchd accepts the file, that `launchctl load -w` still works on current macOS (Apple lists `bootstrap` as its replacement), and what happens on sleep and wake under launchd.
+It parsed, with a home path containing `&`, `<`, `>` and a space. Comparing the parsed fields with the code turned up one fault, now fixed: the log paths were written as given, so a relative `CPART_HOME` would have given launchd a relative path (the systemd unit already made them absolute). A relative home was not run through the check itself. Not checked: that launchd accepts the file, that `launchctl load -w` still works on current macOS (Apple lists `bootstrap` as its replacement), and what happens on sleep and wake under launchd. Step 7 of `scripts/mac-check.sh` checks the first two on a Mac.
