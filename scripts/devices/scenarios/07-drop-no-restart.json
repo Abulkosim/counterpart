@@ -1,0 +1,20 @@
+{
+  "name": "07-drop-no-restart",
+  "title": "No model: after a network drop and a new address, does a message ever arrive without a restart? Takes up to 30 minutes",
+  "asker": "devcontainer",
+  "sessions": false,
+  "long": true,
+  "steps": [
+    { "do": "cpart", "device": "devcontainer", "args": ["open", "laptop", "long drop check"] },
+    { "do": "cpart", "device": "devcontainer", "args": ["say", "laptop", "before the drop"] },
+    { "do": "wait_message", "device": "laptop", "text": "before the drop", "timeout": 30, "label": "the first message on the laptop" },
+    { "do": "fault", "kind": "disconnect", "device": "laptop" },
+    { "do": "sleep", "seconds": 20 },
+    { "do": "fault", "kind": "connect", "device": "laptop" },
+    { "do": "cpart", "device": "devcontainer", "args": ["say", "laptop", "after the drop"] },
+    { "do": "wait_message", "device": "laptop", "text": "after the drop", "timeout": 600, "required": false, "label": "a message sent after the laptop came back, with nobody restarting anything" },
+    { "do": "cpart", "device": "laptop", "args": ["say", "devcontainer", "the laptop speaks first"] },
+    { "do": "wait_message", "device": "devcontainer", "text": "speaks first", "timeout": 1200, "required": false, "label": "the laptop's own message, once it has something to send" },
+    { "do": "wait_message", "device": "laptop", "text": "after the drop", "timeout": 60, "recover_after": 1, "label": "the devcontainer's message, after a restart by hand if still needed" }
+  ]
+}

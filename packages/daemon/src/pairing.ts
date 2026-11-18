@@ -269,7 +269,7 @@ export class PairingEngine {
       }
     }
     this.link.on("pair", this.onFrame);
-    this.link.on("ready", this.onReady);
+    this.link.on("homeReady", this.onReady);
     this.timer = setInterval(() => this.tick(), this.pollMs);
     this.timer.unref();
     return this;
@@ -280,7 +280,7 @@ export class PairingEngine {
     this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.link.off("pair", this.onFrame);
-    this.link.off("ready", this.onReady);
+    this.link.off("homeReady", this.onReady);
     // A contact being added finishes before the store closes.
     await Promise.allSettled([...this.pending]);
     this.store.wipe();
@@ -340,7 +340,7 @@ export class PairingEngine {
       this.store.prune();
       const t = this.now();
       for (const r of this.store.live()) {
-        if (r.relay !== this.node.relay) {
+        if (r.relay !== this.node.relayName) {
           this.fail(r, "This pairing names another relay than this identity uses.");
           continue;
         }
@@ -364,7 +364,7 @@ export class PairingEngine {
           this.fail(r, r.role === "inviter" && r.state === "requested" ? "The relay did not give out a code in time." : "The code expired before the pairing finished. Nothing was paired.", { close: true });
           continue;
         }
-        if (!this.link.online || (r.state !== "requested" && r.state !== "claiming")) continue;
+        if (!this.link.homeOnline || (r.state !== "requested" && r.state !== "claiming")) continue;
         const a = this.asked.get(r.id);
         if (a && t - a.at < REQUEST_RETRY) continue;
         if (a && a.tries >= REQUEST_TRIES) {
@@ -409,7 +409,7 @@ export class PairingEngine {
           return;
         }
         const words = randomWords();
-        const run = new InviterRun({ relay: this.node.relay, nameplate: n, words, credential: this.node.device.credential, now: this.now });
+        const run = new InviterRun({ relay: this.node.relayName, nameplate: n, words, credential: this.node.device.credential, now: this.now });
         this.runs.set(r.id, { inviter: run });
         const expiresAt = typeof f.expiresAt === "number" ? Math.min(f.expiresAt, this.now() + 10 * 60_000) : this.now() + 10 * 60_000;
         this.store.set(r.id, { state: "open", nameplate: n, words: words.join("-"), expires_at: expiresAt });
@@ -518,7 +518,7 @@ export class PairingEngine {
 
   private joinerGot(r: Row, m: PairMsg): void {
     if (m.k === "a" && (r.state === "claiming" || r.state === "claimed") && !this.runs.has(r.id)) {
-      const run = new JoinerRun({ relay: this.node.relay, nameplate: r.nameplate!, words: r.words!.split("-"), credential: this.node.device.credential, now: this.now });
+      const run = new JoinerRun({ relay: this.node.relayName, nameplate: r.nameplate!, words: r.words!.split("-"), credential: this.node.device.credential, now: this.now });
       this.runs.set(r.id, { joiner: run });
       const step = run.answer(m);
       if (!step.ok) return this.fail(r, pairFailureText(step.why, "joiner"), { tell: step.why, close: true });
@@ -540,7 +540,7 @@ export class PairingEngine {
       // The sealed invite must name the same person and relay the code proved.
       try {
         const inv = decodeInvite(step.invite, this.now());
-        if (canonicalize(inv.credential) !== canonicalize(step.peer) || inv.relay !== this.node.relay) throw new Error("mismatch");
+        if (canonicalize(inv.credential) !== canonicalize(step.peer) || inv.relay !== this.node.relayName) throw new Error("mismatch");
       } catch {
         return this.fail(r, pairFailureText("bad-message", "joiner"), { tell: "bad-message", close: true });
       }

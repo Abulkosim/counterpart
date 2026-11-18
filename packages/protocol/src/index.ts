@@ -13,3 +13,4 @@ export * from "./relay-frames.ts";
 export * from "./pake.ts";
 export * from "./wordlist.ts";
 export * from "./pake-pairing.ts";
+export * from "./relays.ts";

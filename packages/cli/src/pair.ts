@@ -39,11 +39,11 @@ export async function inviteByCode(node: Counterpart, name: string, io: Io, opts
   if (!opts.daemon) return false;
   const store = new PairingStore(node.home);
   try {
-    const id = store.requestInvite(name, node.relay);
+    const id = store.requestInvite(name, node.relayName);
     const got = await watch(store, id, 15_000, (v) => v.state !== "requested");
     if (got.state === "requested" || (got.state === "failed" && got.detail?.startsWith(OLD_RELAY))) return false;
     if (got.state === "failed" || !got.code) throw new Error(got.detail ?? "no code was made");
-    const full = codeWithRelay(got.nameplate!, got.code.split("-").slice(1), node.relay);
+    const full = codeWithRelay(got.nameplate!, got.code.split("-").slice(1), node.relayName);
     const line = `cpart join ${full} <your name>`;
     io.out(
       [
@@ -52,9 +52,9 @@ export async function inviteByCode(node: Counterpart, name: string, io: Io, opts
         "",
         `  ${line}`,
         "",
-        `Reading it aloud? The number and words are what matter. If ${name} already uses ${io.safe(node.relay)}, the code alone is enough.`,
+        `Reading it aloud? The number and words are what matter. If ${name} already uses ${io.safe(node.relayName)}, the code alone is enough.`,
       ].join("\n"),
-      { id, code: got.code, full, line, nameplate: got.nameplate, relay: node.relay, expiresAt: got.expiresAt },
+      { id, code: got.code, full, line, nameplate: got.nameplate, relay: node.relayName, expiresAt: got.expiresAt },
     );
     if (!opts.wait) return true;
     io.note(`\nWaiting for ${name}. Ctrl-C stops waiting; your daemon still finishes the pairing, and cpart status shows how it went.`);
@@ -84,8 +84,8 @@ export async function joinByCode(home: string, input: string, name: string, io: 
   if (node.contacts().some((c) => c.name === name)) throw new Error(`you already have a contact named ${name}. Pick another name.`);
   const store = new PairingStore(home);
   try {
-    const id = store.requestJoin(code, name, node.relay);
-    io.note(`\nChecking the code with ${io.safe(node.relay)}`);
+    const id = store.requestJoin(code, name, node.relayName);
+    io.note(`\nChecking the code with ${io.safe(node.relayName)}`);
     const end = await watch(store, id, 120_000, (v) => v.state === "done" || v.state === "failed");
     const c = node.contacts().find((x) => x.name === name);
     if (end.state === "done" && c) {

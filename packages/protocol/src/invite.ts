@@ -2,6 +2,7 @@ import { b64u, unb64u } from "./bytes.ts";
 import { canonicalBytes, parseCanonical } from "./canonical.ts";
 import { isId, isInt, isObject, isStr, onlyKeys } from "./check.ts";
 import { type DeviceCredential, verifyCredential } from "./identity.ts";
+import { isRelayUrl } from "./relays.ts";
 
 // Handed to the other human out of band. The token is single use and proves the
 // request came from whoever received the invite.
@@ -22,10 +23,8 @@ export function decodeInvite(s: string, now = Date.now()): Invite {
   const x = parseCanonical(unb64u(s.slice(PREFIX.length).trim()));
   if (!isObject(x) || !onlyKeys(x, ["v", "relay", "credential", "token", "expiresAt"])) throw new Error("invite: shape");
   if (x.v !== 1 || !isStr(x.relay, 1, 512) || !isId(x.token) || !isInt(x.expiresAt)) throw new Error("invite: fields");
-  // The address is shown to a person and stored. Nothing invisible, no spaces.
-  if (!/^[\x21-\x7e]+$/.test(x.relay)) throw new Error("invite: relay has characters that cannot be shown");
-  const url = new URL(x.relay);
-  if (url.protocol !== "ws:" && url.protocol !== "wss:") throw new Error("invite: relay must be ws or wss");
+  // The address is shown to a person, stored, and printed in commands to run.
+  if (!isRelayUrl(x.relay)) throw new Error("invite: relay must be a plain ws:// or wss:// address");
   if (x.expiresAt <= now) throw new Error("invite: expired");
   return { v: 1, relay: x.relay, credential: verifyCredential(x.credential, now), token: x.token, expiresAt: x.expiresAt };
 }

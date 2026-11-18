@@ -1,0 +1,16 @@
+{
+  "name": "01-ask",
+  "title": "The devcontainer's agent asks a question only the laptop's repo can answer; the laptop's front desk answers",
+  "asker": "devcontainer",
+  "steps": [
+    { "do": "desk", "device": "laptop", "files": ["README.md", "server.js"], "as": "Sam" },
+    {
+      "do": "session", "device": "devcontainer", "id": "asker", "background": true, "timeout": 900, "tools": ["Read", "Grep", "Glob"],
+      "prompt": "sync.js pulls items from the warehouse team's stockroom API. Their agent is reachable through Counterpart; the contact is called laptop. Ask it whether the way sync.js pages through items is right: what stockroom does with page_size=500, and what next_cursor looks like on the last page. Wait for the answer. Then tell me in a few lines what to change in sync.js. Do not edit any file."
+    },
+    { "do": "wait_message", "device": "devcontainer", "timeout": 600, "label": "the laptop's answer on the devcontainer" },
+    { "do": "await", "id": "asker" },
+    { "do": "expect", "device": "devcontainer", "check": "the answer names the 200 limit and the null cursor", "message_matches": ["200", "null"] },
+    { "do": "expect", "check": "the asker's report to its human names both", "session": "asker", "session_matches": ["200", "null"] }
+  ]
+}
