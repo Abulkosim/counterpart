@@ -40,6 +40,16 @@ export interface Ask {
 const DAY = 24 * 3600 * 1000;
 const NOTICES_PER_DAY = 3;
 const ROUNDS = 3;
+// How long the desk waits, after a contact opens a thread and sends nothing,
+// before it takes the goal as the question. Agents often open a thread and
+// send their first message one model turn later; this keeps the desk from
+// answering the goal and then the message.
+export const GOAL_WAIT_MS = 20_000;
+// Only a goal with a question mark is taken as a question. Agents are told to
+// make the goal a short title, like "Orders API", and to ask in a message; a
+// title answered on its own gets a reply that answers nothing and passes the
+// owner a question nobody asked.
+export const goalAsks = (goal: string): boolean => /[?\uff1f\u061f]/.test(goal);
 
 // Answers a contact's questions while the owner is away, from the approved
 // bundle or the files the owner shared from a repository, nothing else. It replies in threads the contact opened, never in ones the
@@ -55,6 +65,7 @@ export class FrontDesk {
   private forbidden: string[];
   private preparer: Preparer;
   private closed = false;
+  private goalWaitMs: number;
   onError: (e: Error) => void = () => {};
   // Called after each run is recorded, so the daemon can log it.
   onRun: (run: { outcome: Run["outcome"]; contact: string; threadId: string; detail: string | null }) => void = () => {};
@@ -62,7 +73,8 @@ export class FrontDesk {
   // `forbidden` are exact strings that must never appear in a reply, such as
   // values the model runtime adds to its own context. A reply containing one is
   // dropped. This catches accidents and plain leaks, not a determined encoder.
-  constructor(node: Counterpart, model: Model, opts: { now?: () => number; forbidden?: string[]; prepareTimeoutMs?: number } = {}) {
+  constructor(node: Counterpart, model: Model, opts: { now?: () => number; forbidden?: string[]; prepareTimeoutMs?: number; goalWaitMs?: number } = {}) {
+    this.goalWaitMs = opts.goalWaitMs ?? GOAL_WAIT_MS;
     this.preparer = new Preparer(opts.prepareTimeoutMs !== undefined ? { timeoutMs: opts.prepareTimeoutMs } : {});
     this.forbidden = (opts.forbidden ?? []).filter((f) => f.length >= 4).map((f) => f.toLowerCase());
     this.node = node;
@@ -85,6 +97,7 @@ export class FrontDesk {
         contact_root TEXT NOT NULL, day INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0, notices INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (contact_root, day)
       );
       CREATE TABLE IF NOT EXISTS state (k TEXT PRIMARY KEY, v INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS goal_wait (thread_id TEXT PRIMARY KEY, due INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS runs (
         id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, contact_root TEXT NOT NULL, thread_id TEXT NOT NULL,
         outcome TEXT NOT NULL, bundle_hash TEXT, files TEXT NOT NULL, reply_event_id TEXT, ms INTEGER NOT NULL, detail TEXT
@@ -211,10 +224,13 @@ export class FrontDesk {
     let cursor = (this.db.prepare("SELECT v FROM state WHERE k = 'cursor'").get() as { v: number } | undefined)?.v ?? 0;
     for (;;) {
       const batch = this.node.since(cursor, 200);
-      if (batch.length === 0) return;
+      if (batch.length === 0) break;
       const threads = new Set<string>();
       for (const e of batch) {
         if (!e.mine && e.type === "talk.posted") threads.add(e.threadId);
+        // A thread the contact opened while the desk was on for them: if no
+        // message follows, a goal that asks something is the question.
+        if (!e.mine && e.type === "thread.opened" && this.waitsForGoal(e.threadId)) this.db.prepare("INSERT OR IGNORE INTO goal_wait (thread_id, due) VALUES (?, ?)").run(e.threadId, this.now() + this.goalWaitMs);
         cursor = e.ord!;
       }
       // If we crash mid-batch the cursor has not moved and these threads are
@@ -222,15 +238,31 @@ export class FrontDesk {
       for (const t of threads) await this.answer(t);
       this.db.prepare("INSERT INTO state (k, v) VALUES ('cursor', ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v").run(cursor);
     }
+    // Threads whose wait is over. One where a message came meanwhile was
+    // answered above and has nothing left to answer. The row goes only after
+    // the answer, so a crash in between looks at the thread again.
+    const due = this.db.prepare("SELECT thread_id FROM goal_wait WHERE due <= ? ORDER BY due").all(this.now()) as { thread_id: string }[];
+    for (const { thread_id } of due) {
+      if (this.closed) return;
+      await this.answer(thread_id, true);
+      this.db.prepare("DELETE FROM goal_wait WHERE thread_id = ?").run(thread_id);
+    }
   }
 
-  private async answer(threadId: string): Promise<void> {
+  private waitsForGoal(threadId: string): boolean {
+    const t = this.node.threads().find((x) => x.id === threadId);
+    return !!t && !t.openedByMe && goalAsks(t.goal) && this.config(t.contact).enabled;
+  }
+
+  private async answer(threadId: string, goalDue = false): Promise<void> {
     // Messages can arrive while the model is working; go round again for them.
-    for (let round = 0; round < ROUNDS; round++) if (!(await this.answerOnce(threadId))) return;
+    for (let round = 0; round < ROUNDS; round++) if (!(await this.answerOnce(threadId, goalDue))) return;
   }
 
   // Returns true when the thread should be looked at again straight away.
-  private async answerOnce(threadId: string): Promise<boolean> {
+  // `goalDue`: the contact opened this thread a while ago; if they have sent
+  // nothing since, the goal is taken as their question.
+  private async answerOnce(threadId: string, goalDue: boolean): Promise<boolean> {
     const thread = this.node.threads().find((t) => t.id === threadId);
     if (!thread || thread.openedByMe) return false;
     const cfg = this.config(thread.contact);
@@ -252,10 +284,17 @@ export class FrontDesk {
     }
 
     const waiting = log.filter((e) => !e.mine && e.type === "talk.posted" && e.ord! > use.answered_ord);
-    if (waiting.length === 0) return false;
+    // The goal counts as the question only when the thread holds nothing else
+    // from the contact: no message, no proposal. It is untrusted text from the
+    // contact, like a message, and takes a slot like one.
+    const opened = log.find((e) => e.type === "thread.opened");
+    const goalOnly = waiting.length === 0 && goalDue && goalAsks(thread.goal) && !!opened && !opened.mine && opened.ord! > use.answered_ord && log.filter((e) => !e.mine).length === 1;
+    if (waiting.length === 0 && !goalOnly) return false;
+    const question = goalOnly ? opened! : waiting.at(-1)!;
     const inputOrd = log.at(-1)!.ord!;
     const ownerSpokeAfter = (ord: number): boolean => applied().some((e) => e.mine && !isDesk(e) && e.type === "talk.posted" && e.ord! > ord);
-    if (ownerSpokeAfter(waiting.at(-1)!.ord!)) {
+    const theyWroteAfter = (ord: number): boolean => applied().some((e) => !e.mine && e.type === "talk.posted" && e.ord! > ord);
+    if (ownerSpokeAfter(question.ord!)) {
       setAnswered(inputOrd);
       return false;
     }
@@ -284,7 +323,7 @@ export class FrontDesk {
       return false;
     }
 
-    const latest = (waiting.at(-1)!.body as { text: string }).text;
+    const latest = goalOnly ? thread.goal : (question.body as { text: string }).text;
     let material: Material | null;
     try {
       material = await this.preparer.run(this.node.home, contact, cfg.owner, queryFrom(thread.goal, log));
@@ -305,7 +344,7 @@ export class FrontDesk {
 
     let raw: string;
     try {
-      raw = await this.model({ system: material.system, prompt: userPrompt(contact.name, thread.goal, log) });
+      raw = await this.model({ system: material.system, prompt: userPrompt(contact.name, thread.goal, log, goalOnly) });
     } catch (e) {
       // The slot stays spent: a peer must not get free retries by making the model fail.
       record("failed", { bundleHash: material.hash, detail: (e as Error).message.slice(0, 300) });
@@ -323,6 +362,13 @@ export class FrontDesk {
       record("failed", { bundleHash: material.hash, detail: "owner replied first" });
       setAnswered(applied().at(-1)!.ord!);
       return false;
+    }
+    // The contact sent a message while the goal was being answered. Answer
+    // that instead, with the goal still in view, so they get one reply, not two.
+    // The slot stays spent, as for any run.
+    if (goalOnly && theyWroteAfter(inputOrd)) {
+      record("failed", { bundleHash: material.hash, detail: "a message followed the goal; answering that instead" });
+      return true;
     }
 
     const lowered = raw.toLowerCase();
