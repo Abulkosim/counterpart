@@ -18,6 +18,16 @@ const VERSION = "0.2.0";
 export const pluginRoot = (home: string): string => join(resolve(home), "claude-plugin");
 const pluginDir = (home: string): string => join(pluginRoot(home), PLUGIN);
 
+// Two paths name the same folder, after links. One that does not exist is compared as written.
+const real = (p: string): string => {
+  try {
+    return realpathSync(p);
+  } catch {
+    return resolve(p);
+  }
+};
+const samePath = (a: string, b: string): boolean => real(a) === real(b);
+
 // For a shell: Claude Code runs a hook's command line with sh.
 const sh = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
 
@@ -82,7 +92,7 @@ export function claudeHooks(home: string): HooksState {
   }
   const p = list.find((x) => x.id === ID && x.scope === "user");
   if (!p) return { found: true, state: "no" };
-  const mine = p.readFromFolder !== undefined && resolve(p.readFromFolder) === pluginDir(home);
+  const mine = p.readFromFolder !== undefined && samePath(p.readFromFolder, pluginDir(home));
   return { found: true, state: mine ? "here" : "elsewhere", ...(p.enabled !== undefined ? { enabled: p.enabled } : {}), ...(p.version ? { version: p.version } : {}) };
 }
 
@@ -129,7 +139,7 @@ export function installClaudeHooks(home: string): HooksResult {
   // A marketplace left from another home (its plugin uninstalled, or the home
   // deleted) makes the install fail. Nothing uses it, so it goes.
   const old = marketPath();
-  if (old !== undefined && resolve(old) !== pluginRoot(home)) {
+  if (old !== undefined && !samePath(old, pluginRoot(home))) {
     if (marketInUse()) return { ...before, changed: "none", error: `the ${MARKET} marketplace is in use from ${old}` };
     const m = claude(["plugin", "marketplace", "remove", MARKET]);
     if (m.status !== 0) return { ...before, changed: "none", error: firstLine(m) };
