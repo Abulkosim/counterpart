@@ -43,11 +43,20 @@ const TRIES = 8;
 const KEEP_TRYING = 7 * 24 * 3600_000; // past TRIES, hourly until a week after the change
 const SPACING = 5_000; // at most one list to a contact in this time
 
+// What keeps a move from finishing besides contacts (see `waits`).
+export interface MoveWaits {
+  invites: { name: string; expiresAt: number }[]; // unused invites that name a leaving relay
+  pending: string[]; // contacts whose pairing goes through a leaving relay
+  offline: string[]; // leaving relays the daemon is not connected to: they may hold mail
+}
+
 export class RelayBook {
   private db: DatabaseSync;
+  private seed: string;
 
   constructor(db: DatabaseSync, created: string) {
     this.db = db;
+    this.seed = created;
     db.exec(`
       CREATE TABLE IF NOT EXISTS my_relays (
         url TEXT PRIMARY KEY, as_name TEXT, home INTEGER NOT NULL DEFAULT 0, leaving INTEGER NOT NULL DEFAULT 0, ord INTEGER NOT NULL
@@ -58,6 +67,7 @@ export class RelayBook {
         reply INTEGER NOT NULL DEFAULT 0, sent_at INTEGER NOT NULL DEFAULT 0, sent_version INTEGER NOT NULL DEFAULT 0, tries INTEGER NOT NULL DEFAULT 0
       );
       CREATE TABLE IF NOT EXISTS relay_status (url TEXT PRIMARY KEY, connected INTEGER NOT NULL, at INTEGER NOT NULL, error TEXT);
+      CREATE TABLE IF NOT EXISTS invite_relays (token TEXT PRIMARY KEY, relay TEXT NOT NULL);
     `);
     // Identities made before there could be several relays had exactly one:
     // the one in keys.json. Two processes may get here at once.
@@ -263,11 +273,36 @@ export class RelayBook {
   // or null if someone is not ready.
   finishMove(active: () => { rootKey: string; relay: string }[], version: number, now: number): string[] | null {
     return this.atomic(() => {
-      if (this.version() !== version || this.unconfirmed(active()).length) return null;
+      if (this.version() !== version || this.unconfirmed(active()).length || waiting(this.waits(now))) return null;
       const gone = this.leaving().map((r) => r.url);
       for (const url of gone) this.removeIn(url, now);
       return gone;
     });
+  }
+
+  // The relay an invite named, so a move knows which invites still need it.
+  invited(token: string, relay: string): void {
+    this.db.prepare("INSERT OR REPLACE INTO invite_relays (token, relay) VALUES (?, ?)").run(token, relay);
+  }
+
+  // Besides contacts, what still needs a leaving relay. An unused invite names
+  // it, so the request it brings arrives there. A pairing I started goes
+  // through it, so the answer arrives there. And mail sent while the daemon
+  // was away waits on it until the daemon logs in again. Invites from before
+  // this table named the relay the identity was made on.
+  waits(now: number): MoveWaits {
+    const out: MoveWaits = { invites: [], pending: [], offline: [] };
+    if (!this.leaving().length) return out;
+    const leaving = (u: string): boolean => !!this.find(u)?.leaving;
+    const invites = this.db
+      .prepare("SELECT i.name, i.expires_at, COALESCE(r.relay, ?) AS relay FROM invites i LEFT JOIN invite_relays r ON r.token = i.token WHERE i.used_by IS NULL AND i.expires_at > ?")
+      .all(this.seed, now) as { name: string; expires_at: number; relay: string }[];
+    out.invites = invites.filter((i) => leaving(i.relay)).map((i) => ({ name: i.name, expiresAt: i.expires_at }));
+    const pending = this.db.prepare("SELECT name, relay FROM contacts WHERE state = 'pending'").all() as { name: string; relay: string }[];
+    out.pending = pending.filter((c) => leaving(c.relay)).map((c) => c.name);
+    const up = new Set(this.status().filter((s) => s.connected).map((s) => s.url));
+    out.offline = this.leaving().filter((r) => !up.has(r.url)).map((r) => r.url);
+    return out;
   }
 
   sent(root: string, version: number, now: number): void {
@@ -347,3 +382,5 @@ export class RelayBook {
     return (this.db.prepare("SELECT url, connected, at, error FROM relay_status").all() as { url: string; connected: number; at: number; error: string | null }[]).map((r) => ({ url: r.url, connected: !!r.connected, at: r.at, error: r.error }));
   }
 }
+
+export const waiting = (w: MoveWaits): boolean => w.invites.length + w.pending.length + w.offline.length > 0;

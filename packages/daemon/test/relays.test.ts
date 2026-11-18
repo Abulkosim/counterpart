@@ -141,6 +141,30 @@ test("a relay that is the only one shared with a contact is named before it is r
   assert.deepEqual(alice.relayBook.onlyVia([onlyB], "ws://127.0.0.1:2/"), ["only-b"], "however it is spelled");
 });
 
+test("a move waits for invites and pairings that still need the old relay, and for mail held there", async () => {
+  const r1 = await relay();
+  const r2 = await relay();
+  const alice = await person(r1.url);
+  const carol = await person(r1.url); // never online, so the pairing stays pending
+  alice.createInvite("dave");
+  await alice.acceptInvite(carol.createInvite("alice"), "carol");
+  const { version } = alice.relayBook.moveHome(r2.url, null, Date.now());
+  const w = alice.relayBook.waits(Date.now());
+  assert.deepEqual(w.invites.map((i) => i.name), ["dave"]);
+  assert.deepEqual(w.pending, ["carol"]);
+  assert.deepEqual(w.offline, [r1.url], "the daemon has not logged in to the old relay since");
+  const active = (): { rootKey: string; relay: string }[] => alice.contacts().filter((c) => c.state === "active");
+  assert.deepEqual(alice.relayBook.unconfirmed(active()), [], "no active contact holds it up");
+  assert.equal(alice.relayBook.finishMove(active, version, Date.now()), null);
+  // An invite made after the move names the new home and holds nothing up.
+  alice.createInvite("erin");
+  assert.deepEqual(alice.relayBook.waits(Date.now()).invites.map((i) => i.name), ["dave"]);
+  assert.deepEqual(alice.relayBook.waits(Date.now() + 2 * 24 * 3600_000).invites, [], "an expired invite stops counting");
+  const la = connect(alice);
+  await until("alice on both relays", () => la.connected().length === 2);
+  assert.deepEqual(alice.relayBook.waits(Date.now()).offline, []);
+});
+
 test("an invite matches the relay however either side spelled it", async () => {
   const r = await relay();
   const alice = await person(`${r.url}/`);

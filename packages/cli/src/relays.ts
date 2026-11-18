@@ -1,7 +1,7 @@
 // `cpart relay add|remove|move|list`, what the daemon prints about its
 // connections, and finding a relay from inside a container.
 import { existsSync } from "node:fs";
-import type { Counterpart, RelayLink } from "@counterpart/daemon";
+import { type Counterpart, type RelayLink, waiting } from "@counterpart/daemon";
 import { isRelayUrl, relayKey } from "@counterpart/protocol";
 
 export const RELAY_SUBCOMMANDS = ["add", "remove", "move", "list"];
@@ -183,22 +183,31 @@ export async function relayCommand(node: Counterpart, args: string[], io: Io): P
     if (!(await io.ensureDaemon())) io.note("Your daemon is not running, so nobody can be told. Start it with cpart up, then run this again.");
     const end = Date.now() + wait * 1000;
     let left = book.unconfirmed(active());
-    while (left.length && Date.now() < end) {
+    let w = book.waits(Date.now());
+    while ((left.length || waiting(w)) && Date.now() < end) {
       await new Promise((r) => setTimeout(r, 500));
       left = book.unconfirmed(active());
+      w = book.waits(Date.now());
     }
-    const gone = left.length ? null : book.finishMove(active, version, Date.now());
+    const gone = left.length || waiting(w) ? null : book.finishMove(active, version, Date.now());
     if (!gone) {
       left = book.unconfirmed(active());
-      const why = active()
-        .filter((c) => left.includes(c.rootKey))
-        .map((c) => {
-          const t = book.their(c.rootKey, c.relay);
-          return `  ${c.name}: ${t.seen < book.version() ? "has not confirmed your new list yet" : `does not use ${safe(book.home())} or another relay you keep. They need to run: cpart relay add ${safe(book.home())}`}`;
-        });
+      w = book.waits(Date.now());
+      const old = leaving.map((r) => safe(r.url)).join(", ");
+      const why = [
+        ...active()
+          .filter((c) => left.includes(c.rootKey))
+          .map((c) => {
+            const t = book.their(c.rootKey, c.relay);
+            return `  ${safe(c.name)}: ${t.seen < book.version() ? "has not confirmed your new list yet" : `does not use ${safe(book.home())} or another relay you keep. They need to run: cpart relay add ${safe(book.home())}`}`;
+          }),
+        ...w.invites.map((i) => `  your unused invite for ${safe(i.name)} names ${old}. It stops counting once used, or when it runs out at ${new Date(i.expiresAt).toISOString().slice(0, 16).replace("T", " ")} UTC`),
+        ...w.pending.map((n) => `  your pairing with ${safe(n)} has not completed, and its answer comes through ${old}`),
+        ...w.offline.map((u) => `  your daemon is not connected to ${safe(u)}, which may still hold mail for you`),
+      ];
       return io.out(
-        `Not finished. ${why.length ? `Waiting for:\n${why.join("\n")}` : "Your relay list changed while waiting."}\nYour daemon keeps ${leaving.map((r) => safe(r.url)).join(", ")} meanwhile. Run the same command again later to finish, or drop the old relay now (anyone listed above may then not get your messages): cpart relay remove ${leaving.map((r) => safe(r.url)).join(" ")}`,
-        { home: book.home(), done: false, unconfirmed: active().filter((c) => left.includes(c.rootKey)).map((c) => c.name) },
+        `Not finished. ${why.length ? `Waiting for:\n${why.join("\n")}` : "Your relay list changed while waiting."}\nYour daemon keeps ${old} meanwhile. Run the same command again later to finish, or drop the old relay now (anything listed above may then be lost): cpart relay remove ${leaving.map((r) => safe(r.url)).join(" ")}`,
+        { home: book.home(), done: false, unconfirmed: active().filter((c) => left.includes(c.rootKey)).map((c) => c.name), ...w },
       );
     }
     return io.out(`Done. Every contact confirmed. ${gone.map(safe).join(", ")} removed; your daemon tells contacts that too.`, { home: book.home(), done: true, removed: gone });

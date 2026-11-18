@@ -343,10 +343,14 @@ export class Counterpart {
     if (this.db.prepare("SELECT 1 FROM contacts WHERE name = ?").get(name)) throw new Error(`contact "${name}" already exists`);
     const token = randomId();
     const expiresAt = this.now() + ttlMs;
-    this.db.prepare("INSERT INTO invites (token, name, expires_at) VALUES (?, ?, ?)").run(token, name, expiresAt);
     // The name others know the home relay by, which is not the one this machine
     // dials when it reaches the relay another way (from a container, say).
-    return encodeInvite({ v: 1, relay: this.relayBook.homeName(), credential: this.keys.device.credential, token, expiresAt });
+    const relay = this.relayBook.homeName();
+    this.tx(() => {
+      this.db.prepare("INSERT INTO invites (token, name, expires_at) VALUES (?, ?, ?)").run(token, name, expiresAt);
+      this.relayBook.invited(token, relay);
+    });
+    return encodeInvite({ v: 1, relay, credential: this.keys.device.credential, token, expiresAt });
   }
 
   async acceptInvite(invite: string, name: string): Promise<Contact> {

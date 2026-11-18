@@ -66,7 +66,7 @@ The 30 second wait is there because a relay that restarts must not send someone'
 
 ### Moving
 
-`cpart relay move <url>` makes `<url>` your home relay and keeps the old one, marked leaving, still connected. It then waits (60 seconds, or `--wait`) until every contact has confirmed your new list **and** uses a relay you are keeping. Then it drops the old relay. If someone has not, it says who and why and keeps the old relay; run the same command again later, or `cpart relay remove` the old one if you accept they may miss your mail.
+`cpart relay move <url>` makes `<url>` your home relay and keeps the old one, marked leaving, still connected. It then waits (60 seconds, or `--wait`) until every contact has confirmed your new list **and** uses a relay you are keeping. It also waits while an unused invite names the old relay (until it is used or runs out), while a pairing you started has its answer coming through it, and while your daemon is not connected to it, since it may hold mail for you. Then it drops the old relay. If someone has not, it says who and why and keeps the old relay; run the same command again later, or `cpart relay remove` the old one if you accept they may miss your mail.
 
 A contact who does not use your new relay has to add it. That is a person's decision, for the reason above.
 
