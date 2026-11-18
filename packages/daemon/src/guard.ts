@@ -170,12 +170,16 @@ function allowed(a: Allow, secret: string, match: string, line: string): boolean
 }
 
 // An obvious stand-in for a value: an ellipsis, a template, "your-key-here",
-// "REPLACE_ME", "changeme", "TODO". Used for what the generic rule finds and
-// for values in .env files and URL passwords.
-const STAND_IN = /\.\.\.|…|^\$\{?[A-Za-z_]|<[^>]*>|\{\{|your[_-]|[_-]here$|example|placeholder|change[_-]?(?:me|this)|replace[_-]?(?:me|this)|fill[_-]?(?:me|in)|set[_-]?me|insert[_-]|(?:^|[_.\s-])(?:todo|fixme|tbd|xxx+)(?:$|[_.\s-])|dummy|redacted|x{6,}|\*{3,}/i;
-// What the generic rule finds that is plainly not a value: a stand-in, or a
-// variable name followed by "=". (Not for .env values: base32 ends in "=".)
-const PLACEHOLDER = new RegExp(`^[A-Z][A-Z0-9_]*=|${STAND_IN.source}`, "i");
+// "REPLACE_ME", "changeme", "TODO".
+const STAND_IN_WORDS = /\.\.\.|…|\{\{|your[_-]|[_-]here$|example|placeholder|change[_-]?(?:me|this)|replace[_-]?(?:me|this)|fill[_-]?(?:me|in)|set[_-]?me|insert[_-]|(?:^|[_.\s-])(?:todo|fixme|tbd|xxx+)(?:$|[_.\s-])|dummy|redacted|x{6,}|\*{3,}/i;
+// What the generic rule finds that is plainly not a value: a stand-in, a
+// variable name followed by "=", "$VAR", "<anything>".
+const PLACEHOLDER = new RegExp(`^[A-Z][A-Z0-9_]*=|^\\$\\{?[A-Za-z_]|<[^>]*>|${STAND_IN_WORDS.source}`, "i");
+// A value in a .env file or a URL's password that is a stand-in. Stricter
+// than PLACEHOLDER: a real password can start with "$" ("$ecr3t...", literal
+// in dotenv) or have "<" and ">" in it, and base32 ends in "=". So only
+// "${...}", a whole "$UPPER_NAME", and "<words>" count as stand-ins here.
+const standIn = (v: string): boolean => STAND_IN_WORDS.test(v) || /\$\{[A-Za-z_]|^\$[A-Z_][A-Z0-9_]*$|<[A-Za-z][A-Za-z _-]*>/.test(v);
 // A hex string on a line that talks about digests is a digest.
 const DIGEST_WORDS = /sha-?\d|md5|hash|digest|checksum|commit|etag|integrity|fingerprint/i;
 // A UUID named as an idempotency key or a request id is an id.
@@ -541,7 +545,8 @@ const isUrl = (v: string): boolean => /^[a-z][a-z0-9+.-]*:\/\//i.test(v);
 
 // The user, password and host of a URL with a login in it.
 function urlLogin(value: string): { user: string; password: string | null; host: string } | null {
-  const m = /^[a-z][a-z0-9+.-]*:\/\/([^/?#\s@]*)@([^/?#\s]*)/i.exec(value);
+  // The login runs to the "@": a password may hold "#" or "?" written raw.
+  const m = /^[a-z][a-z0-9+.-]*:\/\/([^/\s@]*)@([^/?#\s]*)/i.exec(value);
   if (!m) return null;
   const at = m[1]!.indexOf(":");
   const host = m[2]!.toLowerCase().replace(/:\d*$/, "").replace(/^\[(.*)\]$/, "$1");
@@ -558,7 +563,7 @@ function urlPassword(value: string): string | null {
   const l = urlLogin(value);
   if (!l?.password) return null;
   const pw = l.password;
-  if (STAND_IN.test(pw)) return null;
+  if (standIn(pw)) return null;
   if (localHost(l.host) && (pw === l.user || STOCK_PASSWORD.test(pw))) return null;
   return pw;
 }
@@ -696,10 +701,10 @@ export function dotenvValues(file: string): Exact[] {
   const template = TEMPLATE_ENV.test(basename(file));
   const out: Exact[] = [];
   for (const { name, value } of parseDotenv(text)) {
-    if (!isUrl(value) && STAND_IN.test(value)) continue;
+    if (!isUrl(value) && standIn(value)) continue;
     const secretName = SECRET_NAME.test(name) && !NOT_SECRET_NAME.test(name);
-    // In a template, the stricter test config values get; a URL only for a key-like password.
-    const counts = !template ? worthMatching(value, secretName) : isUrl(value) ? configSecret(urlPassword(value) ?? "") : configSecret(value);
+    // In a template, the stricter test config values get; a URL only for a key-like password or user.
+    const counts = !template ? worthMatching(value, secretName) : isUrl(value) ? configSecret(urlPassword(value) ?? "") || tokenLike(urlLogin(value)?.user ?? "") : configSecret(value);
     if (counts) out.push(...exact(value, "dotenv-value", `dotenv:${file}:${name}`));
   }
   return out;

@@ -557,3 +557,18 @@ test("a key's fixed prefix does not count towards a piece of it", async () => {
   await assert.rejects(alice.say(thread, `starts with ${key.slice(0, 16)}`), /env-secret/);
   await assert.rejects(alice.say(thread, `somewhere in it: ${key.slice(14, 22)}`), /env-secret/);
 });
+
+test("real .env values that only look like stand-ins still count", async () => {
+  const repo = join(dir(), "billing");
+  mkdirSync(join(repo, ".git"), { recursive: true });
+  // "$" is literal in dotenv; a URL password may hold "#" or "?" written raw.
+  writeFileSync(join(repo, ".env"), "DB_PASSWORD='$ecr3tPassw0rd9'\nADMIN_PASSWORD=Q9<r7Lm>2xVpK3\nPRIMARY=postgres://app:Xk9pQ2mLr7vT#4@db.billing.net:5432/app\nREPLICA_PASSWORD=${PRIMARY_PASSWORD}\nCACHE_PASSWORD=$REDIS_PASSWORD\nQUEUE_URL=amqp://app:<password>@mq.billing.net\n");
+  writeFileSync(join(repo, ".env.example"), "GIT_REMOTE=https://Wq8Pz3Lm6Tr1Vb9Kc4Ns7Hd2Xy5Fg0Jt@git.billing.net/app.git\n");
+  const { alice, thread } = await pair({ env: {}, cwd: repo });
+  await alice.say(thread, "REPLICA_PASSWORD=${PRIMARY_PASSWORD}, CACHE_PASSWORD=$REDIS_PASSWORD, QUEUE_URL=amqp://app:<password>@mq.billing.net");
+  await assert.rejects(alice.say(thread, "pw $ecr3tPassw0rd9"), /dotenv-value/);
+  await assert.rejects(alice.say(thread, "admin Q9<r7Lm>2xVpK3"), /dotenv-value/);
+  await assert.rejects(alice.say(thread, "the db password is Xk9pQ2mLr7vT#4"), /dotenv-value/);
+  // A key-like user name in a template URL was committed by mistake: it counts.
+  await assert.rejects(alice.say(thread, "token Wq8Pz3Lm6Tr1Vb9Kc4Ns7Hd2Xy5Fg0Jt"), /dotenv-value/);
+});
