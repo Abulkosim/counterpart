@@ -187,8 +187,8 @@ async function secret(prompt: string): Promise<string> {
   }
 }
 
-async function line(prompt: string): Promise<string> {
-  if (!process.stdin.isTTY) throw new Error("this needs a terminal");
+async function line(prompt: string, noTerminal = "this needs a terminal"): Promise<string> {
+  if (!process.stdin.isTTY) throw new Error(noTerminal);
   process.stderr.write(prompt);
   process.stdin.resume();
   try {
@@ -200,7 +200,8 @@ async function line(prompt: string): Promise<string> {
 
 async function newPassphrase(): Promise<string> {
   if (process.env.CPART_PASSPHRASE !== undefined) return process.env.CPART_PASSPHRASE;
-  const a = await secret("Choose a passphrase (8 characters or more). You will type it to approve contracts: ");
+  process.stderr.write("Choose a passphrase. You type it to approve a contract, release or drop a held message, share files with a contact, turn the guard off and renew this device.\n");
+  const a = await secret("Passphrase (8 characters or more): ");
   if (a.length < 8) throw new Error("passphrase must be at least 8 characters");
   if ((await secret("Again: ")) !== a) throw new Error("the two passphrases differ");
   return a;
@@ -328,7 +329,10 @@ async function relayHealthUrl(relay: string, fromInvite: boolean): Promise<strin
     const host = u.hostname.replace(/^\[|\]$/g, "");
     const found = await lookup(host, { all: true }).then((l) => l.map((x) => x.address), () => [] as string[]);
     if ([host, ...found].some((h) => PRIVATE.test(h) || h.endsWith(".local")) && !flags.yes && !localRelayOk) {
-      const typed = await line(`This invite names a relay on your own machine or network: ${safe(relay)}\nSomeone outside your network would not send that. Type yes to use it: `);
+      const typed = await line(
+        `This invite names a relay on your own machine or network: ${safe(relay)}\nSomeone outside your network would not send that. Type yes to use it: `,
+        `this needs a terminal: the code or invite names a relay on your own machine or network (${safe(relay)}), and join asks you to confirm such a relay before using it. Nothing was created.\nIf you expect it (your own relay, or a container on the relay's machine), run the same command again with --yes.`,
+      );
       if (typed !== "yes") throw new Error("nothing was created.");
       localRelayOk = true;
     }
@@ -403,7 +407,7 @@ async function setup(relay: string | undefined, fromInvite = false): Promise<Cou
     if (relay && !node.relayBook.find(relay)) throw new Error(`your identity in ${home} does not use the relay ${safe(relay)}. To use it as well: cpart relay add ${safe(relay)}`);
     note(`ok  identity ${node.me.human}`);
   } else {
-    if (!relay) throw new Error("there is no identity here yet, and making one needs a relay.\n  cpart setup --relay <wss://host>     if you have a relay\n  cpart join <invite> <name>           if someone sent you an invite\n  cpart relay --tunnel                 to run a relay yourself and try it");
+    if (!relay) throw new Error("there is no identity here yet, and making one needs a relay.\n  cpart setup --relay <wss://host>     if you have a relay\n  cpart join <code> <name>             if someone sent you a code\n  cpart relay --boot                   to run a relay on this machine\n  cpart relay --tunnel                 to run one with a public address and try it");
     let health = await relayHealthUrl(relay, fromInvite);
     // From inside a container, the machine it runs on has another name. See relays.ts.
     const reach = await reachable(relay);
@@ -425,7 +429,7 @@ async function setup(relay: string | undefined, fromInvite = false): Promise<Cou
     const passphrase = flags["no-passphrase"] ? undefined : await newPassphrase();
     made = existsSync(home) ? new Set(readdirSync(home)) : null;
     node = await Counterpart.init(home, { relay, ...(reach.as ? { relayAs: reach.as } : {}), ...(passphrase !== undefined ? { passphrase } : {}) });
-    note(`ok  identity ${node.me.human} created in ${home}${passphrase === undefined ? " (no passphrase: it can talk but cannot approve contracts)" : ""}`);
+    note(`ok  identity ${node.me.human} created in ${home}${passphrase === undefined ? " (no passphrase: it can talk, but cannot approve contracts, release held messages or turn the guard off)" : ""}`);
   }
   const d = await up(home, { boot: !flags["no-boot"] });
   if (!d.state) throw new Error(`the daemon did not start. See ${logFile(home)}`);
@@ -492,7 +496,7 @@ async function status(node: Counterpart): Promise<void> {
     ...pairingLines(home),
   ];
   const lines = [
-    `You       ${node.me.human}  (key ${node.me.rootKey.slice(0, 12)})${node.protected ? "" : "  no passphrase: cannot approve contracts"}`,
+    `You       ${node.me.human}  (key ${node.me.rootKey.slice(0, 12)})${node.protected ? "" : "  no passphrase: cannot approve contracts, release held messages or turn the guard off"}`,
     `Relay     ${safe(node.relay)}${node.relayBook.mine().length > 1 ? ` and ${node.relayBook.mine().length - 1} more (cpart relay list)` : ""}`,
     ...svc.lines,
     `Daemon    ${d ? `running, ${d.connected ? "connected" : "NOT connected to the relay"}${bootInstalled(home) ? ", starts at login" : ""}` : "NOT running. Nothing is sent or received. Start it: cpart up"}`,

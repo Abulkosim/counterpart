@@ -141,6 +141,8 @@ JOIN=$(cpart alice invite bob --long | grep -o 'cpart-invite:[A-Za-z0-9_-]*')
 # An invite that names a relay on this machine needs a person to say yes.
 if cpart bob join "$JOIN" alice </dev/null >"$WORK/bob.refused" 2>&1; then fail "join used a local relay without asking"; fi
 [ ! -e "$WORK/bob/keys.json" ] || fail "an identity was created before the person agreed"
+grep -q "this needs a terminal: the code or invite names a relay on your own machine or network" "$WORK/bob.refused" || fail "join did not say why it needs a terminal: $(cat "$WORK/bob.refused")"
+grep -q "run the same command again with --yes" "$WORK/bob.refused" || fail "join did not name the flag that goes on"
 cpart bob join "$JOIN" alice --yes | tee "$WORK/bob.join"
 grep -q "Claude Code already has a server named counterpart for another identity" "$WORK/bob.join" || fail "bob was not told the agent tools belong to alice's identity"
 grep -q "^ok  identity .* created" "$WORK/bob.join"

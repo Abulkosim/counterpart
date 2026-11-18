@@ -1,8 +1,9 @@
-// What a new person meets in the CLI: per-command help.
+// What a new person meets in the CLI: per-command help, join without a
+// terminal, and the passphrase prompt.
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { commandHelp } from "../src/help.ts";
@@ -43,4 +44,39 @@ test("each main command has its own help, with the flags a new person needs", ()
   assert.match(cli(["nosuch", "--help"]).out, /^No command "nosuch"\.\n\ncpart: let your agent/);
   // The full list names the flags too, and says how to get one command's help.
   for (const f of ["--no-agents", "--no-passphrase", "--yes", "cpart relay --boot", "cpart <command> --help"]) assert.ok(usage().includes(f), `usage lacks ${f}`);
+});
+
+test("join without a terminal says why it stops and which flag goes on", () => {
+  const home = join(tmp(), "home");
+  // The relay is not contacted before the question, so nothing needs to listen.
+  const r = cli(["join", "7-cider-otter@ws://127.0.0.1:9", "alice"], { CPART_HOME: home });
+  assert.equal(r.code, 1);
+  assert.match(r.out, /this needs a terminal: the code or invite names a relay on your own machine or network \(ws:\/\/127\.0\.0\.1:9\)/);
+  assert.match(r.out, /run the same command again with --yes/);
+  assert.match(r.out, /Nothing was created/);
+  assert.ok(!existsSync(join(home, "keys.json")));
+});
+
+test("the passphrase prompt says everything the passphrase is for", { skip: spawnSync("python3", ["--version"]).status !== 0 ? "no python3" : false }, () => {
+  // A pseudo-terminal, so the prompt is shown. Ctrl-C at the prompt ends it.
+  const py = `
+import os, pty, sys, time, select
+pid, fd = pty.fork()
+if pid == 0:
+    os.execv(sys.argv[1], sys.argv[1:])
+out = b""
+end = time.time() + 20
+while time.time() < end and b"Passphrase (8" not in out:
+    r, _, _ = select.select([fd], [], [], 0.2)
+    if r:
+        try: out += os.read(fd, 4096)
+        except OSError: break
+os.write(fd, b"\\x03")
+time.sleep(0.5)
+sys.stdout.write(out.decode("utf8", "replace"))
+`;
+  const env: NodeJS.ProcessEnv = { ...process.env, CPART_HOME: join(tmp(), "home") };
+  delete env.CPART_PASSPHRASE;
+  const shown = execFileSync("python3", ["-I", "-c", py, process.execPath, MAIN, "init", "--relay", "ws://127.0.0.1:9"], { encoding: "utf8", env });
+  for (const w of ["approve a contract", "release or drop a held message", "share files", "turn the guard off", "renew this device", "Passphrase (8 characters or more)"]) assert.ok(shown.includes(w), `prompt lacks "${w}": ${shown}`);
 });
