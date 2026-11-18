@@ -16,6 +16,9 @@ import { startViewer } from "@counterpart/viewer";
 import { type WorkResult, apply as applyWork, work } from "@counterpart/worker";
 import { agents, bootInstalled, claim, down, logFile, registerAgents, running, up } from "./service.ts";
 import { openTunnel } from "./tunnel.ts";
+import { inviteByCode, joinByCode, pairingLines } from "./pair.ts";
+import { PairingEngine } from "@counterpart/daemon";
+import { looksLikeCode } from "@counterpart/protocol";
 import { RELAY_SUBCOMMANDS, RELAY_USAGE, logLink, reachable, relayCommand, relayNotices } from "./relays.ts";
 
 const USAGE = `cpart: let your agent talk to someone else's agent
@@ -24,8 +27,11 @@ Start here. One of these is all the setup there is:
 
   cpart setup --relay <wss://host>                                create your identity, keep the daemon running, add Counterpart to
                                                                   Claude Code and Codex. Safe to run again
-  cpart join <invite> <name>                                      the same, from an invite someone sent you. <name> is what you call them
-  cpart invite <name>                                             make an invite to send; <name> is what you call them
+  cpart join <code> <name>                                        the same, with the code someone sent you (7-cider-otter@host).
+                                                                  <name> is what you call them. A long cpart-invite: works too
+  cpart invite <name> [--no-wait] [--long]                        make a short code to send, then wait for them. <name> is what you
+                                                                  call them. --long makes the long invite instead. With --json
+                                                                  the long invite is printed unless you add --code
   cpart status                                                    is everything running, and what is waiting for you
   cpart up [--boot] | cpart down                                  start or stop the background daemon. --boot also starts it at login
 
@@ -110,7 +116,7 @@ const { values: flags, positionals } = parseArgs({
   options: {
     relay: { type: "string" }, port: { type: "string" }, host: { type: "string" }, db: { type: "string" },
     home: { type: "string" }, evidence: { type: "boolean" }, head: { type: "string" }, base: { type: "string" }, label: { type: "string" }, pr: { type: "string" }, run: { type: "string" }, status: { type: "string" }, bind: { type: "string", multiple: true }, work: { type: "string" }, branch: { type: "string" }, repo: { type: "string" }, paths: { type: "string" }, brief: { type: "string" }, allow: { type: "string", multiple: true }, title: { type: "string" }, file: { type: "string" }, part: { type: "string", multiple: true }, supersedes: { type: "string" },
-    out: { type: "string" }, yes: { type: "boolean" }, all: { type: "boolean" }, notify: { type: "boolean" }, "view-port": { type: "string" }, "no-passphrase": { type: "boolean" }, as: { type: "string" }, slots: { type: "string" }, daily: { type: "string" }, model: { type: "string" }, url: { type: "string", multiple: true }, wait: { type: "string" }, boot: { type: "boolean" }, "no-boot": { type: "boolean" }, "no-agents": { type: "boolean" }, tunnel: { type: "boolean" }, json: { type: "boolean" }, help: { type: "boolean", short: "h" },
+    out: { type: "string" }, yes: { type: "boolean" }, all: { type: "boolean" }, notify: { type: "boolean" }, "view-port": { type: "string" }, "no-passphrase": { type: "boolean" }, as: { type: "string" }, slots: { type: "string" }, daily: { type: "string" }, model: { type: "string" }, url: { type: "string", multiple: true }, wait: { type: "string" }, boot: { type: "boolean" }, "no-boot": { type: "boolean" }, "no-agents": { type: "boolean" }, tunnel: { type: "boolean" }, "no-wait": { type: "boolean" }, long: { type: "boolean" }, code: { type: "boolean" }, json: { type: "boolean" }, help: { type: "boolean", short: "h" },
   },
 });
 const [cmd, ...args] = positionals;
@@ -376,6 +382,7 @@ function status(node: Counterpart): void {
     ...pending.map((c) => `  pairing with ${c.name} has not completed; it does when both daemons are online`),
     ...relayNotices(node, safe),
     ...(node.protected && days < 30 ? [`  device credential runs out in ${days} days\n      cpart renew`] : []),
+    ...pairingLines(home),
   ];
   const lines = [
     `You       ${node.me.human}  (key ${node.me.rootKey.slice(0, 12)})${node.protected ? "" : "  no passphrase: cannot approve contracts"}`,
@@ -452,7 +459,8 @@ async function main(): Promise<void> {
     return;
   }
   if (cmd === "join") {
-    need(2, "join <invite> <what you call them>");
+    need(2, "join <code or invite> <what you call them>");
+    if (looksLikeCode(args[0]!)) return joinByCode(home, args[0]!, args[1]!, { out, note, safe }, (relay) => setup(relay, true));
     const inv = decodeInvite(args[0]!);
     const node = await setup(inv.relay, true);
     const known = node.contacts().find((c) => c.rootKey === inv.credential.rootKey);
@@ -725,6 +733,8 @@ async function main(): Promise<void> {
         if (v.result === "rejected") console.log(`refused a message: ${safe(v.reason)}`);
       });
       link.on("event", (e) => console.log(`${e.type} in thread ${e.threadId}`));
+      const pairing = new PairingEngine(node, link).start();
+      pairing.onLine = (l) => console.log(safe(l));
       // With an API key the model sees exactly what we send. Without one, the
       // claude CLI is used with a subscription login; it adds a few values of its
       // own, which are filtered out of replies.
@@ -737,7 +747,7 @@ async function main(): Promise<void> {
       desk.start();
       // The home is given up only once nothing here is still sending.
       const stop = (): void =>
-        void Promise.all([link.stop(), desk.stop()]).finally(() => {
+        void Promise.all([link.stop(), desk.stop(), pairing.stop()]).finally(() => {
           held.release();
           process.exit(0);
         });
@@ -747,9 +757,13 @@ async function main(): Promise<void> {
     }
     case "invite": {
       need(1, "invite <name>");
-      const invite = node.createInvite(args[0]!);
       // The invite completes only while this side is online to answer it.
       const d = await ensureDaemon();
+      // Scripts read `invite` from --json, so that stays the long form unless they ask for --code.
+      const short = flags.json ? !!flags.code : !flags.long;
+      if (short && (await inviteByCode(node, args[0]!, { out, note, safe }, { daemon: d, wait: !flags["no-wait"] && !flags.json }))) return;
+      if (short) note(d ? "The relay did not give out a short code, so here is a long invite instead." : "A short code needs the daemon running, so here is a long invite instead.");
+      const invite = node.createInvite(args[0]!);
       return out(
         `Send this to ${args[0]}. It works once and expires in 24 hours. They run it, with the name they call you:\n\n  cpart join ${invite} <your name>\n${d ? "" : "\nYour daemon is not running, so their request will wait. Start it with: cpart up\n"}`,
         { invite },

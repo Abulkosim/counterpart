@@ -226,12 +226,20 @@ export class Counterpart {
     `);
     // Columns added after the first databases were made.
     const cols = new Set((this.db.prepare("PRAGMA table_info(outbox)").all() as { name: string }[]).map((c) => c.name));
-    try {
-      if (!cols.has("received_at")) this.db.exec("ALTER TABLE outbox ADD COLUMN received_at INTEGER");
-      if (!cols.has("resends")) this.db.exec("ALTER TABLE outbox ADD COLUMN resends INTEGER NOT NULL DEFAULT 0");
-    } catch (e) {
-      // Another process opening the same home added them first.
-      if (!/duplicate column/.test((e as Error).message)) throw e;
+    const inviteCols = new Set((this.db.prepare("PRAGMA table_info(invites)").all() as { name: string }[]).map((c) => c.name));
+    for (const [have, sql] of [
+      [cols.has("received_at"), "ALTER TABLE outbox ADD COLUMN received_at INTEGER"],
+      [cols.has("resends"), "ALTER TABLE outbox ADD COLUMN resends INTEGER NOT NULL DEFAULT 0"],
+      // An invite made after a short-code pairing is good only for the root key that proved the code.
+      [inviteCols.has("for_root"), "ALTER TABLE invites ADD COLUMN for_root TEXT"],
+    ] as const) {
+      if (have) continue;
+      try {
+        this.db.exec(sql);
+      } catch (e) {
+        // Another process opening the same home added it first.
+        if (!/duplicate column/.test((e as Error).message)) throw e;
+      }
     }
     this.relayBook = new RelayBook(this.db, keys.relay);
   }
@@ -329,6 +337,11 @@ export class Counterpart {
   get relay(): string {
     return this.relayBook.home();
   }
+  // The home relay by the name others know it by. Invites and pairing codes
+  // name this, and pairing binds it into the key, so both sides use the same string.
+  get relayName(): string {
+    return this.relayBook.homeName();
+  }
   get device(): DeviceSecrets {
     return this.keys.device;
   }
@@ -338,7 +351,7 @@ export class Counterpart {
 
   // ---- contacts ----
 
-  createInvite(name: string, ttlMs = DAY): string {
+  createInvite(name: string, ttlMs = DAY, forRoot?: string): string {
     checkName(name);
     if (this.db.prepare("SELECT 1 FROM contacts WHERE name = ?").get(name)) throw new Error(`contact "${name}" already exists`);
     const token = randomId();
@@ -347,10 +360,15 @@ export class Counterpart {
     // dials when it reaches the relay another way (from a container, say).
     const relay = this.relayBook.homeName();
     this.tx(() => {
-      this.db.prepare("INSERT INTO invites (token, name, expires_at) VALUES (?, ?, ?)").run(token, name, expiresAt);
+      this.db.prepare("INSERT INTO invites (token, name, expires_at, for_root) VALUES (?, ?, ?, ?)").run(token, name, expiresAt, forRoot ?? null);
       this.relayBook.invited(token, relay);
     });
     return encodeInvite({ v: 1, relay, credential: this.keys.device.credential, token, expiresAt });
+  }
+
+  // Unused invites made for one root key (by a short-code pairing that ended).
+  dropInvitesFor(rootKey: string): void {
+    this.db.prepare("DELETE FROM invites WHERE for_root = ? AND used_by IS NULL").run(rootKey);
   }
 
   async acceptInvite(invite: string, name: string): Promise<Contact> {
@@ -923,8 +941,9 @@ export class Counterpart {
 
         if (event.type === "contact.request") {
           const token = (event as ThreadEvent<"contact.request">).body.token;
-          const inv = this.db.prepare("SELECT * FROM invites WHERE token = ?").get(token) as { name: string; expires_at: number; used_by: string | null } | undefined;
+          const inv = this.db.prepare("SELECT * FROM invites WHERE token = ?").get(token) as { name: string; expires_at: number; used_by: string | null; for_root: string | null } | undefined;
           if (!inv) throw new Reject("contact request with unknown invite token");
+          if (inv.for_root && inv.for_root !== credential.rootKey) throw new Reject("invite token was made for someone else");
           if (inv.used_by) throw new Reject("invite token already used");
           if (inv.expires_at <= this.now()) throw new Reject("invite expired");
           if (contact) throw new Reject("contact request from an existing contact");
@@ -1122,7 +1141,7 @@ interface EventRow {
 
 const toStored = (r: EventRow): StoredEvent => ({ ...(JSON.parse(r.json) as ThreadEvent), ord: r.ord, mine: !!r.mine, status: r.status, receivedAt: r.received_at });
 
-function checkName(name: string): void {
+export function checkName(name: string): void {
   if (!/^[a-z0-9][a-z0-9._-]{0,31}$/.test(name)) throw new Error("contact names are 1-32 characters: a-z, 0-9, dot, dash, underscore");
 }
 

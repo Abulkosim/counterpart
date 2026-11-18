@@ -4,9 +4,10 @@ import type { AddressInfo } from "node:net";
 import { DatabaseSync } from "node:sqlite";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
-  type ClientFrame, type ServerFrame, LIMITS, RELAY_AUTH_DOMAIN, canonicalize, deviceId, isId, isObject, isStr,
-  parseWire, relayAuthMessage, verify, verifyCredential,
+  type ClientFrame, type PairClientFrame, type ServerFrame, LIMITS, RELAY_AUTH_DOMAIN, canonicalize, deviceId, isId, isObject, isStr,
+  isPairFrame, parseWire, relayAuthMessage, verify, verifyCredential,
 } from "@counterpart/protocol";
+import { type NameplateOptions, type PairOrigin, nameplates } from "./nameplates.ts";
 import { type RelayNames, relayId, relayNames } from "./names.ts";
 
 export { relayNames, splitUrls } from "./names.ts";
@@ -38,6 +39,8 @@ export interface RelayOptions {
   framesPerSecond?: number;
   now?: () => number;
   log?: (line: string) => void;
+  // Short-code pairing mailboxes (nameplates.ts). Limits for tests.
+  pairing?: Omit<NameplateOptions, "deliver" | "now" | "log">;
 }
 
 export interface Relay {
@@ -58,6 +61,7 @@ interface Session {
   nonce: string;
   tokens: number;
   refilled: number;
+  pair: PairOrigin; // who this is, for the nameplate limits
 }
 
 export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
@@ -129,6 +133,7 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
   const send = (ws: WebSocket, frame: ServerFrame): void => {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(frame));
   };
+  const plates = nameplates({ ...opts.pairing, now, log, deliver: (device, frame) => { const c = online.get(device); if (c) send(c.ws, frame); } });
   // Send the oldest queued messages, at most one window at a time. The next
   // window goes out when the client has acknowledged the current one.
   const flush = (device: string): number => {
@@ -144,8 +149,8 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
     ws.close(4003, "auth failed");
   };
 
-  wss.on("connection", (ws) => {
-    const s: Session = { device: null, outstanding: new Set(), nonce: randomBytes(24).toString("base64url"), tokens: rate * 2, refilled: now() };
+  wss.on("connection", (ws, req) => {
+    const s: Session = { device: null, outstanding: new Set(), nonce: randomBytes(24).toString("base64url"), tokens: rate * 2, refilled: now(), pair: { addr: req.socket.remoteAddress } };
     if (unauthenticated >= maxUnauthenticated) return ws.close(4013, "too many connections waiting to log in");
     unauthenticated++;
     let counted = true;
@@ -180,6 +185,7 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
           if (!verify(cred.signKey, RELAY_AUTH_DOMAIN, relayAuthMessage(s.nonce, frame.relay), frame.sig)) throw new Error("signature");
           if (allow.size > 0 && !allow.has(cred.rootKey)) throw new RelayError("not_invited");
           s.device = deviceId(cred);
+          s.pair.root = cred.rootKey;
         } catch (e) {
           log(`auth rejected: ${(e as Error).message}`);
           return refuse(ws, e instanceof RelayError ? e.code : "auth_failed");
@@ -195,6 +201,7 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
         online.set(s.device, { ws, s });
         send(ws, { t: "ready", device: s.device, features: ["ping"], id });
         flush(s.device);
+        plates.online(s.device);
         return;
       }
 
@@ -247,7 +254,8 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
         // Lets a client notice within seconds that the path to us is dead.
         const n = (frame as { n?: unknown }).n;
         send(ws, { t: "pong", n: Number.isSafeInteger(n) ? (n as number) : 0 });
-      } else ws.close(4002, "bad frame");
+      } else if (isPairFrame(frame.t)) plates.handle(s.device, frame as PairClientFrame, s.pair);
+      else ws.close(4002, "bad frame");
     });
 
     ws.on("close", () => {
@@ -278,6 +286,7 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
     });
   } catch (e) {
     clearInterval(sweeper);
+    plates.close();
     db.close();
     const err = e as NodeJS.ErrnoException;
     throw err.code === "EADDRINUSE" ? new Error(`port ${opts.port} on ${opts.host ?? "127.0.0.1"} is already in use. Stop what is using it or pick another with --port`) : err;
@@ -296,6 +305,7 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
     redeliver: flush,
     async close() {
       clearInterval(sweeper);
+      plates.close();
       for (const ws of wss.clients) ws.terminate();
       await new Promise<void>((r) => wss.close(() => r()));
       await new Promise<void>((r) => http.close(() => r()));

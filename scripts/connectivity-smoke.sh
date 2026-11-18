@@ -101,7 +101,7 @@ step "Bob in a container joins with Alice's invite, which names ws://127.0.0.1:$
 docker run -d --name "$BOB" --network "$NET" --user "$(id -u):$(id -g)" \
   --add-host "host.docker.internal:$(ip_of "$R1")" --add-host "relay2.internal:$(ip_of "$R2")" \
   -v "$REPO:$REPO:ro" -w "$REPO" "$IMAGE" sleep infinity >/dev/null
-INVITE=$(cpart alice invite bob | grep -o 'cpart-invite:[A-Za-z0-9_-]*')
+INVITE=$(cpart alice invite bob --long | grep -o 'cpart-invite:[A-Za-z0-9_-]*')
 bob join "$INVITE" alice --yes --no-agents --no-passphrase | tee "$WORK/bob.join"
 grep -q "is ws://host.docker.internal:$PORT from here" "$WORK/bob.join" || fail "join did not find the relay by its container name"
 grep -q "^Paired with alice" "$WORK/bob.join" || fail "Bob did not pair"
@@ -111,7 +111,7 @@ grep -q "others call it ws://127.0.0.1:$PORT" "$WORK/bob.relays"
 step "Bob, in the container, invites Carol on the host"
 cpart carol init --relay "ws://127.0.0.1:$PORT" --no-passphrase >/dev/null
 start_daemon carol
-INVITE=$(bob invite carol | grep -o 'cpart-invite:[A-Za-z0-9_-]*')
+INVITE=$(bob invite carol --long | grep -o 'cpart-invite:[A-Za-z0-9_-]*')
 # The invite names the relay as the host knows it, not as the container dials it.
 node -e 'const { decodeInvite } = await import(process.argv[1]); console.log("invite names", decodeInvite(process.argv[2]).relay)' "$REPO/packages/protocol/src/index.ts" "$INVITE" | tee "$WORK/carol.invite"
 grep -q "invite names ws://127.0.0.1:$PORT$" "$WORK/carol.invite" || fail "the container's invite does not name the host's address"
@@ -129,7 +129,7 @@ cat "$WORK/dup.out"
 grep -q "is the same relay as ws://127.0.0.1:$PORT" "$WORK/dup.out" || fail "relay add did not say why"
 
 step "Alice pairs with Dave"
-INVITE=$(cpart alice invite dave | grep -o 'cpart-invite:[A-Za-z0-9_-]*')
+INVITE=$(cpart alice invite dave --long | grep -o 'cpart-invite:[A-Za-z0-9_-]*')
 cpart dave accept "$INVITE" alice >/dev/null
 wait_until 15 "the pairing" sh -c "CPART_HOME='$WORK/dave' node packages/cli/src/main.ts contacts | grep -q 'alice .*active'"
 

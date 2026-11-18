@@ -501,7 +501,7 @@ async function setup(res: SetupResult): Promise<SetupResult> {
   const s1 = await rig.cpart("laptop", ["setup", "--relay", url], { CPART_PASSPHRASE: PASSPHRASE.laptop }, 120_000);
   res.laptop = (s1.out + s1.err).trim();
   if (s1.code !== 0) throw new Error(`laptop: cpart setup failed: ${res.laptop}`);
-  const inv = await rig.cpart("laptop", ["invite", "devcontainer"]);
+  const inv = await rig.cpart("laptop", ["invite", "devcontainer", "--long"]);
   const invite = /cpart-invite:[A-Za-z0-9_-]+/.exec(inv.out)?.[0];
   if (!invite) throw new Error(`laptop: no invite in: ${inv.out}${inv.err}`);
   // First as a person would type it. It asks before using a relay on a private address.

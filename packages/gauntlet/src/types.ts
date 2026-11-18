@@ -14,6 +14,7 @@ export const CATEGORIES = {
   "relay-change": "Relay changes",
   output: "Terminal output",
   storage: "Local storage",
+  pairing: "Pairing with a short code",
 } as const;
 
 export type Category = keyof typeof CATEGORIES;

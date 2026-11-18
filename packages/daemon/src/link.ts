@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { networkInterfaces } from "node:os";
 import WebSocket from "ws";
-import { type ClientFrame, type ServerFrame, type ThreadEvent, RELAY_AUTH_DOMAIN, deviceId, isId, isObject, isStr, relayAuthMessage, sign } from "@counterpart/protocol";
+import { type ClientFrame, type PairClientFrame, type PairServerFrame, type ServerFrame, type ThreadEvent, RELAY_AUTH_DOMAIN, deviceId, isId, isObject, isPairFrame, isStr, relayAuthMessage, sign } from "@counterpart/protocol";
 import type { Counterpart, Verdict } from "./node.ts";
 
 const MAX_BACKLOG = 256;
@@ -42,6 +42,10 @@ export interface LinkEvents {
   event: [ThreadEvent];
   verdict: [Verdict];
   error: [Error];
+  // Short-code pairing frames from the home relay, handled by pairing.ts.
+  // Unchecked: the relay wrote them.
+  pair: [PairServerFrame];
+  homeReady: []; // logged in to the home relay, where nameplates live
 }
 
 type Route = { preferred: string[]; fallback: string[] };
@@ -145,6 +149,24 @@ export class RelayLink extends EventEmitter<LinkEvents> {
 
   connected(): string[] {
     return [...this.conns.values()].filter((c) => c.ready).map((c) => c.url);
+  }
+
+  // Pairing runs on the home relay only: the code names it, and its address
+  // is in the key.
+  get homeOnline(): boolean {
+    return this.isHome(this.via(this.node.relay));
+  }
+
+  // For pairing.ts. False when not logged in to the home relay; the caller tries again later.
+  sendPair(frame: PairClientFrame): boolean {
+    const c = this.via(this.node.relay);
+    if (!c?.ws || !c.ready) return false;
+    this.send(c.ws, frame);
+    return true;
+  }
+
+  private isHome(c: Conn | undefined): boolean {
+    return !!c && c.ready && c === this.via(this.node.relay);
   }
 
   // ---- the set of relays
@@ -354,6 +376,10 @@ export class RelayLink extends EventEmitter<LinkEvents> {
   }
 
   private onFrame(c: Conn, ws: WebSocket, frame: ServerFrame): void {
+    if (isPairFrame(frame.t)) {
+      if (this.isHome(c)) this.emit("pair", frame as PairServerFrame);
+      return;
+    }
     switch (frame.t) {
       case "challenge": {
         if (!isStr(frame.nonce, 16, 128)) return;
@@ -371,6 +397,7 @@ export class RelayLink extends EventEmitter<LinkEvents> {
         this.status(c.url, true, null);
         this.emit("relay", c.url, true, "");
         this.edge();
+        if (this.isHome(c)) this.emit("homeReady");
         this.twins();
         this.pump();
         return;
