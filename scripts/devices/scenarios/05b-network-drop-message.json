@@ -1,0 +1,20 @@
+{
+  "name": "05b-network-drop-message",
+  "title": "As 05, with a prompt that says to send a message, since in 05 the agent twice put the question in the thread goal and the front desk never answered",
+  "asker": "devcontainer",
+  "steps": [
+    { "do": "desk", "device": "laptop", "files": ["README.md", "server.js"], "as": "Sam" },
+    {
+      "do": "session", "device": "devcontainer", "id": "asker", "background": true, "timeout": 900, "tools": ["Read", "Grep", "Glob"],
+      "prompt": "sync.js needs to authenticate to the warehouse team's stockroom API. Open a thread with their agent (Counterpart contact: laptop) and send it a message asking how to authenticate and what a bad key gets back. Wait for the answer, then tell me what to put in sync.js. Do not edit any file."
+    },
+    { "do": "wait_message", "device": "laptop", "since": "step", "timeout": 300, "label": "the question, as a message, on the laptop" },
+    { "do": "fault", "kind": "disconnect", "device": "devcontainer" },
+    { "do": "sleep", "seconds": 60 },
+    { "do": "fault", "kind": "connect", "device": "devcontainer" },
+    { "do": "wait_message", "device": "devcontainer", "timeout": 480, "recover_after": 300, "label": "the laptop's answer on the devcontainer" },
+    { "do": "await", "id": "asker" },
+    { "do": "expect", "device": "devcontainer", "check": "the answer names the header and the 401", "message_matches": ["X-Api-Key", "401"] },
+    { "do": "expect", "check": "the asker's report to its human has the answer", "session": "asker", "session_matches": ["X-Api-Key"] }
+  ]
+}
