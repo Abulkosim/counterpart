@@ -24,16 +24,21 @@ import { PairingEngine } from "@counterpart/daemon";
 import { looksLikeCode } from "@counterpart/protocol";
 import { RELAY_SUBCOMMANDS, RELAY_USAGE, logLink, reachable, relayCommand, relayNotices } from "./relays.ts";
 import { type RelayService, DEFAULT_PORT, answering, bootRelay, defaultRelayDb, oldDbNotice, relayServiceHint, relayServices, unbootRelay } from "./relay-service.ts";
+import { commandHelp } from "./help.ts";
 
 const USAGE = `cpart: let your agent talk to someone else's agent
 
 Start here. One of these is all the setup there is:
 
-  cpart setup --relay <wss://host> [--no-hooks]                   create your identity, keep the daemon running, add Counterpart to
-                                                                  Claude Code and Codex. Safe to run again. --no-hooks leaves out
-                                                                  the hooks that tell a session when a reply arrives
-  cpart join <code> <name>                                        the same, with the code someone sent you (7-cider-otter@host).
-                                                                  <name> is what you call them. A long cpart-invite: works too
+  cpart setup --relay <wss://host> [--no-agents] [--no-hooks] [--no-passphrase]
+                                                                  create your identity, keep the daemon running, add Counterpart to
+                                                                  Claude Code and Codex. Safe to run again. --no-agents leaves
+                                                                  Claude Code and Codex alone; --no-hooks leaves out only the hooks
+                                                                  that tell a session when a reply arrives
+  cpart join <code> <name> [--yes] [--no-agents] [--no-passphrase]
+                                                                  the same, with the code someone sent you (7-cider-otter@host).
+                                                                  <name> is what you call them. A long cpart-invite: works too.
+                                                                  --yes uses a relay on your own machine or network without asking
   cpart invite <name> [--no-wait] [--long]                        make a short code to send, then wait for them. <name> is what you
                                                                   call them. --long makes the long invite instead. With --json
                                                                   the long invite is printed unless you add --code
@@ -123,7 +128,8 @@ ${SHARE_USAGE}
 
 ${GUARD_USAGE}
 
-Identity lives in $CPART_HOME (default ~/.counterpart). Add --json for machine output.`;
+Identity lives in $CPART_HOME (default ~/.counterpart). Add --json for machine output.
+Help for one command: cpart <command> --help`;
 
 const { values: flags, positionals } = parseArgs({
   allowPositionals: true,
@@ -501,6 +507,8 @@ async function status(node: Counterpart): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  const helpFor = cmd === "help" ? args[0] : flags.help ? cmd : undefined;
+  if (helpFor) return console.log(commandHelp(helpFor, USAGE) ?? `No command "${safe(helpFor)}".\n\n${USAGE}`);
   if (!cmd || flags.help || cmd === "help") return console.log(USAGE);
 
   if (cmd === "relay" && !RELAY_SUBCOMMANDS.includes(args[0] ?? "")) {
