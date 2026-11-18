@@ -42,11 +42,11 @@ cpart relay move wss://relay-b.example # make it home, tell contacts, drop the o
 
 Your daemon keeps a connection to every one of your relays and accepts mail on any of them. Your home relay is the one invites name.
 
-`--as` gives a relay a second name: the address other people use for it, when you reach it by another. The container above does this by itself; by hand it is `cpart relay add ws://host.docker.internal:7448 --as ws://127.0.0.1:7448`.
+`--as` gives a relay a second name: the address other people use for it, when you reach it by another. The container above does this by itself; by hand it is `cpart relay add ws://host.docker.internal:7448 --as ws://127.0.0.1:7448`. Invites name the relay by that second name, so an invite made inside the container names `ws://127.0.0.1:7448` and the Mac can accept it. Each relay has a random id in `/healthz`; `cpart relay add` refuses an address that is a relay you already use under another name, and says how to record it with `--as` instead.
 
 ### Telling contacts
 
-When your list changes, your daemon sends each contact a `contact.relays` event: your relays, best first, and a version number that only grows. It is signed and sealed like every other message, so it can only come from you, and a contact applies it only to your entry. The contact's daemon answers with its own list and the version of yours it now holds. That answer is the confirmation. An unconfirmed list is sent again after a minute, then with a doubling wait, eight times at most.
+When your list changes, your daemon sends each contact a `contact.relays` event: your relays, best first, and a version number that only grows. It is signed and sealed like every other message, so it can only come from you, and a contact applies it only to your entry. The contact's daemon answers with its own list and the version of yours it now holds. That answer is the confirmation. An unconfirmed list is sent again after a minute, then with a doubling wait up to an hour, and then hourly until a week after the change. A copy can land on a relay the contact does not read, so a few tries are not enough. A contact on an older version refuses every copy, so it gets one an hour for that week.
 
 What a contact receiving it checks ([protocol.md](protocol.md#receiving-rules), gauntlet cases RLY-01 to RLY-09):
 
@@ -72,16 +72,18 @@ A contact who does not use your new relay has to add it. That is a person's deci
 
 ### After a tunnel restart
 
-`cpart relay --tunnel` gets a new public address every start. Behind a tunnel the relay answers only to the tunnel's address, not to loopback names by default: every machine has those names, and through the public address a relay elsewhere could use one of them to log in as one of its own clients. To give it a local name that does not change, start it with one, and have the person who runs it add that name once:
+`cpart relay --tunnel` gets a new public address every start. Behind a tunnel the relay answers only to the tunnel's address, not to loopback names by default: every machine has those names, and through the public address a relay elsewhere could use one of them to log in as one of its own clients. To give it a local name that does not change, start it with one. The person who runs it then dials it by that name, and tells contacts the tunnel's address:
 
 ```sh
 cpart relay --tunnel --port 7447 --url ws://127.0.0.1:7447
-cpart relay add ws://127.0.0.1:7447
+cpart relay add ws://127.0.0.1:7447 --as wss://<name>.trycloudflare.com
 ```
+
+If the tunnel's address is already one of your relays, this changes the address your daemon dials and keeps the relay's place in your list. Adding the local name as a relay of its own, with no `--as`, is refused: it is the same relay, and two connections to it would only replace each other. (If a daemon does end up with two names for one relay, it notices and keeps one connection.)
 
 The risk that comes with that name: a client who also uses some other relay that it reaches as `ws://127.0.0.1:7447` could be logged in to this one by that other relay. A less common port makes that less likely.
 
-After a restart, send the new address to the other person. They run `cpart relay move wss://<new>.trycloudflare.com`. Their daemon reaches the relay at the new address, and you are still connected through 127.0.0.1, so their new list reaches you and your answer reaches them; the move finishes and nobody pairs again. The new address still has to travel out of band: two people whose only relay changed address have no way to tell each other through it. This recipe was not run with a real tunnel; the smoke script runs the same move between two local relays.
+After a restart, run `cpart relay add ws://127.0.0.1:7447 --as wss://<new>.trycloudflare.com` and send the new address to the other person. They run `cpart relay move wss://<new>.trycloudflare.com`. Their daemon reaches the relay at the new address, and you are still connected through 127.0.0.1, so their new list reaches you and your answer reaches them; the move finishes and nobody pairs again. The new address still has to travel out of band: two people whose only relay changed address have no way to tell each other through it. This recipe was not run with a real tunnel; the smoke script runs the same move between two local relays.
 
 ## Connections that die quietly
 

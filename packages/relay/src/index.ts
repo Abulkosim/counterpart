@@ -7,7 +7,7 @@ import {
   type ClientFrame, type ServerFrame, LIMITS, RELAY_AUTH_DOMAIN, canonicalize, deviceId, isId, isObject, isStr,
   parseWire, relayAuthMessage, verify, verifyCredential,
 } from "@counterpart/protocol";
-import { type RelayNames, relayNames } from "./names.ts";
+import { type RelayNames, relayId, relayNames } from "./names.ts";
 
 export { relayNames, splitUrls } from "./names.ts";
 
@@ -43,6 +43,7 @@ export interface RelayOptions {
 export interface Relay {
   url: string;
   urls: string[]; // every address it answers to, url first
+  id: string; // see relayId in names.ts
   port: number;
   queued(device?: string): number;
   // Re-send everything queued for a connected device. Delivery is at least once,
@@ -114,12 +115,13 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
     sweep: db.prepare("DELETE FROM mailbox WHERE expires_at <= ?"),
   };
   const count = (stmt: typeof q.countAll, ...args: string[]): number => (stmt.get(...args) as { n: number }).n;
+  const id = relayId(db);
 
   const online = new Map<string, { ws: WebSocket; s: Session }>();
   let names: RelayNames | undefined;
   const http = createServer((req, res) => {
     if (req.url === "/healthz") {
-      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, online: online.size, queued: count(q.countAll) }));
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, id, online: online.size, queued: count(q.countAll) }));
     } else res.writeHead(404).end();
   });
   const wss = new WebSocketServer({ server: http, maxPayload: LIMITS.wireBytes * 2 });
@@ -191,7 +193,7 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
         }
         online.get(s.device)?.ws.close(4009, "replaced by a newer connection");
         online.set(s.device, { ws, s });
-        send(ws, { t: "ready", device: s.device, features: ["ping"] });
+        send(ws, { t: "ready", device: s.device, features: ["ping"], id });
         flush(s.device);
         return;
       }
@@ -288,6 +290,7 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
   return {
     url,
     urls: names.all,
+    id,
     port,
     queued: (device) => (device ? count(q.countBox, device) : count(q.countAll)),
     redeliver: flush,

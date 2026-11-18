@@ -162,3 +162,60 @@ test("a relay without ping frames is kept alive with WebSocket pings, and is nev
   assert.equal(conns, 1, "the connection stayed up");
   assert.ok(!seen.includes("ping"), "sent a ping frame to a relay that did not offer it");
 });
+
+test("one relay under two names takes one connection, and mail still flows through either name", async () => {
+  const relay = await startRelay();
+  cleanup.push(() => relay.close());
+  const alice = await person(relay.url);
+  const bob = await person(relay.url);
+  const la = connect(alice);
+  connect(bob);
+  await bob.acceptInvite(alice.createInvite("bob"), "alice");
+  await until("pairing", () => bob.contact("alice").state === "active" && alice.contact("bob").state === "active");
+  let ups = 0;
+  let twin: [string, string] | undefined;
+  la.on("relay", (_u, up) => void (up && ups++));
+  la.on("twin", (u, of) => (twin = [u, of]));
+  const other = `ws://localhost:${relay.port}`;
+  alice.relayBook.add(other, null, Date.now());
+  await until("alice sees the two names are one relay", () => twin !== undefined);
+  assert.deepEqual([...twin!].sort(), [other, relay.url].sort());
+  const settled = ups;
+  await new Promise((r) => setTimeout(r, 1500));
+  assert.equal(ups, settled, "the two connections kept replacing each other");
+  assert.equal(la.connected().length, 1);
+  assert.match(alice.relayBook.status().find((s) => s.url === twin![0])!.error ?? "", /same relay as/);
+
+  // Bob's mail reaches Alice, and hers reaches him, whichever name carries it.
+  const thread = await bob.openThread("alice", "two names");
+  await bob.say(thread, "hello");
+  await until("alice reads bob", () => texts(alice, thread).length === 1);
+  await alice.say(thread, "back");
+  await until("bob reads alice", () => texts(bob, thread).length === 2);
+
+  // When the name that carries the connection is removed, the other dials again.
+  if (twin![1] === other) {
+    alice.relayBook.remove(other, Date.now());
+    await until("alice is back on her home name", () => la.connected().join() === relay.url);
+  }
+});
+
+test("a relay that claims another relay's id does not stop the daemon dialling that one", async () => {
+  const honest = await startRelay();
+  cleanup.push(() => honest.close());
+  // A relay that copies the honest relay's id into its ready frame.
+  const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+  await new Promise<void>((r) => wss.once("listening", () => r()));
+  cleanup.push(() => new Promise<void>((r) => wss.close(() => r())), () => { for (const c of wss.clients) c.terminate(); });
+  wss.on("connection", (ws) => ws.send(JSON.stringify({ t: "ready", device: "d_whatever", features: ["ping"], id: honest.id })));
+  const alice = await person(honest.url);
+  const la = connect(alice);
+  let twins = 0;
+  la.on("twin", () => twins++);
+  await until("on the honest relay", () => la.online);
+  alice.relayBook.add(`ws://127.0.0.1:${(wss.address() as { port: number }).port}`, null, Date.now());
+  await until("on both", () => la.connected().length === 2);
+  await new Promise((r) => setTimeout(r, 1000));
+  assert.equal(twins, 0);
+  assert.ok(la.connected().includes(honest.url));
+});

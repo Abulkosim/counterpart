@@ -143,7 +143,15 @@ export class RelayBook {
     if (as !== null && relayKey(as) === relayKey(url)) as = null;
     const have = this.find(url);
     const clash = as === null ? undefined : this.find(as);
-    if (clash && clash.url !== have?.url) throw new Error(`${as} is already one of your relays (${clash.url})`);
+    if (clash && clash.url !== have?.url) {
+      // `add <url> --as <a relay I use>`: the same relay, which this machine now
+      // reaches at <url>. It keeps its place, and others keep their name for it.
+      if (have || (clash.as !== null && relayKey(clash.as) !== relayKey(as!))) throw new Error(`${as} is already one of your relays (${clash.url})`);
+      this.db.prepare("UPDATE my_relays SET url = ?, as_name = ? WHERE url = ?").run(url, clash.as ?? as, clash.url);
+      this.db.prepare("DELETE FROM relay_status WHERE url = ?").run(clash.url);
+      if (opts.announce !== false) this.bump(now);
+      return true;
+    }
     if (have) {
       const want = as ?? have.as;
       if (want === have.as && !have.leaving) return false;

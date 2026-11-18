@@ -19,6 +19,7 @@ export function logLink(link: RelayLink, connected: (up: boolean) => void, safe:
     connected(link.online);
     console.log(up ? `connected to ${safe(url)}` : `relay connection lost: ${safe(url)} (${safe(why)}), retrying`);
   });
+  link.on("twin", (url, of) => console.log(`${safe(url)} is the same relay as ${safe(of)}; using one connection`));
   link.on("wake", (ms) => console.log(`woke after ${Math.round(ms / 1000)}s asleep, reconnecting`));
   link.on("network", () => console.log("network changed, checking connections"));
 }
@@ -30,6 +31,18 @@ const healthUrl = (relay: string): string => {
 
 async function answers(relay: string, ms = 5000): Promise<boolean> {
   return fetch(healthUrl(relay), { signal: AbortSignal.timeout(ms), redirect: "error" }).then((r) => r.ok, () => false);
+}
+
+// The id a relay gives in /healthz: the same under every name it answers to.
+// Relays from before ids give none.
+async function relayIdOf(relay: string, ms = 5000): Promise<string | undefined> {
+  try {
+    const r = await fetch(healthUrl(relay), { signal: AbortSignal.timeout(ms), redirect: "error" });
+    const id = r.ok ? ((await r.json()) as { id?: unknown }).id : undefined;
+    return typeof id === "string" && /^[A-Za-z0-9_-]{8,64}$/.test(id) ? id : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 const inContainer = (): boolean => existsSync("/.dockerenv") || existsSync("/run/.containerenv");
@@ -121,6 +134,17 @@ export async function relayCommand(node: Counterpart, args: string[], io: Io): P
   if (sub === "add") {
     const u = await need("add");
     if (!(await answers(u))) throw new Error(`no relay answers at ${safe(u)}. Nothing was changed.`);
+    // The same relay under a second name would only take a second connection.
+    const id = !book.find(u) && as === null ? await relayIdOf(u) : undefined;
+    if (id) {
+      const others = book.mine();
+      const ids = await Promise.all(others.map((r) => relayIdOf(r.url)));
+      const same = others.find((_, i) => ids[i] === id);
+      if (same)
+        throw new Error(
+          `${safe(u)} is the same relay as ${safe(same.url)}, which you already use. Nothing was changed.\nTo reach it at ${safe(u)} from here, while others keep calling it ${safe(same.as ?? same.url)}: cpart relay add ${safe(u)} --as ${safe(same.as ?? same.url)}`,
+        );
+    }
     const changed = book.add(u, as, Date.now());
     const d = changed ? await io.ensureDaemon() : true;
     return io.out(

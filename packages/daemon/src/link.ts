@@ -7,6 +7,7 @@ import type { Counterpart, Verdict } from "./node.ts";
 const MAX_BACKLOG = 256;
 const MAX_BUFFERED = 1024 * 1024; // bytes written to a relay and not yet taken by the network
 const INFLIGHT_MS = 10_000; // a send the relay has not answered in this time is tried again, on the next relay if there is one
+const TWIN_MS = 5000; // see twins()
 
 // The relay's error codes are printed and stored. Only plain ones are kept.
 const code = (x: unknown): string => (typeof x === "string" && /^[a-z_]{1,32}$/.test(x) ? x : "unknown");
@@ -28,6 +29,7 @@ export interface LinkEvents {
   ready: []; // the first relay is up
   offline: []; // the last relay is down
   relay: [url: string, up: boolean, why: string];
+  twin: [url: string, of: string]; // `url` is the same relay as `of`; one connection is kept
   wake: [sleptMs: number];
   network: [];
   event: [ThreadEvent];
@@ -52,6 +54,9 @@ interface Conn {
   redialNow: boolean;
   removed: boolean;
   why: string; // why it last went down
+  relayId: string | null; // what the relay called itself when last logged in
+  replacedAt: number; // when the relay last closed it for a newer login of this device
+  aliasOf: string | null; // the same relay as this connection, which is used instead
 }
 
 // `event` is a wake-up hint, not a delivery guarantee: a crash between commit
@@ -149,7 +154,7 @@ export class RelayLink extends EventEmitter<LinkEvents> {
     }
     for (const url of want) {
       if (this.conns.has(url)) continue;
-      const c: Conn = { url, downSince: Date.now(), ws: null, ready: false, appPing: false, backoff: this.o.backoffMs, timer: null, dialledAt: 0, lastHeard: 0, pingSentAt: null, pings: 0, redialNow: false, removed: false, why: "" };
+      const c: Conn = { url, downSince: Date.now(), ws: null, ready: false, appPing: false, backoff: this.o.backoffMs, timer: null, dialledAt: 0, lastHeard: 0, pingSentAt: null, pings: 0, redialNow: false, removed: false, why: "", relayId: null, replacedAt: 0, aliasOf: null };
       this.conns.set(url, c);
       this.connect(c);
     }
@@ -159,6 +164,7 @@ export class RelayLink extends EventEmitter<LinkEvents> {
       if (c.timer) clearTimeout(c.timer);
       this.conns.delete(url);
       this.drop(c, "removed from your relays");
+      this.release(url);
     }
   }
 
@@ -180,7 +186,7 @@ export class RelayLink extends EventEmitter<LinkEvents> {
   }
 
   private dial(c: Conn): void {
-    if (this.stopped || c.removed || c.ws) return;
+    if (this.stopped || c.removed || c.aliasOf || c.ws) return;
     const ws = new WebSocket(c.url, { maxPayload: 1024 * 1024, handshakeTimeout: this.o.loginTimeoutMs });
     c.ws = ws;
     c.dialledAt = Date.now();
@@ -210,7 +216,11 @@ export class RelayLink extends EventEmitter<LinkEvents> {
       c.lastHeard = Date.now();
       c.pingSentAt = null;
     });
-    ws.on("close", () => this.down(c, ws));
+    ws.on("close", (code) => {
+      // 4009: the relay let a newer login of this device in. See twins().
+      if (code === 4009) c.replacedAt = Date.now();
+      this.down(c, ws);
+    });
     ws.on("error", (e) => {
       if (!c.why) c.why = e.message;
       ws.terminate();
@@ -239,8 +249,10 @@ export class RelayLink extends EventEmitter<LinkEvents> {
       this.status(c.url, false, why);
       this.emit("relay", c.url, false, why);
       this.edge();
+      this.release(c.url);
     }
-    if (this.stopped || c.removed) return;
+    this.twins();
+    if (this.stopped || c.removed || c.aliasOf) return;
     // Exponential with jitter: between half and all of the current wait.
     const delay = c.redialNow ? 0 : c.backoff * (0.5 + Math.random() / 2);
     c.redialNow = false;
@@ -251,15 +263,55 @@ export class RelayLink extends EventEmitter<LinkEvents> {
   // Dial now instead of waiting out the backoff.
   private hurry(c: Conn): void {
     c.backoff = this.o.backoffMs;
-    if (c.ws || c.removed || this.stopped) return;
+    if (c.ws || c.removed || c.aliasOf || this.stopped) return;
     if (c.timer) clearTimeout(c.timer);
     this.connect(c);
   }
 
+  // The connection that carries a relay: its own, or the one to the same relay
+  // under another name.
+  private via(url: string): Conn | undefined {
+    const c = this.conns.get(url);
+    return c?.aliasOf ? this.conns.get(c.aliasOf) : c;
+  }
+
   // How long a relay has been out of reach. One that is not mine counts as forever.
   private downFor(url: string, now: number): number {
-    const c = this.conns.get(url);
+    const c = this.via(url);
     return !c ? Infinity : c.ready ? 0 : now - c.downSince;
+  }
+
+  // One relay reached by two names (127.0.0.1 and localhost, or a tunnel's
+  // address and the --url it was started with) would take two sockets for one
+  // device. The relay keeps one per device and closes the older, so the two
+  // would replace each other for as long as the daemon runs. When a connection
+  // was just closed that way and another one is logged in to a relay with the
+  // same id, the closed one is not dialled again: mail for that name goes
+  // through the other. Both conditions are needed. A relay can claim any id,
+  // but only the relay this connection went to can close it for a newer login.
+  private twins(): void {
+    const now = Date.now();
+    for (const y of this.conns.values()) {
+      if (y.ready || y.aliasOf || !y.relayId || now - y.replacedAt > TWIN_MS) continue;
+      const x = [...this.conns.values()].find((x) => x !== y && x.ready && !x.aliasOf && x.relayId === y.relayId);
+      if (!x) continue;
+      y.aliasOf = x.url;
+      if (y.timer) clearTimeout(y.timer);
+      y.timer = null;
+      this.drop(y, "same relay");
+      this.status(y.url, false, `same relay as ${x.url}, which carries its mail`);
+      this.emit("twin", y.url, x.url);
+    }
+  }
+
+  // The connection that stood in for others went down: they dial again.
+  private release(url: string): void {
+    for (const y of this.conns.values()) {
+      if (y.aliasOf !== url) continue;
+      y.aliasOf = null;
+      y.replacedAt = 0;
+      this.hurry(y);
+    }
   }
 
   private edge(): void {
@@ -294,10 +346,12 @@ export class RelayLink extends EventEmitter<LinkEvents> {
         if (c.ready) return;
         c.ready = true;
         c.appPing = Array.isArray(frame.features) && frame.features.includes("ping");
+        c.relayId = typeof frame.id === "string" && /^[A-Za-z0-9_-]{8,64}$/.test(frame.id) ? frame.id : null;
         c.backoff = this.o.backoffMs;
         this.status(c.url, true, null);
         this.emit("relay", c.url, true, "");
         this.edge();
+        this.twins();
         this.pump();
         return;
       case "pong":
@@ -475,15 +529,19 @@ export class RelayLink extends EventEmitter<LinkEvents> {
         if (f && now - f.at < INFLIGHT_MS) continue;
         const route = routes.get(wire.header.to) ?? { preferred: [], fallback: [this.node.relay] };
         // A relay that stops reading must not make us buffer without end.
-        const live = (url: string): boolean => {
-          const c = this.conns.get(url);
-          return !!c?.ready && !!c.ws && c.ws.bufferedAmount < MAX_BUFFERED;
-        };
+        const live = (urls: string[]): string[] => [
+          ...new Set(
+            urls
+              .map((u) => this.via(u))
+              .filter((c) => !!c?.ready && !!c.ws && c.ws.bufferedAmount < MAX_BUFFERED)
+              .map((c) => c!.url),
+          ),
+        ];
         // A relay the contact reads, in their order. My other relays only when
         // none of theirs has been reachable for a while: a relay that restarts
         // must not send their mail somewhere they never look.
-        let order = route.preferred.filter(live);
-        if (!order.length && route.preferred.every((u) => this.downFor(u, now) >= this.o.fallbackAfterMs)) order = route.fallback.filter(live);
+        let order = live(route.preferred);
+        if (!order.length && route.preferred.every((u) => this.downFor(u, now) >= this.o.fallbackAfterMs)) order = live(route.fallback);
         if (!order.length) continue;
         // If the last one tried did not answer in time, the next.
         const pick = this.conns.get(order[f ? (order.indexOf(f.url) + 1) % order.length : 0]!)!;

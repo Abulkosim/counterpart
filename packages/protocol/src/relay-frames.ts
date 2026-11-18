@@ -6,8 +6,9 @@ import type { Wire } from "./envelope.ts";
 export type ServerFrame =
   | { t: "challenge"; nonce: string }
   // `features` lists what this relay does beyond the first version. "ping":
-  // it answers a ping frame with a pong.
-  | { t: "ready"; device: string; features?: string[] }
+  // it answers a ping frame with a pong. `id`: the same for every name the
+  // relay answers to (it is also in /healthz).
+  | { t: "ready"; device: string; features?: string[]; id?: string }
   | { t: "pong"; n: number }
   | { t: "stored"; id: string }
   | { t: "deliver"; wire: Wire }

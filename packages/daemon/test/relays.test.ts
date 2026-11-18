@@ -114,6 +114,20 @@ test("an invite from the side that dials the other name names the one others use
   await until("box reads it", () => texts(box, thread).length === 1);
 });
 
+test("add <url> --as <a relay I use>: the same relay, now dialled at <url>", async () => {
+  const r = await relay();
+  const alice = await person(r.url);
+  const la = connect(alice);
+  await until("connected", () => la.connected().join() === r.url);
+  const local = `ws://localhost:${r.port}`;
+  assert.equal(alice.relayBook.add(local, r.url, Date.now()), true);
+  assert.deepEqual(alice.relayBook.mine(), [{ url: local, as: r.url, home: true, leaving: false }]);
+  assert.equal(decodeInvite(alice.createInvite("bob")).relay, r.url, "invites keep the name others use");
+  await until("dialled at the new address", () => la.connected().join() === local);
+  // Only a relay with no other name, or one whose other name is the one given.
+  assert.throws(() => alice.relayBook.add(`ws://127.0.0.2:${r.port}`, local, Date.now()), /already one of your relays/);
+});
+
 test("an invite matches the relay however either side spelled it", async () => {
   const r = await relay();
   const alice = await person(`${r.url}/`);

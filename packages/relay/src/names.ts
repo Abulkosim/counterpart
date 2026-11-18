@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+import type { DatabaseSync } from "node:sqlite";
 import { isRelayUrl, relayKey } from "@counterpart/protocol";
 
 // The addresses a relay answers to. A login names the address the client
@@ -34,3 +36,12 @@ export function relayNames(host: string, port: number, given: string[]): RelayNa
 
 // CPART_RELAY_URL may hold several addresses, separated by commas or spaces.
 export const splitUrls = (s: string | undefined): string[] => (s ?? "").split(/[\s,]+/).filter(Boolean);
+
+// A random id this relay keeps for as long as its database. It is in /healthz
+// and the ready frame, so a client that reaches one relay by two names can tell
+// they are the same relay and keep one connection to it.
+export function relayId(db: DatabaseSync): string {
+  db.exec("CREATE TABLE IF NOT EXISTS relay_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)");
+  db.prepare("INSERT OR IGNORE INTO relay_meta (k, v) VALUES ('id', ?)").run(randomBytes(16).toString("base64url"));
+  return (db.prepare("SELECT v FROM relay_meta WHERE k = 'id'").get() as { v: string }).v;
+}

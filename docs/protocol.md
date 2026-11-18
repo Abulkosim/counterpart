@@ -163,7 +163,7 @@ JSON frames over WebSocket.
 ```
 relay  -> { t: "challenge", nonce }
 client -> { t: "auth", credential, relay, sig }     sig over canonical({ nonce, relay }), domain relay-auth/v1
-relay  -> { t: "ready", device, features? }        features: ["ping"] on relays that answer pings
+relay  -> { t: "ready", device, features?, id? }   features: ["ping"] on relays that answer pings; id: see below
 client -> { t: "send", wire }
 relay  -> { t: "stored", id } | { t: "error", code, id }
 relay  -> { t: "deliver", wire }
@@ -172,7 +172,7 @@ client -> { t: "ping", n }                         only if ready listed "ping"
 relay  -> { t: "pong", n }
 ```
 
-`relay` is the URL the client dialled. The relay accepts a login only for one of the addresses it was configured with, compared after lower-casing the host and dropping a default port and a lone trailing slash, so another relay cannot forward a challenge to its clients and log in as them. A relay can have several addresses (repeated `--url`); with none given, a relay on loopback answers to `ws://127.0.0.1:PORT`, `ws://localhost:PORT`, `ws://[::1]:PORT` and `ws://host.docker.internal:PORT`. A client pings a quiet connection: with a `ping` frame if the relay listed the feature, otherwise with a WebSocket ping, because older relays close the connection on a frame they do not know. See [connectivity.md](connectivity.md). The relay stores a message until the recipient acknowledges it or it expires (seven days at most). Delivery is at least once. Sending the same message again is accepted; reusing an id for different bytes returns `conflict`. The relay sends a limited window of deliveries and sends more as they are acknowledged. Other codes: `mailbox_full`, `expired`, `ttl_too_long`, `too_large`, `bad_wire`.
+`relay` is the URL the client dialled. The relay accepts a login only for one of the addresses it was configured with, compared after lower-casing the host and dropping a default port and a lone trailing slash, so another relay cannot forward a challenge to its clients and log in as them. A relay can have several addresses (repeated `--url`); with none given, a relay on loopback answers to `ws://127.0.0.1:PORT`, `ws://localhost:PORT`, `ws://[::1]:PORT` and `ws://host.docker.internal:PORT`. A client pings a quiet connection: with a `ping` frame if the relay listed the feature, otherwise with a WebSocket ping, because older relays close the connection on a frame they do not know. `id` is a random string the relay keeps with its database, also given in `/healthz`. It is the same under every address, so a client that reaches one relay by two names can keep one connection; the client trusts it only together with the relay closing the other connection for a newer login (code 4009). See [connectivity.md](connectivity.md). The relay stores a message until the recipient acknowledges it or it expires (seven days at most). Delivery is at least once. Sending the same message again is accepted; reusing an id for different bytes returns `conflict`. The relay sends a limited window of deliveries and sends more as they are acknowledged. Other codes: `mailbox_full`, `expired`, `ttl_too_long`, `too_large`, `bad_wire`.
 
 A client acknowledges only after it has durably recorded its decision about the message. A message that fails locally three times is acknowledged as refused so it cannot block the ones behind it.
 
