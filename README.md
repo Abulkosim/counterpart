@@ -37,6 +37,8 @@ cpart join 7-cider-otter@relay.example.com sam   # sam is what Maya calls the pe
 
 That one command is Maya's whole setup: identity, daemon, tools, and the pairing. There is no safety code to compare: the code itself proves the two sides reached each other and not someone in between ([docs/pairing.md](docs/pairing.md)). A wrong word ends the code on both sides. You can read the code aloud over a call.
 
+When a contact asks you something, `cpart status` lists it under "Waiting for you", and the next Claude Code or Codex session you start or type in is told once. Nothing answers for you on its own: keep a session open, or let your agent answer from your repository with `cpart share <name> --repo . <paths>` and `cpart desk on <name> --as <your name>`. `desk on` first checks that the daemon can run the model; if the model fails later, the contact is told the question went to you and `cpart status` says so.
+
 Now open Claude Code or Codex in your repo and say what you want:
 
 > Ask Maya's agent what their orders API returns for an empty page, and agree on a page size.
@@ -47,9 +49,11 @@ Anything your side sends passes the outbound guard first. A message that carries
 
 `cpart status` shows whether everything is running and what is waiting for you: a held message, a contract to read, a question your front desk could not answer.
 
-No relay yet? `cpart relay --tunnel` runs one on your machine with a public address, good for trying it together. [docs/relay.md](docs/relay.md) has the container for a permanent one. If the relay moves, `cpart relay move <new>` takes your contacts with you ([docs/connectivity.md](docs/connectivity.md)).
+No relay yet? `cpart relay --boot` runs one on this machine in the background, from login on (`cpart relay --no-boot` removes it). `cpart relay --tunnel` runs one with a public address, good for trying it together. [docs/relay.md](docs/relay.md) has the container for a permanent one. If the relay moves, `cpart relay move <new>` takes your contacts with you ([docs/connectivity.md](docs/connectivity.md)).
 
-One project on your Mac and one in a dev container on the same Mac: run the relay on the Mac (`cpart relay`), `cpart setup --relay ws://127.0.0.1:7447` on the Mac, and in the container the line `cpart invite` printed on the Mac (`cpart join 7-cider-otter@ws://127.0.0.1:7447 <name>`). Inside a container, `join` finds a relay on 127.0.0.1 at `host.docker.internal`, and the relay answers to both names. This was run with Linux containers, not with Docker Desktop on a Mac.
+One project on your Mac and one in a dev container on the same Mac: run the relay on the Mac as a service (`cpart relay --boot`), then `cpart setup --relay ws://127.0.0.1:7447` and `cpart invite container` on the Mac, and in the container the line `cpart invite` printed (`cpart join 7-cider-otter@ws://127.0.0.1:7447 mac --yes`). Inside a container, `join` finds a relay on 127.0.0.1 at `host.docker.internal`, and the relay answers to both names. The relay keeps its mail in `~/.counterpart-relay` and comes back after a restart. This was run with Linux containers and a systemd user service, not with Docker Desktop or launchd. `./scripts/mac-check.sh` checks it on a Mac with Docker Desktop in about 10 minutes, leaves nothing behind, and prints a report.
+
+Add `--help` to any command for its own help.
 
 ## Check it yourself
 
@@ -63,6 +67,8 @@ pnpm verify              # types and tests
 ./scripts/delivery-smoke.sh # hooks that tell a session a reply arrived, with the real claude and codex
 ./scripts/answerer-smoke.sh # the front desk answers from a repository's committed files, citations checked
 ./scripts/guard-smoke.sh    # held messages, release at a terminal, guard off
+./scripts/relay-service-smoke.sh # the relay as a systemd user service (Linux)
+./scripts/mac-check.sh      # a Mac and a Docker Desktop container, end to end. Prints a report
 ./scripts/devices/rig.sh    # two Docker "devices" with live Claude sessions, sleep, network drops. Uses real models
 ./scripts/redteam/run.sh    # a tool-using agent with planted secrets, 24 attacks to make it leak. Uses real models
 ./scripts/two-machines.sh   # the same across the internet: one side in a container, relay behind a public tunnel. Needs docker and cloudflared
