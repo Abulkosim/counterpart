@@ -55,7 +55,8 @@ ${RELAY_USAGE}
   cpart daemon                                                    stay connected, deliver and receive, in this terminal
   cpart accept <invite> <name>                                    accept someone's invite
   cpart contacts
-  cpart open <contact> <goal>                                     start a thread
+  cpart open <contact> <goal> [--say <text>]                      start a thread. The goal is a short title; --say sends the
+                                                                  first message with it
   cpart say <thread> <text>
   cpart threads
   cpart log <thread>                                              your own lines show (queued) or (at relay) until their daemon confirms
@@ -126,7 +127,7 @@ const { values: flags, positionals } = parseArgs({
   options: {
     relay: { type: "string" }, port: { type: "string" }, host: { type: "string" }, db: { type: "string" },
     home: { type: "string" }, evidence: { type: "boolean" }, head: { type: "string" }, base: { type: "string" }, label: { type: "string" }, pr: { type: "string" }, run: { type: "string" }, status: { type: "string" }, bind: { type: "string", multiple: true }, work: { type: "string" }, branch: { type: "string" }, repo: { type: "string" }, paths: { type: "string" }, brief: { type: "string" }, allow: { type: "string", multiple: true }, title: { type: "string" }, file: { type: "string" }, part: { type: "string", multiple: true }, supersedes: { type: "string" },
-    out: { type: "string" }, yes: { type: "boolean" }, all: { type: "boolean" }, notify: { type: "boolean" }, "view-port": { type: "string" }, "no-passphrase": { type: "boolean" }, as: { type: "string" }, slots: { type: "string" }, daily: { type: "string" }, model: { type: "string" }, url: { type: "string", multiple: true }, wait: { type: "string" }, boot: { type: "boolean" }, "no-boot": { type: "boolean" }, "no-agents": { type: "boolean" }, "no-hooks": { type: "boolean" }, tunnel: { type: "boolean" }, "no-wait": { type: "boolean" }, long: { type: "boolean" }, code: { type: "boolean" }, json: { type: "boolean" }, help: { type: "boolean", short: "h" },
+    out: { type: "string" }, yes: { type: "boolean" }, all: { type: "boolean" }, notify: { type: "boolean" }, "view-port": { type: "string" }, "no-passphrase": { type: "boolean" }, as: { type: "string" }, slots: { type: "string" }, daily: { type: "string" }, model: { type: "string" }, url: { type: "string", multiple: true }, wait: { type: "string" }, boot: { type: "boolean" }, "no-boot": { type: "boolean" }, "no-agents": { type: "boolean" }, "no-hooks": { type: "boolean" }, tunnel: { type: "boolean" }, "no-wait": { type: "boolean" }, long: { type: "boolean" }, code: { type: "boolean" }, say: { type: "string" }, json: { type: "boolean" }, help: { type: "boolean", short: "h" },
   },
 });
 const [cmd, ...args] = positionals;
@@ -805,9 +806,12 @@ async function main(): Promise<void> {
       return out(list.length ? list.map((c) => `${c.name.padEnd(20)} ${c.state.padEnd(8)} safety code ${c.safetyCode}`).join("\n") : "No contacts yet. Run: cpart invite <name>", list);
     }
     case "open": {
-      need(2, "open <contact> <goal>");
+      need(2, "open <contact> <goal> [--say <text>]");
+      if (flags.say !== undefined && !flags.say.trim()) throw new Error("--say needs the text of the first message");
       const id = await node.openThread(args[0]!, args.slice(1).join(" "));
-      return out(`Opened thread ${id}`, { threadId: id });
+      if (flags.say === undefined) return out(`Opened thread ${id}`, { threadId: id });
+      const e = await node.say(id, flags.say);
+      return out(`Opened thread ${id}\nQueued ${e.id}`, { threadId: id, eventId: e.id });
     }
     case "say": {
       need(2, "say <thread> <text>");

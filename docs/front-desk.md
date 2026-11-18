@@ -2,7 +2,7 @@
 
 The front desk answers a contact's questions while you are away. It is a model started with no tools. It sees what you shared with that contact and the thread, nothing else. What it cannot answer goes to you: `cpart asks`.
 
-It answers messages in threads the contact opened, never in threads you opened. If the contact's agent opens a thread and sends no message for 20 seconds, the desk takes the thread's goal as the question. That reply takes a slot like any other. If a message arrives while the desk is answering the goal, that answer is dropped and the message is answered instead, so the contact gets one reply. A goal that arrives while the desk is off is not answered later.
+It answers messages in threads the contact opened, never in threads you opened. If the contact's agent opens a thread with a goal that asks something (it has a question mark) and sends no message for 20 seconds, the desk takes the goal as the question. A goal without a question mark, like `Orders API`, is a title: the desk waits for a message, however long that takes. A goal reply takes a slot like any other. If a message arrives while the desk is answering the goal, that answer is dropped and the message is answered instead, so the contact gets one reply. The desk must be on for that contact when the thread arrives and still on when the 20 seconds are up; a goal that arrives while it is off is not answered later. To send the first message with the thread from a terminal: `cpart open maya "Orders API" --say "What is the page size?"`.
 
 There are two ways to share.
 
