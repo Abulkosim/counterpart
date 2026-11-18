@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { createServer } from "node:net";
+import { join } from "node:path";
 import type { Counterpart } from "@counterpart/daemon";
-import { type EventBodies, generateSigningKey, randomId } from "@counterpart/protocol";
+import { type EventBodies, encodeInvite, generateSigningKey, randomId } from "@counterpart/protocol";
 import { type Ctx, DAY, event, forge, pause, scene, send } from "../harness.ts";
 import type { Case } from "../types.ts";
 
@@ -230,6 +232,36 @@ export const relayChange: Case[] = [
         assert.ok(link.connected().every((u) => bob.relayBook.mine().some((r) => r.url === u)));
         // Bob's answer went to a relay Bob uses, not to the contact's address.
         assert.ok(bob.relayBook.route([trapUrl]).preferred.length === 0);
+      } finally {
+        trap.close();
+      }
+    },
+  },
+  {
+    id: "RLY-11",
+    category: "relay-change",
+    attacker: "stranger",
+    title: "Reach a service on Bob's machine through the container name",
+    claim: "An invite naming host.docker.internal is treated as an address on Bob's own machine: join asks first and touches nothing until he says yes.",
+    async run(ctx) {
+      // Something on Bob's machine the inviter would like his CLI to talk to.
+      let touched = 0;
+      const trap = createServer((s) => {
+        touched++;
+        s.destroy();
+      });
+      await new Promise<void>((r) => trap.listen(0, "127.0.0.1", () => r()));
+      try {
+        const eve = await ctx.person();
+        const relay = `ws://host.docker.internal:${(trap.address() as { port: number }).port}`;
+        const invite = encodeInvite({ v: 1, relay, credential: eve.device.credential, token: randomId(), expiresAt: Date.now() + DAY });
+        const home = ctx.dir();
+        // No terminal and no --yes: nobody can say yes.
+        const r = ctx.cli(home, ["join", invite, "eve", "--no-passphrase", "--no-agents", "--no-boot"]);
+        assert.notEqual(r.status, 0, `join went ahead: ${r.stdout.toString()}`);
+        assert.match(r.stderr.toString(), /terminal/);
+        assert.equal(existsSync(join(home, "keys.json")), false, "an identity was made");
+        assert.equal(touched, 0, "the CLI connected to a local address the invite chose");
       } finally {
         trap.close();
       }

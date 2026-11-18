@@ -288,7 +288,9 @@ function portFree(port: number, host: string): Promise<void> {
   });
 }
 
-const PRIVATE = /^(localhost$|127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|169\.254\.|0\.|::1$|::$|f[cd][0-9a-f]{2}:|fe80:|::ffff:)/i;
+const PRIVATE = /^(localhost$|host\.docker\.internal$|127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|169\.254\.|0\.|::1$|::$|f[cd][0-9a-f]{2}:|fe80:|::ffff:)/i;
+
+let localRelayOk = false; // asked once per run
 
 // A relay address, from --relay or from an invite someone sent. It is
 // printed, stored and fetched, so it has to be a plain address and nothing more.
@@ -299,9 +301,10 @@ async function relayHealthUrl(relay: string, fromInvite: boolean): Promise<strin
   if (fromInvite) {
     const host = u.hostname.replace(/^\[|\]$/g, "");
     const found = await lookup(host, { all: true }).then((l) => l.map((x) => x.address), () => [] as string[]);
-    if ([host, ...found].some((h) => PRIVATE.test(h) || h.endsWith(".local")) && !flags.yes) {
+    if ([host, ...found].some((h) => PRIVATE.test(h) || h.endsWith(".local")) && !flags.yes && !localRelayOk) {
       const typed = await line(`This invite names a relay on your own machine or network: ${safe(relay)}\nSomeone outside your network would not send that. Type yes to use it: `);
       if (typed !== "yes") throw new Error("nothing was created.");
+      localRelayOk = true;
     }
   }
   return `${u.protocol === "wss:" ? "https:" : "http:"}//${u.host}${u.pathname.replace(/\/$/, "")}/healthz`;
@@ -319,7 +322,8 @@ async function setup(relay: string | undefined, fromInvite = false): Promise<Cou
     // From inside a container, the machine it runs on has another name. See relays.ts.
     const reach = await reachable(relay);
     if (reach.as) {
-      health = await relayHealthUrl(reach.relay, false);
+      // The other name is checked too: it is what gets dialled.
+      health = await relayHealthUrl(reach.relay, fromInvite);
       note(`ok  ${safe(reach.as)} is ${safe(reach.relay)} from here`);
       relay = reach.relay;
     }
