@@ -151,5 +151,47 @@ if has codex; then
   grep -q "^ok  Codex hooks removed" "$WORK/remove.out"
   node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); if (JSON.stringify(s)!==JSON.stringify({hooks:{Stop:[{hooks:[{type:"command",command:"echo keep-me"}]}]},description:"mine"})) process.exit(1)' "$CODEX_HOME/hooks.json" || fail "codex hooks.json was not restored: $(cat "$CODEX_HOME/hooks.json")"
 fi
+if has claude; then
+  step "switching Claude Code to another home, as setup advises, and after deleting the old one"
+  cpart alice hook install >/dev/null
+  cpart bob hook install | tee "$WORK/switch1.out"
+  grep -q "^--  Claude Code already has a plugin named counterpart@counterpart-local from another identity" "$WORK/switch1.out"
+  claude plugin uninstall counterpart@counterpart-local >/dev/null
+  cpart bob hook install | tee "$WORK/switch2.out"
+  grep -q "^ok  Claude Code now has the hooks" "$WORK/switch2.out"
+  claude plugin list --json | grep -q "\"readFromFolder\": \"$WORK/bob/claude-plugin/counterpart\"" || fail "the plugin is not bob's"
+  claude plugin uninstall counterpart@counterpart-local >/dev/null
+  rm -rf "$WORK/bob/claude-plugin"
+  cpart alice hook install | tee "$WORK/switch3.out"
+  grep -q "^ok  Claude Code now has the hooks" "$WORK/switch3.out"
+  cpart alice hook remove >/dev/null
+  cpart bob hook remove >/dev/null
+  [ "$(claude plugin list --json)" = "[]" ] || fail "a plugin is still installed"
+  if claude plugin marketplace list --json | grep -q counterpart-local; then fail "the marketplace is still there"; fi
+fi
+if has codex; then
+  step "a Codex hooks.json that is a link stays a link"
+  mkdir -p "$WORK/dotfiles"
+  mv "$CODEX_HOME/hooks.json" "$WORK/dotfiles/hooks.json"
+  chmod 644 "$WORK/dotfiles/hooks.json"
+  ln -s "$WORK/dotfiles/hooks.json" "$CODEX_HOME/hooks.json"
+  cpart bob hook install >/dev/null
+  [ -L "$CODEX_HOME/hooks.json" ] || fail "the link was replaced"
+  grep -q "hook-main.ts" "$WORK/dotfiles/hooks.json" || fail "the linked file did not get the hooks"
+  [ "$(stat -c %a "$WORK/dotfiles/hooks.json")" = 644 ] || fail "the linked file's mode changed"
+  cpart bob hook remove >/dev/null
+  [ -L "$CODEX_HOME/hooks.json" ] || fail "the link was replaced on removal"
+  if grep -q "hook-main.ts" "$WORK/dotfiles/hooks.json"; then fail "the hooks are still in the linked file"; fi
+  rm "$CODEX_HOME/hooks.json"
+  ln -s "$WORK/nowhere/hooks.json" "$CODEX_HOME/hooks.json"
+  cpart bob hook install >"$WORK/dangling.out" || true
+  cat "$WORK/dangling.out"
+  grep -q "^--  Codex hooks: could not change .* is a link to a file that does not exist" "$WORK/dangling.out" || fail "a dangling link was not reported"
+  [ -L "$CODEX_HOME/hooks.json" ] || fail "the dangling link was replaced"
+  cpart bob hook remove >/dev/null || true
+fi
+if has claude; then
+  [ "$(claude plugin list --json)" = "[]" ] || fail "a plugin is still installed at the end"
+fi
 
 printf '\nDELIVERY SMOKE OK\n'

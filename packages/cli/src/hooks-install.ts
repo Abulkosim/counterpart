@@ -4,7 +4,7 @@
 // settings; we never write them.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -93,6 +93,28 @@ export interface HooksResult extends HooksState {
 
 const firstLine = (r: ReturnType<typeof claude>): string => (r.stderr || r.stdout || "failed").trim().split("\n")[0]!;
 
+// The folder the counterpart-local marketplace was added from, if it was.
+function marketPath(): string | undefined {
+  const r = claude(["plugin", "marketplace", "list", "--json"]);
+  if (r.status !== 0) return undefined;
+  try {
+    const m = (JSON.parse(r.stdout) as { name?: string; path?: string }[]).find((x) => x.name === MARKET);
+    return typeof m?.path === "string" ? m.path : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Whether any plugin from the counterpart-local marketplace is installed, in any scope.
+function marketInUse(): boolean {
+  const r = claude(["plugin", "list", "--json"]);
+  try {
+    return r.status !== 0 || (JSON.parse(r.stdout) as { id?: string }[]).some((x) => typeof x.id === "string" && x.id.endsWith(`@${MARKET}`));
+  } catch {
+    return true;
+  }
+}
+
 export function installClaudeHooks(home: string): HooksResult {
   const before = claudeHooks(home);
   if (!before.found || before.state === "elsewhere") return { ...before, changed: "none" };
@@ -103,6 +125,14 @@ export function installClaudeHooks(home: string): HooksResult {
     const r = claude(["plugin", "update", ID, "--scope", "user"]);
     if (r.status !== 0) return { ...before, changed: "none", error: firstLine(r) };
     return { ...claudeHooks(home), changed: "updated" };
+  }
+  // A marketplace left from another home (its plugin uninstalled, or the home
+  // deleted) makes the install fail. Nothing uses it, so it goes.
+  const old = marketPath();
+  if (old !== undefined && resolve(old) !== pluginRoot(home)) {
+    if (marketInUse()) return { ...before, changed: "none", error: `the ${MARKET} marketplace is in use from ${old}` };
+    const m = claude(["plugin", "marketplace", "remove", MARKET]);
+    if (m.status !== 0) return { ...before, changed: "none", error: firstLine(m) };
   }
   const r = claude(["plugin", "install", PLUGIN, "--marketplace", pluginRoot(home), "--scope", "user"]);
   if (r.status !== 0) return { ...before, changed: "none", error: firstLine(r) };
@@ -191,11 +221,32 @@ function readCodex(): CodexHooks {
   return j as CodexHooks;
 }
 
+// The file to write: hooks.json itself, or what it links to, so a link (into
+// a dotfiles repo, say) stays a link and the file it points at gets the change.
+function codexTarget(): string {
+  const f = codexFile();
+  let link = false;
+  try {
+    link = lstatSync(f).isSymbolicLink();
+  } catch {
+    return f;
+  }
+  if (!link) return f;
+  try {
+    return realpathSync(f);
+  } catch {
+    throw new Error(`${f} is a link to a file that does not exist`);
+  }
+}
+
 function writeCodex(j: CodexHooks): void {
-  mkdirSync(dirname(codexFile()), { recursive: true });
-  const tmp = `${codexFile()}.cpart-${process.pid}`;
-  writeFileSync(tmp, `${JSON.stringify(j, null, 2)}\n`, { mode: 0o600 });
-  renameSync(tmp, codexFile());
+  const target = codexTarget();
+  mkdirSync(dirname(target), { recursive: true });
+  // An existing file keeps its mode.
+  const mode = existsSync(target) ? statSync(target).mode & 0o777 : 0o600;
+  const tmp = `${target}.cpart-${process.pid}`;
+  writeFileSync(tmp, `${JSON.stringify(j, null, 2)}\n`, { mode });
+  renameSync(tmp, target);
 }
 
 const codexFound = (): boolean => spawnSync("codex", ["--version"], { stdio: "ignore", timeout: 30_000 }).status === 0;
