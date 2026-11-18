@@ -72,11 +72,16 @@ export function render(c: Chunk): string {
 function score(chunks: Chunk[], query: string): number[] {
   const q = [...new Set(tokens(query))];
   if (q.length === 0) return chunks.map(() => 0);
+  // Only the query's words are counted; the rest only add to the length.
+  const want = new Set(q);
+  const pathTokens = new Map<string, string[]>();
   const docs = chunks.map((c) => {
-    const t = [...tokens(c.lines.join("\n")), ...tokens(c.path), ...tokens(c.path)];
+    let p = pathTokens.get(c.path);
+    if (!p) pathTokens.set(c.path, (p = tokens(c.path)));
+    const t = tokens(c.lines.join("\n"));
     const tf = new Map<string, number>();
-    for (const w of t) tf.set(w, (tf.get(w) ?? 0) + 1);
-    return { tf, len: t.length };
+    for (const list of [t, p, p]) for (const w of list) if (want.has(w)) tf.set(w, (tf.get(w) ?? 0) + 1);
+    return { tf, len: t.length + 2 * p.length };
   });
   const avg = docs.reduce((n, d) => n + d.len, 0) / Math.max(1, docs.length);
   const df = new Map<string, number>();

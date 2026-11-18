@@ -3,6 +3,7 @@ export * from "./bundle.ts";
 export * from "./cite.ts";
 export * from "./desk.ts";
 export * from "./model.ts";
+export * from "./offload.ts";
 export * from "./prompt.ts";
 export * from "./retrieve.ts";
 export * from "./secrets.ts";
