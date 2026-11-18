@@ -6,7 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
-import { Counterpart, Guard, type GuardOptions, HeldError, WALK_DEPTH, dotenvFiles, walkLimit } from "../src/index.ts";
+import { Counterpart, Guard, type GuardOptions, HeldError, WALK_DEPTH, dotenvFiles, fixedPrefix, walkLimit } from "../src/index.ts";
 import { measure } from "./guard-corpus/measure.ts";
 
 const dirs: string[] = [];
@@ -243,7 +243,7 @@ test("an identity without a passphrase cannot release", async () => {
 
 test("two halves sent at the same moment: the second is held", async () => {
   const { alice, bob, thread, carry } = await pair({ env: { ORDERS_SERVICE_TOKEN: TOKEN }, cwd: null });
-  const [a, b] = [TOKEN.slice(0, 8), TOKEN.slice(8, 16)];
+  const [a, b] = [TOKEN.slice(0, 7), TOKEN.slice(7, 14)];
   const r = await Promise.allSettled([alice.say(thread, `one: ${a}`), alice.say(thread, `two: ${b}`)]);
   assert.deepEqual(r.map((x) => x.status).sort(), ["fulfilled", "rejected"]);
   await carry();
@@ -293,10 +293,10 @@ test("what the second review found: rot13 inside base64, deep nesting, tiny piec
   await alice.say(thread, "rebuild with build1 tonight");
 
   const second = await pair({ env: { ORDERS_SERVICE_TOKEN: TOKEN }, cwd: null });
-  const four = TOKEN.match(/.{1,4}/g)!;
-  await second.alice.say(second.thread, `p ${four[0]}`);
-  await second.alice.say(second.thread, `p ${four[1]}`);
-  await assert.rejects(second.alice.say(second.thread, `p ${four[2]}`), /env-secret/);
+  const three = TOKEN.match(/.{1,3}/g)!;
+  await second.alice.say(second.thread, `p ${three[0]}`);
+  await second.alice.say(second.thread, `p ${three[1]}`);
+  await assert.rejects(second.alice.say(second.thread, `p ${three[2]}`), /env-secret/);
 
   const third = await pair({ env: { ORDERS_SERVICE_TOKEN: TOKEN }, cwd: null });
   const pad = "lorem ipsum dolor sit amet ".repeat(170);
@@ -542,4 +542,18 @@ test("placeholders in .env templates are not secrets; values in the real .env st
   await assert.rejects(alice.say(thread, "feed key Hj3kL9mN2bV6cX1zQ8wE5rT4"), /dotenv-value/);
   await assert.rejects(alice.say(thread, "reports password Tq9Lx2Vm7Rz4Kp8N"), /dotenv-value/);
   assert.equal(alice.guard.counts().held, 6);
+});
+
+test("a key's fixed prefix does not count towards a piece of it", async () => {
+  // As in the two-device rig: the agent offered the prefix and four characters, then the last four too.
+  const key = "sr_live_wC65Tq9Lx2Vm7Rz4Kp8Nb3Hd6Fs1Gj6daj";
+  const { alice, thread } = await pair({ env: { STOCKROOM_API_KEY: key }, cwd: null });
+  assert.equal(fixedPrefix(key), 6);
+  assert.equal(fixedPrefix("AKIAZ7QX4M2R6T3PLW5N"), 4);
+  assert.equal(fixedPrefix("correct-Horse-battery-77-staple"), 0);
+  await alice.say(thread, "To find it in your logs: the key starts with sr_live_wC65 and ends in ...6daj");
+  await alice.say(thread, "sr_live_wC65Tq9");
+  // Eight characters after the prefix, from the start or the middle, are held.
+  await assert.rejects(alice.say(thread, `starts with ${key.slice(0, 16)}`), /env-secret/);
+  await assert.rejects(alice.say(thread, `somewhere in it: ${key.slice(14, 22)}`), /env-secret/);
 });

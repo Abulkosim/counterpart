@@ -502,7 +502,17 @@ export interface Exact {
   category: GuardCategory;
   rule: string;
   whole?: boolean; // only the whole value counts, not pieces of it (a URL: its host and path are not secret)
+  fixed?: number; // letters and digits at the start that are the same in every key of its kind (sk_live_, AKIA); not counted in pieces
 }
+
+// The start of a key that is the same in every key of its kind: a vendor's
+// prefix (sk_live_, ghp_, xoxb-, AKIA), or one or two short lowercase words
+// ending in _ or - before a run of sixteen or more letters and digits
+// (pt_, svc_, rk_test_). Anyone can know it, so a piece of a key is counted
+// in what comes after it.
+const KNOWN_PREFIX = /^(?:sk-ant-[a-z]{2,8}\d\d-|sk-(?:proj|svcacct|admin)-|github_pat_|glpat-|gldt-|xox[a-z]-|xapp-\d-|pypi-AgEIcHlwaS5vcmc|(?:AKIA|ASIA|ABIA|ACCA|AGPA|AIDA|AIPA|ANPA|ANVA|APKA|AROA|ASCA)(?=[A-Z0-9]{16}$)|AIza|ya29\.|dop_v1_|doo_v1_|shp(?:at|ss|ca|pa)_)/;
+const LEADING = /^(?:[a-z]{1,8}[_-]){1,2}(?=[A-Za-z0-9]{16,}$)/;
+export const fixedPrefix = (value: string): number => compact((KNOWN_PREFIX.exec(value) ?? LEADING.exec(value))?.[0] ?? "").length;
 
 // Any name with KEY or PASS as a word of its own counts (OPENAI_KEY, HMAC_KEY,
 // SMTP_PASS), as well as the names below.
@@ -577,9 +587,12 @@ function exact(value: string, category: GuardCategory, rule: string): Exact[] {
   const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(value);
   // A whole URL counts only whole: its host and path are not secret. The
   // parts that look like keys count on their own, pieces included.
-  const out: Exact[] = [{ value, compact: compact(value), category, rule, ...(url ? { whole: true } : {}) }];
-  if (url) for (const k of urlKeys(value)) out.push({ value: k, compact: compact(k), category, rule });
-  return out;
+  const one = (v: string): Exact => {
+    const fixed = fixedPrefix(v);
+    return { value: v, compact: compact(v), category, rule, ...(fixed ? { fixed } : {}) };
+  };
+  if (!url) return [one(value)];
+  return [{ value, compact: compact(value), category, rule, whole: true }, ...urlKeys(value).map(one)];
 }
 
 export function envValues(env: Record<string, string | undefined>): Exact[] {
@@ -838,6 +851,8 @@ export const pieces = (s: string): string =>
 // URL) a message carries, in runs of GRAM with a letter and a digit, in any
 // reading of the message. COVER characters of one value is a hold, whether
 // they come in one message or spread over the recent ones to that contact.
+// Only characters after the value's fixed prefix count (see fixedPrefix):
+// "sk_live_" and four characters is four, not twelve.
 const GRAM = 6;
 // A run with no digit (a letters-only token, or the half of one that has no
 // digit) is counted in longer grams with at least LONG_DISTINCT different
@@ -845,7 +860,7 @@ const GRAM = 6;
 const LONG = 12;
 const LONG_DISTINCT = 9;
 const HISTORY = 64_000; // characters of earlier messages looked at
-const COVER = 10;
+const COVER = 8;
 type Grams = Map<string, { e: Exact; at: number }[]>;
 const GRAM_SIZES = [GRAM, LONG];
 const gramOk = (g: string): boolean => (g.length === GRAM ? /[a-z]/.test(g) && /[0-9]/.test(g) : /[a-z]/.test(g) && new Set(g).size >= LONG_DISTINCT);
@@ -857,6 +872,7 @@ function grams(exact: Exact[]): Grams {
     if (e.compact.length < 16 || e.whole || entropy(e.compact) < 3) continue;
     for (const n of /\s/.test(e.value) ? [GRAM] : GRAM_SIZES)
     for (let i = 0; i + n <= e.compact.length; i++) {
+      if (i + n <= (e.fixed ?? 0)) continue; // all prefix
       const g = e.compact.slice(i, i + n);
       if (!gramOk(g)) continue;
       const list = out.get(g) ?? [];
@@ -882,7 +898,7 @@ function cover(streams: string[], index: Grams, into = new Map<Exact, Set<number
       seen.add(g);
       for (const { e, at } of index.get(g) ?? []) {
         const set = into.get(e) ?? new Set<number>();
-        for (let k = at; k < at + n; k++) set.add(k);
+        for (let k = Math.max(at, e.fixed ?? 0); k < at + n; k++) set.add(k);
         into.set(e, set);
       }
     }
@@ -981,8 +997,8 @@ function across(fields: Field[], now: string[], p: Prepared, earlier: Field[][],
   const first = fields[0];
   const where = { field: first?.field ?? "body", start: 0, end: first?.text.length ?? 0 };
   // Short pieces (under six characters) sent one per message: join the
-  // key-like runs of the recent messages and this one, and look for ten
-  // characters of a value that reach into this message.
+  // key-like runs of the recent messages and this one, and look for COVER
+  // characters of a value, after its prefix, that reach into this message.
   if (earlier.length) {
     const tail = (m: Field[]): string => m.map((f) => pieces(f.text)).join("");
     const before = earlier.map(tail).join("").slice(-HISTORY);
@@ -996,7 +1012,7 @@ function across(fields: Field[], now: string[], p: Prepared, earlier: Field[][],
       let j = 0;
       while (j + GRAM <= COVER && !(/[a-z]/.test(w.slice(j, j + GRAM)) && /[0-9]/.test(w.slice(j, j + GRAM)))) j++;
       for (const { e } of p.grams.get(w.slice(j, j + GRAM)) ?? []) {
-        if (done.has(e) || !e.compact.includes(w)) continue;
+        if (done.has(e) || e.compact.indexOf(w, e.fixed ?? 0) < 0) continue;
         done.add(e);
         add({ category: e.category, rule: e.rule, how: "across messages", ...where });
       }
