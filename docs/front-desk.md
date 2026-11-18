@@ -13,12 +13,14 @@ cpart desk on maya --as Sam
 
 Paths are relative to the repository root. A directory means everything under it. Globs take `*`, `**` and `?`; quote them so your shell does not expand them.
 
+`cpart share` shows every file it would share and asks you to type `share`, then your passphrase if your identity has one. It refuses to run without a terminal, so an agent working in your shell cannot share files for you. A directory or glob also covers files committed there later, so share narrowly. Scripts can pass `--yes` with `CPART_PASSPHRASE` set, and only for an identity with a passphrase. `share list` and `share remove` need no confirmation.
+
 What the desk reads:
 
 - Only files committed at `HEAD`, read from Git's object store each time it answers. A new commit is picked up on the next answer; you do not share again. Uncommitted edits, untracked files and ignored files are never read, and a committed file that matches an ignore rule is left out too.
-- Not paths the worker treats as sensitive: CI files, manifests and lockfiles, build scripts, shell scripts, tool configuration. If you want one shared, name it: `--allow package.json`.
+- Not paths the worker treats as sensitive: CI files, manifests and lockfiles, build scripts, shell scripts, tool configuration. Not files with `secret` in the name, or under a directory named like `secrets/`, `vault/` or `credentials/`. If you want one shared, name it: `--allow package.json`.
 - Never credentials: `.env*`, `*.pem`, `*.key`, `.ssh/` and the like. `--allow` does not change that.
-- Not files whose content looks like a secret: private key blocks, known token formats (AWS, GitHub, GitLab, Slack, Stripe, Anthropic, OpenAI, Google, npm, PyPI), passwords in URLs, signed tokens, and long random values assigned to names like `secret`, `token` or `api_key`. These are skipped and reported, and the model never sees them. The scan catches common shapes. It cannot catch a secret with no recognisable shape, so share directories you know.
+- Not files whose content looks like a secret: private key blocks, known token formats (AWS, GitHub, GitLab, Slack, Stripe, Anthropic, OpenAI, Google, npm, PyPI), passwords in URLs, signed tokens, bearer tokens, long random values assigned to names like `secret`, `token` or `api_key`, and any real value assigned to a password name, even a plain word in a YAML file. These are skipped and reported, and the model never sees them. The scan catches common shapes. It cannot catch a secret with no recognisable shape, so share directories you know.
 - Not symbolic links, submodules, binary files, or files over 256 KB.
 
 `cpart share` prints what will be read and everything it skipped, with the reason. `cpart share list maya` shows the same for the current `HEAD`. `cpart share remove maya docs` takes a rule away; `--all` takes them all. One repository per contact.
@@ -29,9 +31,11 @@ A share can be larger than the model's context. The desk cuts the files into chu
 
 Every line of the reply must cite a file, like `[docs/api.md:12 "page size is 50"]`. Before anything is sent, code checks each citation: the file is in the share at the commit that was read, the lines exist, and the quoted text is on those lines (give or take three lines, ignoring spacing). A line with no citation, or with one that fails, is removed. If nothing is left, the contact gets the usual "I've passed the question" and the question goes to you.
 
-The reply ends with the commit it was read from. `cpart desk status` and the daemon's log say, for each run, the commit, how many citations were checked, how many lines were removed and why, and how many files were skipped.
+The reply ends with the commit it was read from. The daemon's log and the runs table in `cpart view` say, for each run, the commit, how many citations were checked, how many lines were removed and why, and how many files were skipped.
 
 What this proves, and what it does not: a quote that passes is really in a file you shared. The sentence around it may still be wrong, or draw a conclusion the quote does not support. The check stops made-up file names, made-up quotes and text from files you did not share; it does not make the model right.
+
+The files are read on a separate thread, so a large share does not hold up the daemon. If they cannot be read, because the repository moved or the read took more than 90 seconds, the contact is told the question was passed to you, and it shows in `cpart asks`. The reason is in the daemon's log.
 
 If you change the rules while the model is working, the reply is thrown away. A new commit during a run does not: the reply is checked against the commit the model was shown.
 
