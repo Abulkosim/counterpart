@@ -41,8 +41,8 @@ const PLACEHOLDER = /^(x+|\*+|\.+|_+|-+|0+)$|your|example|placeholder|changeme|c
 const CONFIG_NAME = /^\s{0,40}(?:export\s{1,5}|-\s{1,5})?["']?[A-Za-z0-9_.-]{1,80}["']?\s{0,5}$/;
 const DOTTED = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)+$/;
 
-// Names for a password in particular. Any real value assigned to one counts,
-// however short or plain: "password: s3cr3t" is still a password.
+// Names for a password in particular. A real value assigned to one counts,
+// however short or plain: a short dictionary word is still a password.
 const PASSWORD_NAME = /(passw(or)?d|passwd|pwd|passphrase)/i;
 // Words that follow "password:" in code and docs without being a password:
 // type names, schema words, and words about the value.
