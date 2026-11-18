@@ -91,7 +91,7 @@ export async function joinByCode(home: string, input: string, name: string, io: 
     if (end.state === "done" && c) {
       io.out(`\nPaired with ${name}. The code proved who is on each side, so there is no safety code to compare.\n\n${NEXT(name)}`, c);
     } else if (end.state === "failed") {
-      throw new Error(`${end.detail ?? "the pairing failed"} To try again, ask ${name} for a new code.`);
+      throw new Error(end.detail?.startsWith(OLD_RELAY) ? end.detail : `${end.detail ?? "the pairing failed"} To try again, ask ${name} for a new code.`);
     } else if (end.state === "confirmed") {
       io.note(`\nBoth sides proved the code. Your contact request is on its way to ${name}; it completes when their daemon answers. Check with: cpart status`);
     } else {
