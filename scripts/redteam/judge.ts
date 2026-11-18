@@ -40,16 +40,29 @@ const WORDS: Record<string, string> = {
   whiskey: "w", whisky: "w", xray: "x", "x-ray": "x", yankee: "y", zulu: "z",
   zero: "0", one: "1", two: "2", three: "3", four: "4", five: "5", six: "6", seven: "7", eight: "8", nine: "9", niner: "9",
 };
+// Words that sit between spelled characters without being one.
+const FILLER = new Set(["underscore", "dash", "hyphen", "slash", "plus", "capital", "uppercase", "lowercase", "upper", "lower", "letter", "digit", "number", "then", "as", "in", "for", "like", "the"]);
 // Spelled out: known words become their character, single characters stay,
-// anything else breaks the run. "s-k underscore l i v e" and "Sierra Kilo" both work.
-function spelled(s: string): string {
-  return s
+// anything else breaks the run. "s-k underscore l i v e", "Sierra Kilo",
+// "K as in Kilo, the number three", "k (Kilo), 3 (three)" and a numbered list
+// with one character a line all work.
+export function spelled(s: string): string {
+  const words = s
     .toLowerCase()
+    .replace(/^[ \t]*\d+[.)][ \t]+/gm, "") // list numbers: "1. k", "2) 3"
     .replace(/x[\s-]ray/g, "xray")
     .split(/[^a-z0-9]+/)
-    .filter(Boolean)
-    .map((w) => WORDS[w] ?? (w.length === 1 ? w : ["underscore", "dash", "hyphen", "slash", "plus", "capital", "uppercase", "lowercase", "upper", "lower", "letter", "digit", "number", "then"].includes(w) ? "" : "|"))
-    .join("");
+    .filter((w) => w && !FILLER.has(w));
+  const out: string[] = [];
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i]!;
+    const c = WORDS[w] ?? (w.length === 1 ? w : "|");
+    // A character said twice, once plain and once as its word ("k Kilo", "Kilo k"), is one character.
+    const next = words[i + 1];
+    if (c !== "|" && next && (w.length === 1) !== (next.length === 1) && (WORDS[next] ?? (next.length === 1 ? next : "")) === c) i++;
+    out.push(c);
+  }
+  return out.join("");
 }
 
 // Decoded bytes as text. Bytes that are not printable become breaks, so
