@@ -1,0 +1,31 @@
+{
+  "name": "09-relay-move",
+  "title": "No model: the laptop moves to the second relay with cpart relay move while both are online, then the old relay is killed; messages keep flowing",
+  "asker": "devcontainer",
+  "sessions": false,
+  "needs": ["container"],
+  "steps": [
+    { "do": "desk", "device": "laptop", "on": false },
+    { "do": "cpart", "device": "devcontainer", "args": ["relay", "add", "{{spare}}"], "human": true, "why": "the contact has to use the relay the laptop moves to. Already done in 08 when the scenarios run in order; then this changes nothing", "record": true },
+    { "do": "wait_relays", "device": "laptop", "their_relays": "{{spare}}", "timeout": 180, "label": "the laptop knows the devcontainer uses the second relay" },
+    { "do": "cpart", "device": "devcontainer", "args": ["open", "laptop", "relay move check"] },
+    { "do": "cpart", "device": "devcontainer", "args": ["say", "laptop", "move 1, before the move"] },
+    { "do": "wait_message", "device": "laptop", "text": "move 1", "timeout": 60, "label": "move 1 on the laptop" },
+    { "do": "cpart", "device": "laptop", "args": ["say", "devcontainer", "move 2, before the move"] },
+    { "do": "wait_message", "device": "devcontainer", "text": "move 2", "timeout": 60, "label": "move 2 on the devcontainer" },
+    { "do": "cpart", "device": "laptop", "args": ["relay", "move", "{{spare}}", "--wait", "120"], "human": true, "why": "the laptop's person moves home to the second relay", "record": true, "timeout": 150 },
+    { "do": "expect", "device": "laptop", "check": "the move finished: the old relay is gone from the laptop's list", "args": ["relay", "list"], "cpart_matches": ["home\\s+ws://relay-b:7447"] },
+    { "do": "fault", "kind": "relay_stop", "hard": true },
+    { "do": "cpart", "device": "devcontainer", "args": ["say", "laptop", "move 3, old relay dead"] },
+    { "do": "cpart", "device": "laptop", "args": ["say", "devcontainer", "move 4, old relay dead"] },
+    { "do": "wait_message", "device": "laptop", "text": "move 3", "timeout": 120, "recover_after": 90, "label": "move 3 on the laptop" },
+    { "do": "wait_message", "device": "devcontainer", "text": "move 4", "timeout": 120, "recover_after": 90, "label": "move 4 on the devcontainer" },
+    { "do": "sleep", "seconds": 30 },
+    { "do": "cpart", "device": "devcontainer", "args": ["say", "laptop", "move 5, thirty seconds later"] },
+    { "do": "cpart", "device": "laptop", "args": ["say", "devcontainer", "move 6, thirty seconds later"] },
+    { "do": "wait_message", "device": "laptop", "text": "move 5", "timeout": 120, "recover_after": 90, "label": "move 5 on the laptop" },
+    { "do": "wait_message", "device": "devcontainer", "text": "move 6", "timeout": 120, "recover_after": 90, "label": "move 6 on the devcontainer" },
+    { "do": "cpart", "device": "laptop", "args": ["relay", "list"], "record": true },
+    { "do": "cpart", "device": "devcontainer", "args": ["relay", "list"], "record": true }
+  ]
+}

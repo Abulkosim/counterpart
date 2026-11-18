@@ -7,7 +7,12 @@ import { join } from "node:path";
 export const DEVICES = ["laptop", "devcontainer"] as const;
 export type Device = (typeof DEVICES)[number];
 export const other = (d: Device): Device => (d === "laptop" ? "devcontainer" : "laptop");
-export type Mode = "host" | "container" | "tunnel";
+// mac: the relay runs in the laptop's own network namespace, as a relay on a
+// Mac would. The laptop dials it as ws://127.0.0.1:7447, the devcontainer as
+// ws://host.docker.internal:7447, a name that points at the laptop.
+export type Mode = "host" | "container" | "tunnel" | "mac";
+export type RelayName = "relay" | "relay2";
+export const SPARE_URL = "ws://relay-b:7447";
 
 export interface Run {
   code: number;
@@ -46,6 +51,8 @@ export interface RigOptions {
   image: string;
   mode: Mode | "auto";
   port: number;
+  // Container, network and image names start with this.
+  prefix: string;
   creds: Partial<Record<Device, string>>;
   log: (line: string) => void;
 }
@@ -55,7 +62,39 @@ export interface RelayInfo {
   mode: Mode;
   url: string;
   note: string;
+  // A second relay the devices can add: container mode only.
+  spare?: string;
 }
+
+// Runs a command in a device on a pseudo-terminal and types the answer at its
+// passphrase prompt, as a person at a keyboard would: cpart release reads the
+// passphrase from a terminal only. The answer goes through the environment,
+// not the arguments.
+const ON_TERMINAL = `
+import os, pty, select, sys, time
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(sys.argv[1], sys.argv[1:])
+out, sent, end = b"", False, time.time() + 90
+while time.time() < end:
+    r, _, _ = select.select([fd], [], [], 0.2)
+    if not r:
+        continue
+    try:
+        d = os.read(fd, 4096)
+    except OSError:
+        break
+    if not d:
+        break
+    out += d
+    if not sent and b"passphrase: " in out.lower():
+        time.sleep(0.2)
+        os.write(fd, os.environ["PTY_ANSWER"].encode() + b"\\r")
+        sent = True
+_, status = os.waitpid(pid, 0)
+sys.stdout.write(out.decode("utf-8", "replace"))
+sys.exit(os.waitstatus_to_exitcode(status))
+`;
 
 export class Rig {
   readonly o: RigOptions;
@@ -63,6 +102,8 @@ export class Rig {
   subnet = "";
   private ips: Record<Device, number> = { laptop: 10, devcontainer: 20 };
   relay: RelayInfo | undefined;
+  // Where the home relay answers now: a tunnel gets a new address each start.
+  currentUrl: string | undefined;
   private relayProc: ChildProcess | undefined;
   private owned = false;
   private paused = new Set<Device>();
@@ -74,12 +115,12 @@ export class Rig {
 
   constructor(o: RigOptions) {
     this.o = o;
-    this.net = `two-devices-${o.id}`;
+    this.net = `${o.prefix}-${o.id}`;
     this.trace = join(o.work, "rig.log");
   }
 
-  name(d: Device | "relay"): string {
-    return `two-devices-${this.o.id}-${d}`;
+  name(d: Device | RelayName): string {
+    return `${this.o.prefix}-${this.o.id}-${d}`;
   }
 
   private note(line: string): void {
@@ -136,11 +177,22 @@ export class Rig {
       if (want === "host") throw new Error(`${why}. Allow it (for example: sudo ufw allow in on docker0 to 172.17.0.1 port ${this.o.port} proto tcp) or use --mode container`);
       this.note(`${why}. Falling back to a relay container named host.docker.internal on the devices' network.`);
       await this.startRelayContainer();
-      return (this.relay = { mode: "container", url: "ws://host.docker.internal:7447", note: `${why}, so the relay runs in a third container that the devices reach by the same name, host.docker.internal` });
+      await this.startRelayContainer("relay2");
+      return (this.relay = { mode: "container", url: "ws://host.docker.internal:7447", spare: SPARE_URL, note: `${why}, so the relay runs in a third container that the devices reach by the same name, host.docker.internal; a spare relay in a fourth, reached as relay-b` });
     }
     if (want === "container") {
       await this.startRelayContainer();
-      return (this.relay = { mode: "container", url: "ws://host.docker.internal:7447", note: "relay in a third container on the devices' network, reached as host.docker.internal" });
+      await this.startRelayContainer("relay2");
+      return (this.relay = { mode: "container", url: "ws://host.docker.internal:7447", spare: SPARE_URL, note: "relay in a third container on the devices' network, reached as host.docker.internal; a spare relay in a fourth, reached as relay-b" });
+    }
+    if (want === "mac") {
+      // The laptop must be running: the relay joins its network namespace.
+      await this.startRelayContainer("relay", true);
+      return (this.relay = {
+        mode: "mac",
+        url: "ws://127.0.0.1:7447",
+        note: "relay in a container that shares the laptop's network namespace (docker --network container:<laptop>), started with no --url and listening on 0.0.0.0:7447. The laptop dials it as ws://127.0.0.1:7447. The devcontainer resolves host.docker.internal to the laptop's address (a network alias on the laptop) and dials ws://host.docker.internal:7447",
+      });
     }
     const url = await this.startTunnelRelay();
     return (this.relay = { mode: "tunnel", url, note: "relay process on this machine behind cpart relay --tunnel (cloudflared quick tunnel); the devices reach it over the internet" });
@@ -176,13 +228,32 @@ export class Rig {
     this.relayProc = undefined;
   }
 
-  private async startRelayContainer(): Promise<void> {
-    const data = join(this.o.work, "relay-data");
+  // relay answers to host.docker.internal, relay2 (the spare) to relay-b.
+  // inLaptop: in the laptop's network namespace with no --url (mac mode).
+  private async startRelayContainer(which: RelayName = "relay", inLaptop = false): Promise<void> {
+    const data = this.relayData(which);
     mkdirSync(data, { recursive: true, mode: 0o777 });
     await sh("chmod", ["777", data]);
-    await this.must(["run", "-d", "--init", "--name", this.name("relay"), "--network", this.net, "--ip", `${this.subnet}.2`, "--network-alias", "host.docker.internal", "-v", `${data}:/data`, this.o.image, "cpart", "relay", "--host", "0.0.0.0", "--port", "7447", "--db", "/data/relay.db", "--url", "ws://host.docker.internal:7447"]);
-    const ok = await this.until(30_000, async () => (await this.docker(["exec", this.name("relay"), "curl", "-sf", "http://127.0.0.1:7447/healthz"])).code === 0);
-    if (!ok) throw new Error("the relay container did not answer");
+    const net = inLaptop
+      ? ["--network", `container:${this.name("laptop")}`]
+      : ["--network", this.net, "--ip", `${this.subnet}.${which === "relay" ? 2 : 3}`, "--network-alias", which === "relay" ? "host.docker.internal" : "relay-b"];
+    const url = inLaptop ? [] : ["--url", which === "relay" ? "ws://host.docker.internal:7447" : SPARE_URL];
+    await this.must(["run", "-d", "--init", "--name", this.name(which), ...net, "-v", `${data}:/data`, this.o.image, "cpart", "relay", "--host", "0.0.0.0", "--port", "7447", "--db", "/data/relay.db", ...url]);
+    const ok = await this.until(30_000, async () => (await this.docker(["exec", this.name(which), "curl", "-sf", "http://127.0.0.1:7447/healthz"])).code === 0);
+    if (!ok) throw new Error(`the ${which} container did not answer`);
+  }
+
+  relayData(which: RelayName = "relay"): string {
+    return join(this.o.work, which === "relay" ? "relay-data" : "relay2-data");
+  }
+
+  // The home relay is a container (container and mac modes).
+  private inContainer(): boolean {
+    return this.relay?.mode === "container" || this.relay?.mode === "mac";
+  }
+
+  private async containerRunning(which: RelayName): Promise<boolean> {
+    return (await this.docker(["inspect", "-f", "{{.State.Running}}", this.name(which)])).out.trim() === "true";
   }
 
   private async startTunnelRelay(): Promise<string> {
@@ -218,28 +289,29 @@ export class Rig {
     }
   }
 
-  async stopRelay(): Promise<void> {
+  // hard: SIGKILL, as when the machine it runs on dies.
+  async stopRelay(which: RelayName = "relay", hard = false): Promise<void> {
     const mode = this.relay?.mode;
-    this.note(`relay stop (${mode})`);
-    if (mode === "container") await this.docker(["stop", "-t", "5", this.name("relay")]);
+    this.note(`${which} ${hard ? "killed" : "stop"} (${mode})`);
+    if (which === "relay2" || this.inContainer()) await this.docker(hard ? ["kill", this.name(which)] : ["stop", "-t", "5", this.name(which)]);
     else {
       const p = this.relayProc;
       this.relayProc = undefined;
       if (p && p.exitCode === null) {
-        p.kill("SIGTERM");
+        p.kill(hard ? "SIGKILL" : "SIGTERM");
         await new Promise((r) => p.once("exit", r));
       }
     }
   }
 
   // Starts it again on the same database. A tunnel comes back at a new address.
-  async startRelayAgain(): Promise<string> {
+  async startRelayAgain(which: RelayName = "relay"): Promise<string> {
     const mode = this.relay!.mode;
-    this.note(`relay start (${mode})`);
-    if (mode === "container") {
-      await this.must(["start", this.name("relay")]);
-      await this.until(30_000, async () => (await this.docker(["exec", this.name("relay"), "curl", "-sf", "http://127.0.0.1:7447/healthz"])).code === 0);
-      return this.relay!.url;
+    this.note(`${which} start (${mode})`);
+    if (which === "relay2" || this.inContainer()) {
+      await this.must(["start", this.name(which)]);
+      await this.until(30_000, async () => (await this.docker(["exec", this.name(which), "curl", "-sf", "http://127.0.0.1:7447/healthz"])).code === 0);
+      return which === "relay2" ? SPARE_URL : this.relay!.url;
     }
     if (mode === "host") {
       this.spawnHostRelay(["--url", `ws://host.docker.internal:${this.o.port}`], this.hostRelayHost);
@@ -247,18 +319,25 @@ export class Rig {
       return this.relay!.url;
     }
     const url = await this.startTunnelRelay();
-    if (url !== this.relay!.url) this.note(`the relay came back at a new address: ${url} (the devices know ${this.relay!.url})`);
+    if (url !== this.relay!.url) this.note(`the relay came back at a new address: ${url} (the devices were paired on ${this.relay!.url})`);
+    this.currentUrl = url;
     return url;
   }
 
   relayRunning(): boolean {
-    return this.relay?.mode === "container" ? true : !!this.relayProc && this.relayProc.exitCode === null;
+    return this.inContainer() ? true : !!this.relayProc && this.relayProc.exitCode === null;
+  }
+
+  // In mac mode the laptop answers to host.docker.internal on the devices'
+  // network, as a Mac does for its containers.
+  private alias(d: Device): string[] {
+    return this.o.mode === "mac" && d === "laptop" ? ["host.docker.internal"] : [];
   }
 
   async startDevice(d: Device): Promise<void> {
     // In container mode the relay container answers to host.docker.internal on this network.
     const host = this.relay?.mode === "host" ? ["--add-host", "host.docker.internal:host-gateway"] : [];
-    const args = ["run", "-d", "--init", "--name", this.name(d), "--hostname", d, "--network", this.net, "--ip", this.ip(d), ...host];
+    const args = ["run", "-d", "--init", "--name", this.name(d), "--hostname", d, "--network", this.net, "--ip", this.ip(d), ...this.alias(d).flatMap((a) => ["--network-alias", a]), ...host];
     const cred = this.o.creds[d];
     if (cred) args.push("-v", `${cred}:/home/node/.claude-rig/.credentials.json:ro`);
     args.push(this.o.image);
@@ -280,8 +359,28 @@ export class Rig {
     return sh("docker", args, { timeoutMs: opts.timeoutMs ?? 60_000, env: { ...process.env, ...env }, ...(opts.input !== undefined ? { input: opts.input } : {}) });
   }
 
-  cpart(d: Device, args: string[], env: Record<string, string> = {}, timeoutMs = 60_000): Promise<Run> {
-    return this.exec(d, ["cpart", ...args], { env, timeoutMs });
+  cpart(d: Device, args: string[], env: Record<string, string> = {}, timeoutMs = 60_000, cwd?: string): Promise<Run> {
+    return this.exec(d, ["cpart", ...args], { env, timeoutMs, ...(cwd ? { cwd } : {}) });
+  }
+
+  // cpart in the device on a terminal, with the passphrase typed at its prompt.
+  onTerminal(d: Device, args: string[], passphrase: string, timeoutMs = 120_000): Promise<Run> {
+    return sh("python3", ["-I", "-c", ON_TERMINAL, "docker", "exec", "-it", this.name(d), "cpart", ...args], { timeoutMs, env: { ...process.env, PTY_ANSWER: passphrase } });
+  }
+
+  // Starts a command in the device and returns at once. out() is what it has
+  // printed so far, both streams; done resolves with its exit code.
+  start(d: Device, cmd: string[], env: Record<string, string> = {}): { out: () => string; done: Promise<number> } {
+    const child = spawn("docker", ["exec", "-i", ...Object.keys(env).flatMap((k) => ["-e", k]), this.name(d), ...cmd], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...env } });
+    let out = "";
+    child.stdout.on("data", (b: Buffer) => (out += b.toString("utf8")));
+    child.stderr.on("data", (b: Buffer) => (out += b.toString("utf8")));
+    const done = new Promise<number>((r) => {
+      child.on("close", (code) => r(code ?? 1));
+      child.on("error", () => r(127));
+    });
+    process.once("exit", () => child.kill("SIGKILL"));
+    return { out: () => out, done };
   }
 
   async cpartJson<T>(d: Device, args: string[]): Promise<T | undefined> {
@@ -323,7 +422,7 @@ export class Rig {
   // Wi-Fi drop a laptop often gets one.
   async connect(d: Device, newAddress = true): Promise<void> {
     if (newAddress) this.ips[d] += 1;
-    await this.must(["network", "connect", "--ip", this.ip(d), this.net, this.name(d)]);
+    await this.must(["network", "connect", "--ip", this.ip(d), ...this.alias(d).flatMap((a) => ["--alias", a]), this.net, this.name(d)]);
     this.offline.delete(d);
     if (newAddress) this.moved.add(d);
     this.note(`fault over: ${d} back on the network at ${this.ip(d)}`);
@@ -346,12 +445,13 @@ export class Rig {
       await this.startRelayAgain();
       done.push("started the relay");
     }
-    if (this.relay?.mode === "container") {
-      const r = await this.docker(["inspect", "-f", "{{.State.Running}}", this.name("relay")]);
-      if (r.out.trim() !== "true") {
-        await this.startRelayAgain();
-        done.push("started the relay");
-      }
+    if (this.inContainer() && !(await this.containerRunning("relay"))) {
+      await this.startRelayAgain();
+      done.push("started the relay");
+    }
+    if (this.relay?.spare && !(await this.containerRunning("relay2"))) {
+      await this.startRelayAgain("relay2");
+      done.push("started the spare relay");
     }
     return done;
   }
@@ -374,9 +474,10 @@ export class Rig {
       const r = await this.docker(["exec", this.name(d), "cat", "/home/node/.cpart/daemon.log"], 30_000);
       if (r.code === 0) writeFileSync(join(this.o.work, `${d}.log`), r.out);
     }
-    if (this.relay?.mode === "container") {
-      const r = await this.docker(["logs", this.name("relay")], 30_000);
-      writeFileSync(join(this.o.work, "relay.log"), r.out + r.err);
+    for (const which of ["relay", "relay2"] as const) {
+      if (which === "relay" ? !this.inContainer() : !this.relay?.spare) continue;
+      const r = await this.docker(["logs", this.name(which)], 30_000);
+      writeFileSync(join(this.o.work, `${which}.log`), r.out + r.err);
     }
   }
 
@@ -386,7 +487,9 @@ export class Rig {
     // network removes anything.
     if (!this.owned) return;
     for (const d of [...this.paused]) await this.docker(["unpause", this.name(d)]);
-    await this.docker(["rm", "-f", this.name("laptop"), this.name("devcontainer"), this.name("relay")]);
+    // The relays first: in mac mode one lives in the laptop's network namespace.
+    await this.docker(["rm", "-f", this.name("relay"), this.name("relay2")]);
+    await this.docker(["rm", "-f", this.name("laptop"), this.name("devcontainer")]);
     await this.docker(["network", "rm", this.net]);
   }
 }

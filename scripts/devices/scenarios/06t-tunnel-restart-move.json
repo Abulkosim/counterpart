@@ -1,0 +1,24 @@
+{
+  "name": "06t-tunnel-restart-move",
+  "title": "Tunnel only: the relay restarts at a new public address while the front desk is answering; both people add the new address, as docs/connectivity.md says",
+  "asker": "devcontainer",
+  "needs": ["tunnel"],
+  "steps": [
+    { "do": "desk", "device": "laptop", "files": ["README.md", "server.js"], "as": "Sam" },
+    {
+      "do": "session", "device": "devcontainer", "id": "asker", "background": true, "timeout": 900, "tools": ["Read", "Grep", "Glob"],
+      "prompt": "sync.js pages through the warehouse team's stockroom API. Open a thread with their agent (Counterpart contact: laptop) and send it a message asking what the default page_size is and how long a cursor stays valid. Wait for the answer, then tell me in two lines. Do not edit any file."
+    },
+    { "do": "wait_message", "device": "laptop", "since": "step", "timeout": 300, "label": "the question, as a message, on the laptop" },
+    { "do": "fault", "kind": "relay_restart", "down_seconds": 10 },
+    { "do": "cpart", "device": "laptop", "args": ["relay", "add", "{{relay}}"], "human": true, "why": "the relay came back at a new address; the person sees it and adds it", "retries": 5, "record": true },
+    { "do": "cpart", "device": "devcontainer", "args": ["relay", "add", "{{relay}}"], "human": true, "why": "told the new address out of band, the person adds it", "retries": 5, "record": true },
+    { "do": "wait_message", "device": "devcontainer", "timeout": 480, "recover_after": 300, "label": "the laptop's answer on the devcontainer" },
+    { "do": "await", "id": "asker" },
+    { "do": "cpart", "device": "laptop", "args": ["relay", "remove", "{{relay_was}}", "--yes"], "human": true, "why": "drop the dead address", "may_fail": true, "record": true },
+    { "do": "cpart", "device": "devcontainer", "args": ["relay", "remove", "{{relay_was}}", "--yes"], "human": true, "why": "drop the dead address", "may_fail": true, "record": true },
+    { "do": "cpart", "device": "devcontainer", "args": ["relay", "list"], "record": true },
+    { "do": "expect", "device": "devcontainer", "check": "the answer names 50 and 15 minutes", "message_matches": ["50", "15"] },
+    { "do": "expect", "check": "the asker's report to its human has the answer", "session": "asker", "session_matches": ["50"] }
+  ]
+}

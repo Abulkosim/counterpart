@@ -1,0 +1,17 @@
+{
+  "name": "08a-relay-add-both",
+  "title": "No model: both people add the same second relay a second apart; how long until each side knows and has confirmed the other's new list",
+  "asker": "devcontainer",
+  "sessions": false,
+  "needs": ["container"],
+  "steps": [
+    { "do": "cpart", "device": "devcontainer", "args": ["relay", "add", "{{spare}}"], "human": true, "why": "a second relay", "record": true },
+    { "do": "cpart", "device": "laptop", "args": ["relay", "add", "{{spare}}"], "human": true, "why": "a second relay", "record": true },
+    { "do": "wait_relays", "device": "laptop", "their_relays": "{{spare}}", "timeout": 600, "label": "the laptop holds the devcontainer's new list" },
+    { "do": "wait_relays", "device": "devcontainer", "their_relays": "{{spare}}", "timeout": 600, "label": "the devcontainer holds the laptop's new list" },
+    { "do": "wait_relays", "device": "laptop", "confirmed": true, "timeout": 600, "label": "the devcontainer has confirmed the laptop's new list" },
+    { "do": "wait_relays", "device": "devcontainer", "confirmed": true, "timeout": 600, "label": "the laptop has confirmed the devcontainer's new list" },
+    { "do": "cpart", "device": "laptop", "args": ["--json", "relay", "list"], "record": true },
+    { "do": "cpart", "device": "devcontainer", "args": ["--json", "relay", "list"], "record": true }
+  ]
+}
