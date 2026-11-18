@@ -9,6 +9,7 @@
 #     because this machine's firewall drops container-to-host traffic; the two
 #     names each side uses are the same as on a Mac.)
 #   - Dave runs here behind a TCP proxy that can black-hole traffic.
+#   - Carol runs here and pairs with an invite Bob made in his container.
 # Then it breaks things and counts: Wi-Fi drop (black hole), sleep (SIGSTOP
 # then SIGCONT), relay restart, Bob's container network unplugged, and a move
 # to a second relay with `cpart relay move`, after which the first one is gone.
@@ -106,6 +107,26 @@ grep -q "is ws://host.docker.internal:$PORT from here" "$WORK/bob.join" || fail 
 grep -q "^Paired with alice" "$WORK/bob.join" || fail "Bob did not pair"
 bob relay list | tee "$WORK/bob.relays"
 grep -q "others call it ws://127.0.0.1:$PORT" "$WORK/bob.relays"
+
+step "Bob, in the container, invites Carol on the host"
+cpart carol init --relay "ws://127.0.0.1:$PORT" --no-passphrase >/dev/null
+start_daemon carol
+INVITE=$(bob invite carol | grep -o 'cpart-invite:[A-Za-z0-9_-]*')
+# The invite names the relay as the host knows it, not as the container dials it.
+node -e 'const { decodeInvite } = await import(process.argv[1]); console.log("invite names", decodeInvite(process.argv[2]).relay)' "$REPO/packages/protocol/src/index.ts" "$INVITE" | tee "$WORK/carol.invite"
+grep -q "invite names ws://127.0.0.1:$PORT$" "$WORK/carol.invite" || fail "the container's invite does not name the host's address"
+cpart carol accept "$INVITE" bob >/dev/null
+wait_until 30 "Carol's pairing" sh -c "CPART_HOME='$WORK/carol' node packages/cli/src/main.ts contacts | grep -q 'bob .*active'"
+bob open carol "from the container" >/dev/null
+bob say carol "hello carol" >/dev/null
+wait_until 15 "Carol to read Bob" has carol bob "hello carol" 1
+cpart carol say bob "hello container" >/dev/null
+wait_until 15 "Bob to read Carol" has bob carol "hello container" 1
+
+step "the same relay under a second name is refused"
+if cpart alice relay add "ws://localhost:$PORT" >"$WORK/dup.out" 2>&1; then cat "$WORK/dup.out"; fail "relay add took the same relay twice"; fi
+cat "$WORK/dup.out"
+grep -q "is the same relay as ws://127.0.0.1:$PORT" "$WORK/dup.out" || fail "relay add did not say why"
 
 step "Alice pairs with Dave"
 INVITE=$(cpart alice invite dave | grep -o 'cpart-invite:[A-Za-z0-9_-]*')
@@ -209,13 +230,13 @@ got=$(( $(seen bob alice mv-a) + $(seen alice bob mv-b) + $(seen alice dave mv-d
 record "after move, old relay gone" "-" "$(since "$t0")" 6 "$got" "$(( 6 - got ))"
 
 step "what was refused (should be nothing)"
-for who in alice dave; do echo "$who: $(cpart "$who" rejects)"; done
+for who in alice dave carol; do echo "$who: $(cpart "$who" rejects)"; done
 echo "bob: $(bob rejects)"
 
 step "results"
 cat "$RESULTS"
 awk 'NR > 1 && $(NF) != 0 { bad = 1 } END { exit bad }' "$RESULTS" || fail "messages were lost"
-for who in alice dave; do [ "$(cpart "$who" rejects)" = "Nothing has been refused." ] || fail "$who refused something"; done
+for who in alice dave carol; do [ "$(cpart "$who" rejects)" = "Nothing has been refused." ] || fail "$who refused something"; done
 [ "$(bob rejects)" = "Nothing has been refused." ] || fail "bob refused something"
 echo
 echo "CONNECTIVITY SMOKE OK"
