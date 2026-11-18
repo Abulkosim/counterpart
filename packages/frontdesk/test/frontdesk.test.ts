@@ -9,7 +9,7 @@ import { type Relay, startRelay } from "@counterpart/relay";
 import { createServer } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import type { AddressInfo } from "node:net";
-import { type Model, type ModelRequest, FrontDesk, GOAL_WAIT_MS, addToBundle, anthropicApi, readBundle, removeFromBundle, userPrompt } from "../src/index.ts";
+import { type CheckResult, type Model, type ModelError, type ModelRequest, FrontDesk, GOAL_WAIT_MS, addToBundle, anthropicApi, claudeCli, claudeCliSetup, readBundle, removeFromBundle, userPrompt } from "../src/index.ts";
 
 const dirs: string[] = [];
 const stops: (() => Promise<void> | void)[] = [];
@@ -196,18 +196,30 @@ test("with an empty bundle it says so without calling the model", async () => {
   assert.match(texts(alice, thread).at(-1)!, /Nothing has been shared/);
 });
 
-test("a failing model spends the slot and sends nothing", async () => {
-  const model = scripted(new Error("overloaded"), "second try");
+test("a failing model spends the slot, tells the contact it was passed on, and is not retried", async () => {
+  const model = scripted(new Error("overloaded at /home/alice/secret-path"), "second try");
   const { alice, bob, desk, ask } = await setup(model);
-  desk.configure("bob", { slotsPerThread: 2 });
+  desk.configure("bob", { slotsPerThread: 3 });
   const thread = await bob.openThread("alice", "q");
   await ask(thread, "one");
-  assert.equal(texts(alice, thread).length, 1);
+  assert.deepEqual(texts(alice, thread), ["one", "This is Alice's front desk. I can't answer right now. I've passed the question to Alice."]);
   assert.equal(desk.runs()[0]!.outcome, "failed");
+  assert.match(desk.runs()[0]!.detail!, /overloaded/);
+  assert.deepEqual(desk.asks().map((a) => [a.question, a.reason]), [["one", "the model could not run (the model call failed)"]]);
+  // The short reason is a fixed phrase; the error's own text stays in the detail.
+  assert.equal(desk.health()!.short, "the model call failed");
+  assert.match(desk.health()!.detail, /secret-path/);
+  // No retry: more ticks call nothing.
+  await desk.tick();
+  await desk.tick();
+  assert.equal(model.calls.length, 1);
   await ask(thread, "two");
   assert.equal(texts(alice, thread).at(-1), "second try");
+  assert.equal(desk.health(), null, "a call that works clears the failure");
   await ask(thread, "three");
+  await ask(thread, "four");
   assert.match(texts(alice, thread).at(-1)!, /used the replies/);
+  assert.equal(model.calls.length, 3);
 });
 
 test("very long model output is cut", async () => {
@@ -436,7 +448,92 @@ test("the front desk answers through the API adapter end to end, and a failed ca
   assert.match(String(api.seen[0]!.body.system), /=== file: api\.md ===/);
   await ask(thread, "and again?");
   assert.deepEqual(desk.runs().map((r) => [r.outcome, r.detail]), [["failed", "model API returned 500"], ["answered", null]]);
-  assert.equal(texts(alice, thread).length, 3);
+  assert.equal(texts(alice, thread).length, 4);
+  assert.match(texts(alice, thread).at(-1)!, /can't answer right now/);
+  assert.equal(api.seen.length, 2);
+});
+
+// ---- a model that cannot run ----
+
+// A stand-in for the claude CLI: a real process that behaves like claude
+// started with no login, or not at all. Nothing calls the real CLI.
+function stubClaude(kind: "logged-out" | "exit-1" | "ok"): string {
+  const dir = tmp();
+  const bin = join(dir, "claude");
+  const init = JSON.stringify({ type: "system", subtype: "init", tools: [], mcp_servers: [] });
+  const lines =
+    kind === "logged-out" ? [init, JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Not logged in" }] }, error: "authentication_failed" }), JSON.stringify({ type: "result", is_error: true, result: "Not logged in · Please run /login" })]
+    : kind === "ok" ? [init, JSON.stringify({ type: "result", is_error: false, result: "ok" })]
+    : [];
+  writeFileSync(bin, `#!/bin/sh\ncat >/dev/null\n${lines.map((l) => `printf '%s\\n' '${l.replace(/'/g, "'\\''")}'`).join("\n")}\n${kind === "exit-1" ? "echo 'something broke' >&2\n" : ""}exit ${kind === "ok" ? 0 : 1}\n`, { mode: 0o755 });
+  return bin;
+}
+
+test("the claude adapter says why it could not run: not logged in, exit 1, not found", async () => {
+  const req = { system: "S", prompt: "P" };
+  await assert.rejects(claudeCli({ bin: stubClaude("logged-out") })(req), (e: ModelError) => e.short === "claude is not logged in" && /CLAUDE_CONFIG_DIR/.test(e.message));
+  await assert.rejects(claudeCli({ bin: stubClaude("exit-1") })(req), (e: ModelError) => e.short === "claude exited 1" && /something broke/.test(e.message));
+  await assert.rejects(claudeCli({ bin: join(tmp(), "claude") })(req), (e: ModelError) => e.short === "claude was not found" && /PATH=/.test(e.message));
+  assert.equal(await claudeCli({ bin: stubClaude("ok") })(req), "ok");
+});
+
+test("with claude exiting 1, the contact is told it was passed on, the owner gets the question and a failing status, and nothing loops", async () => {
+  const bin = stubClaude("logged-out");
+  const { alice, bob, desk, ask } = await setup(claudeCli({ bin }), {});
+  const thread = await bob.openThread("alice", "q");
+  await ask(thread, "what is the page size?");
+  await until("bob is told", () => texts(bob, thread).length === 2);
+  const notice = texts(bob, thread)[1]!;
+  assert.equal(notice, "This is Alice's front desk. I can't answer right now. I've passed the question to Alice.");
+  assert.ok(!notice.includes(tmpdir()) && !/logged in|CLAUDE/.test(notice), "the reason stays with the owner");
+  assert.deepEqual(desk.asks().map((a) => [a.question, a.reason]), [["what is the page size?", "the model could not run (claude is not logged in)"]]);
+  const h = desk.health()!;
+  assert.equal(h.short, "claude is not logged in");
+  const since = h.since;
+  await desk.tick();
+  await desk.tick();
+  assert.equal(texts(alice, thread).length, 2, "one notice, no retries");
+  assert.equal(desk.runs().length, 1);
+  // A second message is a second try with its own slot; the failure keeps its start time.
+  await ask(thread, "and the limit?");
+  assert.equal(texts(alice, thread).length, 4);
+  assert.equal(desk.health()!.since, since);
+  assert.equal(desk.asks().length, 2);
+});
+
+test("a check asked for by the owner runs in the daemon's desk and reports where it looked", async () => {
+  const bin = stubClaude("logged-out");
+  // The owner's command line has a desk object of its own, with no model.
+  const { desk: cli, alice } = await setup(async () => {
+    throw new Error("not available here");
+  });
+  const setupInfo = claudeCliSetup({ bin });
+  const id = cli.requestCheck();
+  assert.equal(cli.checkResult(id), "waiting");
+  const daemonSide = new FrontDesk(alice, claudeCli({ bin }), { setup: () => setupInfo }).start(20);
+  stops.push(() => daemonSide.stop().then(() => daemonSide.close()));
+  const results: CheckResult[] = [];
+  await until("the check is done", () => {
+    const x = cli.checkResult(id);
+    if (typeof x === "object") results.push(x);
+    return results.length > 0;
+  }, 10_000);
+  const r = results[0]!;
+  assert.equal(r.ok, false);
+  assert.equal(r.short, "claude is not logged in");
+  assert.deepEqual(r.setup, setupInfo);
+  assert.equal(setupInfo.kind === "claude-cli" && setupInfo.found, bin);
+  assert.equal(cli.health()!.short, "claude is not logged in");
+  // A working model clears it, and a request nobody took can be withdrawn.
+  const other = new FrontDesk(alice, claudeCli({ bin: stubClaude("ok") }));
+  stops.push(() => other.close());
+  const good = await other.check();
+  assert.equal(good.ok, true);
+  assert.equal(cli.health(), null);
+  await daemonSide.stop();
+  const late = cli.requestCheck();
+  cli.cancelCheck(late);
+  assert.equal(cli.checkResult(late), "waiting");
 });
 
 test("the owner marks a question answered with a reply, and it goes out as the owner's own message", async () => {
