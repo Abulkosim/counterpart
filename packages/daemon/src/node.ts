@@ -346,6 +346,11 @@ export class Counterpart {
     return encodeInvite({ v: 1, relay: this.keys.relay, credential: this.keys.device.credential, token, expiresAt });
   }
 
+  // Unused invites made for one root key (by a short-code pairing that ended).
+  dropInvitesFor(rootKey: string): void {
+    this.db.prepare("DELETE FROM invites WHERE for_root = ? AND used_by IS NULL").run(rootKey);
+  }
+
   async acceptInvite(invite: string, name: string): Promise<Contact> {
     checkName(name);
     const inv = decodeInvite(invite, this.now());
@@ -1084,7 +1089,7 @@ interface EventRow {
 
 const toStored = (r: EventRow): StoredEvent => ({ ...(JSON.parse(r.json) as ThreadEvent), ord: r.ord, mine: !!r.mine, status: r.status, receivedAt: r.received_at });
 
-function checkName(name: string): void {
+export function checkName(name: string): void {
   if (!/^[a-z0-9][a-z0-9._-]{0,31}$/.test(name)) throw new Error("contact names are 1-32 characters: a-z, 0-9, dot, dash, underscore");
 }
 

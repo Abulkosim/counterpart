@@ -1,12 +1,18 @@
 // Short-code pairing between two real daemons (in process) and a real relay.
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import type { AddressInfo } from "node:net";
+import { DatabaseSync } from "node:sqlite";
+import WebSocket, { WebSocketServer } from "ws";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type PairCode, parseCode } from "@counterpart/protocol";
+import {
+  type PairCode, JoinerRun, RELAY_AUTH_DOMAIN, encodePairMsg, generateSigningKey, issueDevice, parseCode, parsePairMsg, relayAuthMessage, sign,
+} from "@counterpart/protocol";
 import { type Relay, startRelay } from "@counterpart/relay";
-import { Counterpart, PairingEngine, PairingStore, RelayLink } from "../src/index.ts";
+import { Counterpart, OLD_RELAY, PairingEngine, PairingStore, RelayLink } from "../src/index.ts";
 
 const dirs: string[] = [];
 const stops: (() => unknown)[] = [];
@@ -20,7 +26,7 @@ async function relay(): Promise<Relay> {
   stops.push(() => r.close());
   return r;
 }
-async function person(r: Relay): Promise<{ node: Counterpart; store: PairingStore; link: RelayLink; engine: PairingEngine; lines: string[] }> {
+async function person(r: { url: string }): Promise<{ node: Counterpart; store: PairingStore; link: RelayLink; engine: PairingEngine; lines: string[] }> {
   const home = mkdtempSync(join(tmpdir(), "cpart-pair-"));
   dirs.push(home);
   const node = await Counterpart.init(home, { relay: r.url });
@@ -97,7 +103,137 @@ test("your own code, and a name you already use, are refused", async () => {
   const again = await code(bob, "carol");
   const k = alice.store.requestJoin(again.code, "bob2", alice.node.relay);
   await until("refused", () => alice.store.get(k)?.state === "failed" && bob.store.get(again.id)?.state === "failed");
-  assert.match(bob.store.get(again.id)!.detail!, /already your contact, as alice/);
-  assert.match(alice.store.get(k)!.detail!, /The other side ended the pairing/);
+  // The joiner notices before it answers, so no guess is spent.
+  assert.match(alice.store.get(k)!.detail!, /already your contact, as bob/);
+  assert.match(bob.store.get(again.id)!.detail!, /The other side ended the pairing/);
   assert.deepEqual(alice.node.contacts().map((x) => x.name), ["bob"]);
+});
+
+// A relay from before nameplates: it closes the connection on any pair.* frame.
+async function oldRelay(): Promise<{ url: string; connections: () => number }> {
+  const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise((res) => wss.once("listening", res));
+  let n = 0;
+  wss.on("connection", (ws) => {
+    n++;
+    ws.send(JSON.stringify({ t: "challenge", nonce: randomBytes(24).toString("base64url") }));
+    ws.on("message", (raw) => {
+      const f = JSON.parse(raw.toString()) as { t: string };
+      if (f.t === "auth") ws.send(JSON.stringify({ t: "ready", device: "d" }));
+      else if (f.t.startsWith("pair.")) ws.close(4002, "bad frame");
+    });
+  });
+  stops.push(() => new Promise((res) => wss.close(res)));
+  return { url: `ws://127.0.0.1:${(wss.address() as AddressInfo).port}`, connections: () => n };
+}
+
+test("a relay without nameplates: both sides give up after three tries, not in a reconnect loop", async () => {
+  const r = await oldRelay();
+  const alice = await person(r);
+  const before = r.connections();
+  const id = alice.store.requestInvite("bob", alice.node.relay);
+  const a = await until("the inviter to give up", () => (alice.store.get(id)?.state === "failed" ? alice.store.get(id) : undefined), 15_000);
+  assert.ok(a.detail!.startsWith(OLD_RELAY), a.detail!);
+  assert.match(a.detail!, /cpart invite bob --long/);
+  const bob = await person(r);
+  const j = bob.store.requestJoin(parseCode("7-acid-acorn"), "alice", bob.node.relay);
+  const b = await until("the joiner to give up", () => (bob.store.get(j)?.state === "failed" ? bob.store.get(j) : undefined), 15_000);
+  assert.ok(b.detail!.startsWith(OLD_RELAY), b.detail!);
+  // Each side: the first connection and one per try. Before the fix this ran
+  // to hundreds of connections in a minute.
+  await new Promise((res) => setTimeout(res, 1000));
+  assert.ok(r.connections() - before <= 10, `${r.connections() - before} connections`);
+  // No guess was spent, so the same code can be tried again.
+  assert.doesNotThrow(() => bob.store.requestJoin(parseCode("7-acid-acorn"), "alice", bob.node.relay));
+});
+
+test("contact names are checked before a code is made or answered", async () => {
+  const r = await relay();
+  const [alice, bob] = [await person(r), await person(r)];
+  assert.throws(() => alice.store.requestInvite("Maya", alice.node.relay), /contact names are/);
+  const { code: c } = await code(alice, "bob");
+  assert.throws(() => bob.store.requestJoin(c, "Alice", bob.node.relay), /contact names are/);
+  // A joiner with the same code in flight cannot start it twice.
+  bob.store.requestJoin(c, "alice", bob.node.relay);
+  assert.throws(() => bob.store.requestJoin(c, "alice2", bob.node.relay), /being tried here already/);
+});
+
+test("if the invite cannot be made after the code checks out, both sides are told", async () => {
+  const r = await relay();
+  const [alice, bob] = [await person(r), await person(r)];
+  const { id, code: c } = await code(alice, "bob");
+  // A name that slipped past the checks (written straight into the table).
+  const raw = new DatabaseSync(join(alice.node.home, "pairing.db"));
+  raw.prepare("UPDATE pairings SET name = 'Bob' WHERE id = ?").run(id);
+  raw.close();
+  const j = bob.store.requestJoin(c, "alice", bob.node.relay);
+  const a = await until("alice to fail", () => (alice.store.get(id)?.state === "failed" ? alice.store.get(id) : undefined));
+  assert.match(a.detail!, /the contact could not be made/);
+  const b = await until("bob to hear it", () => (bob.store.get(j)?.state === "failed" ? bob.store.get(j) : undefined));
+  assert.match(b.detail!, /The other side ended the pairing/);
+});
+
+test("an inviter whose daemon restarted closes its code, so the joiner is not left waiting", async () => {
+  const r = await relay();
+  const [alice, bob] = [await person(r), await person(r)];
+  const { id, code: c } = await code(alice, "bob");
+  await alice.engine.stop();
+  await alice.link.stop();
+  const link = new RelayLink(alice.node, { pollMs: 20 }).start();
+  const engine = new PairingEngine(alice.node, link, { pollMs: 20 }).start();
+  stops.push(() => link.stop(), () => engine.stop());
+  assert.match(alice.store.get(id)!.detail!, /restarted/);
+  await until("alice back online", () => link.online);
+  await new Promise((res) => setTimeout(res, 200));
+  const j = bob.store.requestJoin(c, "alice", bob.node.relay);
+  const b = await until("bob to be told", () => (bob.store.get(j)?.state === "failed" ? bob.store.get(j) : undefined), 5000);
+  assert.match(b.detail!, /No code with that number|ended the pairing/);
+});
+
+test("a joiner that proves the code but cannot add the contact says so, and the inviter stops waiting", async () => {
+  const r = await relay();
+  const alice = await person(r);
+  const { id, code: c } = await code(alice, "bob");
+  // Bob, by hand: he runs the protocol, then reports a failure after confirming.
+  const dev = await issueDevice(generateSigningKey());
+  const ws = new WebSocket(r.url);
+  const frames: Record<string, unknown>[] = [];
+  ws.on("message", (raw) => frames.push(JSON.parse(raw.toString())));
+  stops.push(() => ws.terminate());
+  const take = (t: string, k?: string): Promise<Record<string, unknown>> =>
+    until(t, () => {
+      const i = frames.findIndex((f) => f.t === t && (!k || (typeof f.body === "string" && (JSON.parse(f.body) as { k: string }).k === k)));
+      return i >= 0 ? frames.splice(i, 1)[0] : undefined;
+    });
+  const send = (f: unknown): void => ws.send(JSON.stringify(f));
+  const ch = await take("challenge");
+  send({ t: "auth", credential: dev.credential, relay: r.url, sig: sign(dev.sign, RELAY_AUTH_DOMAIN, relayAuthMessage(ch.nonce as string, r.url)) });
+  await take("ready");
+  send({ t: "pair.claim", nameplate: c.nameplate });
+  const run = new JoinerRun({ relay: r.url, nameplate: c.nameplate, words: c.words, credential: dev.credential });
+  const step = run.answer(parsePairMsg((await take("pair.msg", "a")).body));
+  assert.ok(step.ok);
+  send({ t: "pair.send", nameplate: c.nameplate, body: encodePairMsg(step.reply) });
+  const fin = run.finish(parsePairMsg((await take("pair.msg", "c")).body));
+  assert.ok(fin.ok);
+  await until("alice confirmed", () => alice.store.get(id)?.state === "confirmed");
+  send({ t: "pair.send", nameplate: c.nameplate, body: encodePairMsg({ v: 1, k: "fail", why: "refused" }) });
+  const a = await until("alice to stop waiting", () => (alice.store.get(id)?.state === "failed" ? alice.store.get(id) : undefined));
+  assert.match(a.detail!, /The other side ended the pairing/);
+  // The invite made for bob's key is gone: a late contact request is refused.
+  const db = new DatabaseSync(join(alice.node.home, "state.db"));
+  const left = db.prepare("SELECT COUNT(*) AS n FROM invites WHERE for_root = ?").get(dev.credential.rootKey) as { n: number };
+  db.close();
+  assert.equal(left.n, 0);
+});
+
+test("the words do not stay in pairing.db or its log once a pairing ends", async () => {
+  const r = await relay();
+  const [alice, bob] = [await person(r), await person(r)];
+  const { id, code: c } = await code(alice, "bob");
+  const j = bob.store.requestJoin(c, "alice", bob.node.relay);
+  await until("both sides done", () => alice.store.get(id)?.state === "done" && bob.store.get(j)?.state === "done");
+  const leaks = (home: string): string[] =>
+    readdirSync(home).filter((f) => f.startsWith("pairing.db")).filter((f) => readFileSync(join(home, f)).includes(Buffer.from(c.words.join("-"))));
+  await until("the words to be gone from disk", () => leaks(alice.node.home).length === 0 && leaks(bob.node.home).length === 0);
 });

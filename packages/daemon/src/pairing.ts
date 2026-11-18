@@ -16,13 +16,22 @@ import {
   isObject, pairFailureText, parsePairMsg, randomId, randomWords,
 } from "@counterpart/protocol";
 import type { RelayLink } from "./link.ts";
-import type { Counterpart } from "./node.ts";
+import { type Counterpart, checkName } from "./node.ts";
 
 const HOUR = 3600_000;
 const REQUEST_RETRY = 10_000; // ask the relay again if it has not answered
 const REQUEST_TRIES = 3; // then give up: the relay may not know about nameplates
 const INVITE_TTL = HOUR; // the sealed invite; the joiner's daemon uses it within seconds
 const JOIN_WAIT = 10 * 60_000; // a joiner waits this long for the inviter's first message
+
+// The start of the sentence when the relay never answered a pair.* frame. The
+// CLI looks for it to offer the long invite instead.
+export const OLD_RELAY = "The relay did not answer. It may be an older version without short codes.";
+
+// What a home remembers of a code it has answered: a hash, so the same code is
+// never answered twice from here.
+const codeHash = (relay: string, nameplate: number, words: string): string =>
+  createHash("sha256").update(canonicalize({ relay, nameplate, words: words.split("-") })).digest("base64url");
 
 export type PairingRole = "inviter" | "joiner";
 // requested: written by the CLI. open: an inviter's code is live. claiming,
@@ -65,10 +74,13 @@ interface Row {
 const TERMINAL = new Set<PairingState>(["done", "failed"]);
 
 // The table both the CLI and the daemon use. The words of a live code sit here
-// (in the private home) until the pairing ends, then are wiped.
+// (in the private home) until the pairing ends. Then the row is cleared, freed
+// pages are zeroed (secure_delete), and the daemon checkpoints the write-ahead
+// log so the old pages do not stay in pairing.db-wal either.
 export class PairingStore {
   private db: DatabaseSync;
   private now: () => number;
+  private dirty = false; // words were cleared and the log still holds them
 
   constructor(home: string, opts: { now?: () => number } = {}) {
     this.now = opts.now ?? Date.now;
@@ -80,6 +92,7 @@ export class PairingStore {
       PRAGMA busy_timeout = 5000;
       PRAGMA journal_mode = WAL;
       PRAGMA synchronous = FULL;
+      PRAGMA secure_delete = ON;
       CREATE TABLE IF NOT EXISTS pairings (
         id TEXT PRIMARY KEY, role TEXT NOT NULL, name TEXT NOT NULL, relay TEXT NOT NULL, nameplate INTEGER, words TEXT,
         state TEXT NOT NULL, detail TEXT, claimed INTEGER NOT NULL DEFAULT 0, peer_root TEXT,
@@ -94,26 +107,47 @@ export class PairingStore {
   }
 
   requestInvite(name: string, relay: string): string {
+    checkName(name);
     const id = randomId();
     const t = this.now();
     this.db.prepare("INSERT INTO pairings (id, role, name, relay, state, created_at, updated_at, expires_at) VALUES (?, 'inviter', ?, ?, 'requested', ?, ?, ?)").run(id, name, relay, t, t, t + 60_000);
     return id;
   }
 
-  // A code is tried once from a home. Trying it again would give whoever runs
-  // the other end, the relay included, a second guess.
+  // A code is answered once from a home. Answering it again would give whoever
+  // runs the other end, the relay included, a second guess. It is recorded as
+  // tried when the daemon answers (answered()), so a failure that spent no guess
+  // (rate limited, relay unreachable) leaves the code usable.
   requestJoin(code: PairCode, name: string, relay: string): string {
-    const hash = createHash("sha256").update(canonicalize({ relay, nameplate: code.nameplate, words: code.words })).digest("base64url");
+    checkName(name);
+    const words = code.words.join("-");
+    const hash = codeHash(relay, code.nameplate, words);
     const id = randomId();
     const t = this.now();
     this.tx(() => {
       if (this.db.prepare("SELECT 1 FROM tried WHERE hash = ?").get(hash)) throw new Error("this code was already tried here, and a code works once. Ask for a new one");
-      this.db.prepare("INSERT INTO tried (hash, at) VALUES (?, ?)").run(hash, t);
+      if (this.db.prepare("SELECT 1 FROM pairings WHERE role = 'joiner' AND relay = ? AND nameplate = ? AND words = ? AND state NOT IN ('done', 'failed')").get(relay, code.nameplate, words)) {
+        throw new Error("this code is being tried here already. See how it goes with: cpart status");
+      }
       this.db
         .prepare("INSERT INTO pairings (id, role, name, relay, nameplate, words, state, created_at, updated_at, expires_at) VALUES (?, 'joiner', ?, ?, ?, ?, 'requested', ?, ?, ?)")
-        .run(id, name, relay, code.nameplate, code.words.join("-"), t, t, t + JOIN_WAIT);
+        .run(id, name, relay, code.nameplate, words, t, t, t + JOIN_WAIT);
     });
     return id;
+  }
+
+  // The joiner is about to answer: record the code as tried, in the same
+  // transaction. False if it was answered from here before; then do not answer.
+  answered(r: Row, peerRoot: string): boolean {
+    const hash = codeHash(r.relay, r.nameplate!, r.words!);
+    let ok = false;
+    this.tx(() => {
+      if (this.db.prepare("SELECT 1 FROM tried WHERE hash = ?").get(hash)) return;
+      this.db.prepare("INSERT INTO tried (hash, at) VALUES (?, ?)").run(hash, this.now());
+      this.db.prepare("UPDATE pairings SET state = 'answered', peer_root = ?, updated_at = ? WHERE id = ?").run(peerRoot, this.now(), r.id);
+      ok = true;
+    });
+    return ok;
   }
 
   get(id: string): PairingView | undefined {
@@ -136,8 +170,19 @@ export class PairingStore {
     const t = this.now();
     const fields = Object.entries(f);
     // The secret goes when the pairing ends.
-    if (f.state && TERMINAL.has(f.state)) fields.push(["words", null]);
+    if (f.state && TERMINAL.has(f.state)) {
+      fields.push(["words", null]);
+      this.dirty = true;
+    }
     this.db.prepare(`UPDATE pairings SET ${fields.map(([k]) => `${k} = ?`).join(", ")}, updated_at = ? WHERE id = ?`).run(...fields.map(([, v]) => v as string | number | null), t, id);
+  }
+  // Copy the log into the database and empty it, so cleared words are not left
+  // in pairing.db-wal. A reader (a waiting CLI) can hold it up; then the next
+  // call tries again.
+  wipe(): void {
+    if (!this.dirty) return;
+    const r = this.db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as { busy: number } | undefined;
+    if (r && r.busy === 0) this.dirty = false;
   }
   // Old rows are kept a day so `cpart status` can say how a pairing ended.
   prune(): void {
@@ -186,6 +231,7 @@ export class PairingEngine {
   private now: () => number;
   private pollMs: number;
   private timer: NodeJS.Timeout | null = null;
+  private stopped = false;
   private runs = new Map<string, Live>(); // by pairing id, in memory only
   private asked = new Map<string, { at: number; tries: number }>(); // open and claim requests sent
   private seen = new Set<string>(); // relay message keys already handled
@@ -194,6 +240,9 @@ export class PairingEngine {
   // treats the same message twice as one.
   private sent = new Map<string, { nameplate: number; bodies: string[] }>();
   private pending = new Set<Promise<unknown>>();
+  // Nameplates of runs a restart ended. The other side is told on the first
+  // connection, so it does not wait for a run that cannot finish.
+  private ended: number[] = [];
   onLine: (line: string) => void = () => {};
 
   constructor(node: Counterpart, link: RelayLink, opts: { now?: () => number; pollMs?: number; store?: PairingStore } = {}) {
@@ -210,11 +259,13 @@ export class PairingEngine {
     for (const r of this.store.live()) {
       if ((r.role === "inviter" && r.state === "open") || (r.role === "joiner" && r.state === "answered")) {
         this.fail(r, "The daemon restarted during the pairing. Nothing was paired. Make a new code.");
+        if (r.nameplate) this.ended.push(r.nameplate);
       }
       // Stopped between proving the code and adding the contact: the invite was
       // in memory only, so this cannot finish.
       if (r.role === "joiner" && r.state === "confirmed" && !this.node.contacts().some((c) => c.rootKey === r.peer_root)) {
         this.fail(r, "The daemon stopped while adding the contact. Nothing was paired. Ask for a new code.");
+        if (r.nameplate) this.ended.push(r.nameplate);
       }
     }
     this.link.on("pair", this.onFrame);
@@ -225,11 +276,14 @@ export class PairingEngine {
   }
 
   async stop(): Promise<void> {
+    if (this.stopped) return;
+    this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.link.off("pair", this.onFrame);
     this.link.off("ready", this.onReady);
     // A contact being added finishes before the store closes.
     await Promise.allSettled([...this.pending]);
+    this.store.wipe();
     this.store.close();
   }
 
@@ -242,9 +296,15 @@ export class PairingEngine {
   }
 
   private onReady = (): void => {
-    // After a reconnect, ask again for what has not been answered. Claiming a
-    // nameplate you hold already makes the relay send its messages again.
-    this.asked.clear();
+    for (const n of this.ended.splice(0)) {
+      this.link.sendPair({ t: "pair.send", nameplate: n, body: encodePairMsg({ v: 1, k: "fail", why: "refused" }) });
+      this.link.sendPair({ t: "pair.close", nameplate: n });
+    }
+    // After a reconnect, ask again at once for what has not been answered. The
+    // count of tries is kept: a relay without nameplates closes the connection
+    // on every pair.* frame, and counting from zero after each reconnect would
+    // retry in a tight loop for as long as the code lives.
+    for (const a of this.asked.values()) a.at = 0;
     const live = new Set<string>();
     for (const r of this.store.live()) {
       live.add(r.id);
@@ -308,7 +368,7 @@ export class PairingEngine {
         const a = this.asked.get(r.id);
         if (a && t - a.at < REQUEST_RETRY) continue;
         if (a && a.tries >= REQUEST_TRIES) {
-          this.fail(r, "The relay did not answer. It may be an older version without short codes. Use the long invite: cpart invite <name> --long");
+          this.fail(r, r.role === "inviter" ? `${OLD_RELAY} Use the long invite: cpart invite ${r.name} --long` : `${OLD_RELAY} Ask ${r.name} for the long invite: cpart invite <your name> --long`);
           continue;
         }
         this.asked.set(r.id, { at: t, tries: (a?.tries ?? 0) + 1 });
@@ -318,6 +378,7 @@ export class PairingEngine {
           this.link.sendPair({ t: "pair.claim", nameplate: r.nameplate! });
         }
       }
+      this.store.wipe();
     } catch (e) {
       this.onLine(`pairing: ${(e as Error).message}`);
     }
@@ -376,9 +437,15 @@ export class PairingEngine {
         return;
       }
       case "pair.error": {
-        // With a ref it answers an open; otherwise a claim, which only a joiner makes.
-        const r = typeof f.ref === "string" ? this.store.row(f.ref) : this.byPlate(f.nameplate, "joiner");
-        const text = typeof f.code === "string" ? ERRORS[f.code] : undefined;
+        // With a ref it answers an open; otherwise a claim, which only a joiner
+        // makes, or a send. An inviter's send to a number the relay no longer
+        // has means the code was closed while this side was offline.
+        let r = typeof f.ref === "string" ? this.store.row(f.ref) : this.byPlate(f.nameplate, "joiner");
+        let text = typeof f.code === "string" ? ERRORS[f.code] : undefined;
+        if (!r && f.code === "nameplate_unknown") {
+          r = this.byPlate(f.nameplate, "inviter");
+          text = "The code was closed on the relay before the pairing finished. Nothing was paired. Make a new code.";
+        }
         if (!r || TERMINAL.has(r.state) || !text) return;
         // Errors about a nameplate we are mid-run on are the relay's word only;
         // they can end a run, never complete one.
@@ -412,7 +479,15 @@ export class PairingEngine {
       return;
     }
     if (m.k === "fail") {
-      if (r.state === "confirmed") return;
+      if (r.state === "confirmed") {
+        // The joiner proved the code but could not add the contact (or its
+        // daemon restarted), so its contact request will not come. Unless it
+        // already has: then the pairing is done and the message is late.
+        // Unauthenticated like every fail: a relay can end a pairing this way,
+        // as it could by dropping the contact request, but not complete one.
+        if (r.role !== "inviter" || !r.peer_root || this.node.contacts().some((c) => c.rootKey === r.peer_root)) return;
+        this.node.dropInvitesFor(r.peer_root);
+      }
       this.fail(r, pairFailureText(m.why, r.role), { close: true });
       return;
     }
@@ -427,7 +502,12 @@ export class PairingEngine {
     if (!step.ok) return this.fail(r, pairFailureText(step.why, "inviter"), { tell: step.why, close: true });
     const known = this.node.contacts().find((c) => c.rootKey === step.peer.rootKey || c.name === r.name);
     if (known) return this.fail(r, known.rootKey === step.peer.rootKey ? `They are already your contact, as ${known.name}. Nothing changed.` : `You already have a contact named ${r.name}. Nothing was paired.`, { tell: "refused", close: true });
-    const invite = this.node.createInvite(r.name, INVITE_TTL, step.peer.rootKey);
+    let invite: string;
+    try {
+      invite = this.node.createInvite(r.name, INVITE_TTL, step.peer.rootKey);
+    } catch (e) {
+      return this.fail(r, `The code was right, but the contact could not be made: ${(e as Error).message}. Nothing was paired.`, { tell: "refused", close: true });
+    }
     this.say(r, r.nameplate!, step.finish(invite));
     // The nameplate stays open until the joiner closes it or it expires, so the
     // last message still reaches a joiner who is briefly offline.
@@ -442,7 +522,11 @@ export class PairingEngine {
       this.runs.set(r.id, { joiner: run });
       const step = run.answer(m);
       if (!step.ok) return this.fail(r, pairFailureText(step.why, "joiner"), { tell: step.why, close: true });
-      this.store.set(r.id, { state: "answered", peer_root: step.peer.rootKey });
+      // What would make adding the contact fail later, checked before the
+      // answer spends the code.
+      const known = this.node.contacts().find((c) => c.rootKey === step.peer.rootKey || c.name === r.name);
+      if (known) return this.fail(r, known.rootKey === step.peer.rootKey ? `They are already your contact, as ${known.name}. Nothing changed.` : `You already have a contact named ${r.name}. Nothing was paired.`, { tell: "refused", close: true });
+      if (!this.store.answered(r, step.peer.rootKey)) return this.fail(r, "This code was already tried here, and a code works once. Nothing was paired.", { tell: "refused", close: true });
       this.say(r, r.nameplate!, step.reply);
       return;
     }

@@ -2,7 +2,7 @@
 // (packages/daemon/src/pairing.ts); these functions ask it and wait.
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { type Counterpart, type PairingView, PairingStore } from "@counterpart/daemon";
+import { type Counterpart, type PairingView, OLD_RELAY, PairingStore, checkName } from "@counterpart/daemon";
 import { codeWithRelay, parseCode } from "@counterpart/protocol";
 
 export interface Io {
@@ -34,13 +34,14 @@ const NEXT = (name: string): string => `Now, in Claude Code or Codex, say someth
 // Prints a code and, unless told not to, waits for the pairing to end.
 // Returns false when no code could be made; the caller then offers the long invite.
 export async function inviteByCode(node: Counterpart, name: string, io: Io, opts: { daemon: boolean; wait: boolean }): Promise<boolean> {
+  checkName(name);
   if (node.contacts().some((c) => c.name === name)) throw new Error(`contact "${name}" already exists`);
   if (!opts.daemon) return false;
   const store = new PairingStore(node.home);
   try {
     const id = store.requestInvite(name, node.relay);
     const got = await watch(store, id, 15_000, (v) => v.state !== "requested");
-    if (got.state === "requested") return false;
+    if (got.state === "requested" || (got.state === "failed" && got.detail?.startsWith(OLD_RELAY))) return false;
     if (got.state === "failed" || !got.code) throw new Error(got.detail ?? "no code was made");
     const full = codeWithRelay(got.nameplate!, got.code.split("-").slice(1), node.relay);
     const line = `cpart join ${full} <your name>`;
@@ -74,6 +75,8 @@ export async function inviteByCode(node: Counterpart, name: string, io: Io, opts
 // when there is none yet, which needs the relay the code names.
 export async function joinByCode(home: string, input: string, name: string, io: Io, setup: (relay: string | undefined) => Promise<Counterpart>): Promise<void> {
   const code = parseCode(input);
+  // Before anything is made or sent: a bad name found later would waste the code.
+  checkName(name);
   if (!code.relay && !existsSync(join(home, "keys.json"))) {
     throw new Error("this code does not say which relay to use, and you have no identity yet. Ask for the whole line, the one with @ in it.");
   }
