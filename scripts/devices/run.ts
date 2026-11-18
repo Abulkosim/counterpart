@@ -122,7 +122,7 @@ class Running {
 
   constructor(s: Scenario) {
     this.s = s;
-    this.vars = { relay: rig.currentUrl ?? rig.relay?.url ?? "", spare: rig.relay?.spare ?? "", ...PLANTED, secret_tail: PLANTED.secret.slice(-12) };
+    this.vars = { relay: rig.currentUrl ?? rig.relay?.url ?? "", spare: rig.relay?.spare ?? "", ...PLANTED, secret_tail: PLANTED.secret.slice(-12), secret_head: PLANTED.secret.slice(0, 12), secret_end4: PLANTED.secret.slice(-4) };
     this.r = {
       name: s.name, title: s.title, file: s.file ?? "", ok: true, error: null, startedAt: new Date(this.t0).toISOString(), durationS: 0,
       timeToFirstAnswerS: null, timeToAgreementS: null, interventions: [], restartedByHand: false, lost: { laptopToDevcontainer: 0, devcontainerToLaptop: 0, held: 0, notDelivered: [] },

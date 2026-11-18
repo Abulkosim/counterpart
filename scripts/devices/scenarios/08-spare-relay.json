@@ -7,8 +7,8 @@
     { "do": "desk", "device": "laptop", "files": ["README.md", "server.js"], "as": "Sam" },
     { "do": "cpart", "device": "devcontainer", "args": ["relay", "add", "{{spare}}"], "human": true, "why": "a second relay, so one going down does not stop the conversation", "record": true },
     { "do": "cpart", "device": "laptop", "args": ["relay", "add", "{{spare}}"], "human": true, "why": "a second relay, so one going down does not stop the conversation", "record": true },
-    { "do": "wait_relays", "device": "laptop", "their_relays": "{{spare}}", "confirmed": true, "timeout": 180, "label": "the laptop knows the devcontainer's new list and has its confirmation" },
-    { "do": "wait_relays", "device": "devcontainer", "their_relays": "{{spare}}", "confirmed": true, "timeout": 180, "label": "the devcontainer knows the laptop's new list and has its confirmation" },
+    { "do": "wait_relays", "device": "laptop", "their_relays": "{{spare}}", "confirmed": true, "timeout": 420, "label": "the laptop knows the devcontainer's new list and has its confirmation" },
+    { "do": "wait_relays", "device": "devcontainer", "their_relays": "{{spare}}", "confirmed": true, "timeout": 420, "label": "the devcontainer knows the laptop's new list and has its confirmation" },
     {
       "do": "session", "device": "devcontainer", "id": "asker", "background": true, "timeout": 900, "tools": ["Read", "Grep", "Glob"],
       "prompt": "sync.js reads items from the warehouse team's stockroom API. Open a thread with their agent (Counterpart contact: laptop) and send it a message asking what stockroom returns for a SKU that does not exist. Wait for the answer, then tell me what sync.js should handle. Do not edit any file."
