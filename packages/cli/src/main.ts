@@ -26,7 +26,7 @@ Start here. One of these is all the setup there is:
 
   cpart setup --relay <wss://host>                                create your identity, keep the daemon running, add Counterpart to
                                                                   Claude Code and Codex. Safe to run again
-  cpart join <code> <name>                                        the same, with the code someone sent you (7-violet-anchor@host).
+  cpart join <code> <name>                                        the same, with the code someone sent you (7-cider-otter@host).
                                                                   <name> is what you call them. A long cpart-invite: works too
   cpart invite <name> [--no-wait] [--long]                        make a short code to send, then wait for them. <name> is what you
                                                                   call them. --long makes the long invite instead. With --json

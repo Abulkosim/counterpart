@@ -1,4 +1,4 @@
-// Pairing with a short code such as 7-violet-anchor. The number names a
+// Pairing with a short code such as 7-cider-otter. The number names a
 // short-lived mailbox on the relay (the nameplate). The two words are the
 // password for a CPace run (pake.ts) between the person who made the code
 // (the inviter, CPace initiator) and the person who typed it (the joiner,
@@ -54,7 +54,7 @@ export const codeWithRelay = (nameplate: number, words: readonly string[], relay
 // error to show. It does not mean the words are right.
 export const looksLikeCode = (s: string): boolean => /^\s*[0-9]{1,4}[-\s]+[A-Za-z]/.test(s) && !s.startsWith("cpart-invite:");
 
-// "7-violet-anchor", "7 violet anchor", "7-Violet-Anchor@relay.example.com".
+// "7-cider-otter", "7 cider otter", "7-Cider-Otter@relay.example.com".
 // A misspelt word is refused here, before anything is sent, so a typo never
 // costs the code.
 export function parseCode(input: string): PairCode {
@@ -62,7 +62,7 @@ export function parseCode(input: string): PairCode {
   const at = s.indexOf("@");
   const codePart = (at < 0 ? s : s.slice(0, at)).toLowerCase();
   const parts = codePart.split(/[-\s]+/).filter(Boolean);
-  if (parts.length !== 3 || !/^[0-9]{1,4}$/.test(parts[0]!)) throw new Error("a code is a number and two words, like 7-violet-anchor");
+  if (parts.length !== 3 || !/^[0-9]{1,4}$/.test(parts[0]!)) throw new Error("a code is a number and two words, like 7-cider-otter");
   const nameplate = Number(parts[0]);
   if (nameplate < 1 || nameplate > NAMEPLATE_MAX) throw new Error("the number in a code is between 1 and 9999");
   const words = [parts[1]!, parts[2]!] as [string, string];

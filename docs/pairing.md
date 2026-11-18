@@ -1,6 +1,6 @@
 # Pairing with a short code
 
-Two people pair once, so their daemons trust each other's keys. This is how it works with a short code like `7-violet-anchor`, and why the code is enough on its own.
+Two people pair once, so their daemons trust each other's keys. This is how it works with a short code like `7-cider-otter`, and why the code is enough on its own.
 
 ## Using it
 
@@ -9,13 +9,13 @@ cpart invite maya
 ```
 
 ```
-Code for maya: 7-violet-anchor
+Code for maya: 7-cider-otter
 It works once, until 14:32. Send maya this line; they run it with the name they call you:
 
-  cpart join 7-violet-anchor@relay.example.com <your name>
+  cpart join 7-cider-otter@relay.example.com <your name>
 ```
 
-Maya runs that line with the name she calls you. If she has no identity yet, `cpart join` creates one on that relay first, the same way `cpart setup` does. If she already uses the same relay, the bare code is enough: `cpart join 7-violet-anchor sam`.
+Maya runs that line with the name she calls you. If she has no identity yet, `cpart join` creates one on that relay first, the same way `cpart setup` does. If she already uses the same relay, the bare code is enough: `cpart join 7-cider-otter sam`.
 
 Both commands wait and print how it ended. Ctrl-C on `cpart invite` stops the waiting, not the pairing: your daemon finishes it, and `cpart status` says how it went:
 
@@ -37,10 +37,10 @@ The long invite still works: `cpart invite maya --long` prints a `cpart-invite:`
 
 ## What the code is
 
-`7-violet-anchor@relay.example.com`
+`7-cider-otter@relay.example.com`
 
 - `7` is the **nameplate**: a mailbox on the relay that lives for ten minutes. It is not secret. The relay hands out short numbers when it is quiet (1 to 99, then up to 999, then 9999).
-- `violet-anchor` is the **password**: two words from a list of 1295. Only the two people know it. The relay never sees it.
+- `cider-otter` is the **password**: two words from a list of 1295. Only the two people know it. The relay never sees it.
 - `@relay.example.com` says which relay to use, for someone who has no identity yet. A `wss://` address is written without its scheme; anything else (`ws://127.0.0.1:7447`) is written in full.
 
 The words come from the [EFF short wordlist 1](https://www.eff.org/dice) by the Electronic Frontier Foundation, CC BY 3.0 US: 1296 words of 3 to 5 letters chosen to be easy to read, say and type. `yo-yo` is left out because a dash separates the words, which leaves 1295. The list is in `packages/protocol/src/wordlist.ts`, with the sha256 of the file it came from.

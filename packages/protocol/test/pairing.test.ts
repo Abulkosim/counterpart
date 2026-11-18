@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   type PairMsg, InviterRun, JoinerRun, WORDS, b64u, codeWithRelay, encodePairMsg, generateSigningKey, issueDevice, looksLikeCode, pairAd, parseCode, parsePairMsg,
   randomWords, relayFromHint, relayHint, unb64u,
@@ -28,6 +30,15 @@ test("codes: format, parse, typos refused before anything is sent", () => {
   assert.throws(() => parseCode("7-acid"), /a number and two words/);
   assert.throws(() => parseCode("7-acid-zoom@relay example"), /cannot be shown/);
   assert.ok(looksLikeCode("7-acid-zoom") && looksLikeCode("7 acid zoom@x") && !looksLikeCode("cpart-invite:abc"));
+  // The example people are shown must be a code they can type.
+  const example = /like (\S+)$/.exec((() => { try { parseCode("7"); } catch (e) { return (e as Error).message; } return ""; })())![1]!;
+  assert.deepEqual(parseCode(example).words, example.split("-").slice(1));
+  for (const file of ["../../../docs/pairing.md", "../../cli/src/main.ts"]) {
+    const text = readFileSync(join(import.meta.dirname, file), "utf8");
+    const codes = text.match(/\b[0-9]{1,4}-[a-z]{3,5}-[a-z]{3,5}\b/g) ?? [];
+    assert.ok(codes.length > 0, file);
+    for (const c of codes) assert.doesNotThrow(() => parseCode(c), `${file}: ${c}`);
+  }
   for (const r of [RELAY, "wss://relay.example.com:8443/cpart", "ws://127.0.0.1:7447", "wss://h/", "wss://user@h"]) assert.equal(relayFromHint(relayHint(r)), r, r);
   assert.equal(relayHint(RELAY), "relay.example.com");
   assert.equal(codeWithRelay(7, ["acid", "zoom"], "ws://127.0.0.1:1"), "7-acid-zoom@ws://127.0.0.1:1");
