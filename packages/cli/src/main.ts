@@ -16,6 +16,7 @@ import { startViewer } from "@counterpart/viewer";
 import { type WorkResult, apply as applyWork, work } from "@counterpart/worker";
 import { agents, bootInstalled, claim, down, logFile, registerAgents, running, up } from "./service.ts";
 import { openTunnel } from "./tunnel.ts";
+import { SHARE_USAGE, shareCommand, sharedSummary } from "./share.ts";
 import { hookLines, installHooks, removeHooks } from "./hooks-install.ts";
 import { inviteByCode, joinByCode, pairingLines } from "./pair.ts";
 import { PairingEngine } from "@counterpart/daemon";
@@ -100,8 +101,10 @@ sends you is their claim; only what your machine could recompute is marked check
   cpart evidence <thread> [id]                                    evidence from both sides: what was checked here, and what is only claimed
 
 Front desk: a model with no tools that answers a contact while you are away,
-using only the files you put in that contact's bundle.
+using only the files you shared with that contact: committed files from your
+repository, or copies you put in their bundle.
 
+${SHARE_USAGE}
   cpart bundle add <contact> <file...>                            share copies of these files with a contact
   cpart bundle list <contact>
   cpart bundle remove <contact> <name>
@@ -844,12 +847,17 @@ async function main(): Promise<void> {
       const list = b.files.map((f) => `${f.name.padEnd(32)} ${String(Buffer.byteLength(f.text)).padStart(7)} bytes`).join("\n");
       return out(b.files.length ? `${c.name} can be told what is in:\n${list}` : `Nothing is shared with ${c.name}.`, { contact: c.name, hash: b.hash, files: b.files.map((f) => ({ name: f.name, sha256: f.sha256 })) });
     }
+    case "share": {
+      const gate = { tty: !!process.stdin.isTTY, yes: !!flags.yes, envPassphrase: process.env.CPART_PASSPHRASE !== undefined, print: (s: string) => console.error(s), line, secret };
+      const r = await shareCommand(node, home, args, { ...(flags.repo ? { repo: flags.repo } : {}), ...(flags.allow ? { allow: flags.allow } : {}), all: !!flags.all, safe, gate });
+      return out(r.human, r.data);
+    }
     case "desk": {
       const desk = new FrontDesk(node, async () => {
         throw new Error("not available here");
       });
       const show = (d: { contact: string; enabled: boolean; owner: string; slotsPerThread: number; slotsPerDay: number }): string =>
-        `${d.contact.padEnd(20)} ${d.enabled ? "on " : "off"}  answers as ${d.owner}'s front desk, ${d.slotsPerThread} replies per thread, ${d.slotsPerDay} per day, ${readBundle(home, d.contact).files.length} file(s) shared`;
+        `${d.contact.padEnd(20)} ${d.enabled ? "on " : "off"}  answers as ${d.owner}'s front desk, ${d.slotsPerThread} replies per thread, ${d.slotsPerDay} per day, ${sharedSummary(home, node.contact(d.contact))}`;
       if (args[0] === "status" || !args[0]) {
         const list = desk.desks();
         return out(list.length ? list.map(show).join("\n") : "No contacts yet.", list);

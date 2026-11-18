@@ -291,6 +291,13 @@ export class Counterpart {
     return this.keys.root!;
   }
 
+  // Throws unless the passphrase unlocks the root key. For commands that must
+  // come from the owner and not from their agent.
+  checkPassphrase(passphrase: string): void {
+    if (!this.keys.sealedRoot) throw new Error("this identity has no passphrase");
+    this.unlock(passphrase);
+  }
+
   // Renew the device credential now. Needs the passphrase when the root key is locked.
   async renew(passphrase?: string): Promise<void> {
     await this.reissue(this.unlock(passphrase));
