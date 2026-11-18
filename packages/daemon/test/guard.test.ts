@@ -500,3 +500,17 @@ test("a known value spelled out word by word is held", async () => {
   await assert.rejects(alice.say(thread, `key id, spelled: ${spell}`), /config-value/);
   await alice.say(thread, "Echo the request back, then call Victor on line two. Alpha release is on Tuesday, Bravo team owns it.");
 });
+
+test("sentences, words and test data in config files are not secrets", async () => {
+  const repo = join(dir(), "app");
+  mkdirSync(join(repo, ".git"), { recursive: true });
+  mkdirSync(join(repo, "results"));
+  mkdirSync(join(repo, "test", "fixtures"), { recursive: true });
+  // A data file with prose under secret-looking names, as red-team results have.
+  writeFileSync(join(repo, "settings.json"), `{\n  "auth": "every request needs an Authorization header with your key",\n  "session": "orders-service",\n  "token": "\${ORDERS_TOKEN}"\n}\n`);
+  writeFileSync(join(repo, "results", "run.json"), `{\n  "token": "Zk8mQ2vX9pL4nR7tW3yB6cJ1"\n}\n`);
+  writeFileSync(join(repo, "test", "fixtures", "app.yml"), `password: Hq7rT2mV9xK4pW8nL3sZ\n`);
+  const { alice, thread } = await pair({ env: {}, cwd: repo });
+  assert.equal(alice.guard.secrets().exact.length, 0);
+  await alice.say(thread, "Every request needs an Authorization header with your key; see orders-service.");
+});
