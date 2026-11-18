@@ -41,6 +41,16 @@ The files are read on a separate thread, so a large share does not hold up the d
 
 If you change the rules while the model is working, the reply is thrown away. A new commit during a run does not: the reply is checked against the commit the model was shown.
 
+## When the model cannot run
+
+The daemon runs the model, not your shell. A daemon started at login (systemd, launchd) or in a fresh container can have a different `PATH` and `CLAUDE_CONFIG_DIR`, so `claude` may be missing or not logged in there even when it works in your terminal.
+
+`cpart desk on` checks this first. It asks the daemon to make one tiny model call with its own environment and waits for the result, up to about a minute. If the call fails, the desk stays off and you get the reason, the `claude` the daemon found, its `PATH` and its config directory, and what to do. `cpart desk check` runs the same check at any time. `cpart desk on <contact> --no-check` skips it. If no daemon is running, nothing is checked and `desk on` says so.
+
+If the model fails while answering, the contact gets the fixed text "I can't answer right now. I've passed the question to <owner>." The reason is never sent: it can name local paths. The question goes to `cpart asks` with the reason, the reply slot stays spent, and the message is not tried again. `cpart status` shows `front desk failing: <reason>, since <time>` while a desk is on, until a model call works again.
+
+With `cpart up --boot`, the login service gets the `PATH` and `CLAUDE_CONFIG_DIR` of the shell that ran it. To change them, run `cpart down`, then `cpart up --boot` again from a shell where `claude` works.
+
 ## From copies (bundles)
 
 ```sh

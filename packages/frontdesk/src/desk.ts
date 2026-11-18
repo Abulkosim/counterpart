@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { type Counterpart, isHeld } from "@counterpart/daemon";
 import { ASK_CHARS, type Material, REPLY_CHARS, TEXT, compose, queryFrom, unchanged } from "./answer.ts";
-import type { Model } from "./model.ts";
+import { type Model, type ModelSetup, ModelError } from "./model.ts";
 import { Preparer } from "./offload.ts";
 import { userPrompt } from "./prompt.ts";
 
@@ -35,7 +35,36 @@ export interface Ask {
   // "answered" also covers the owner writing in the thread after the question.
   state: "open" | "answered" | "dismissed";
   closedAt: number | null;
+  // Why the desk passed it on without trying, when something on this machine
+  // failed. Written by code, never by the model or the contact.
+  reason: string | null;
 }
+
+// The model has failed since `since`, and has not run since. Cleared by the
+// next call that works.
+export interface Health {
+  since: number;
+  last: number;
+  short: string; // a fixed phrase, safe for a status line
+  detail: string; // may name local paths; for the owner only
+}
+
+export interface CheckResult {
+  ok: boolean;
+  short: string | null;
+  detail: string | null;
+  setup: ModelSetup | null;
+}
+
+// A tiny call that shows the model can run from the daemon's environment.
+const CHECK = { system: "This is a check that you can be reached. Reply with the word ok and nothing else.", prompt: "ok?" };
+export const CHECK_TIMEOUT_MS = 60_000;
+// A check request older than this is not run: whoever asked has given up.
+const CHECK_STALE_MS = 2 * 60_000;
+// Goes on the status line and in `cpart asks`, so it is always a phrase code
+// chose. Any other error's message could carry text from a response; that
+// stays in the detail, which only the owner's own commands and log show.
+const shortOf = (e: Error): string => (e instanceof ModelError ? e.short : e.name === "TimeoutError" ? "the model timed out" : "the model call failed");
 
 const DAY = 24 * 3600 * 1000;
 const NOTICES_PER_DAY = 3;
@@ -66,15 +95,22 @@ export class FrontDesk {
   private preparer: Preparer;
   private closed = false;
   private goalWaitMs: number;
+  private setup: () => ModelSetup | null;
+  private checkTimer: NodeJS.Timeout | null = null;
+  private checking: Promise<void> | null = null;
   onError: (e: Error) => void = () => {};
   // Called after each run is recorded, so the daemon can log it.
   onRun: (run: { outcome: Run["outcome"]; contact: string; threadId: string; detail: string | null }) => void = () => {};
+  // Called after each check the owner asked for.
+  onCheck: (c: CheckResult) => void = () => {};
 
   // `forbidden` are exact strings that must never appear in a reply, such as
   // values the model runtime adds to its own context. A reply containing one is
   // dropped. This catches accidents and plain leaks, not a determined encoder.
-  constructor(node: Counterpart, model: Model, opts: { now?: () => number; forbidden?: string[]; prepareTimeoutMs?: number; goalWaitMs?: number } = {}) {
+  // `setup` says where the model runs from, for the owner when a check fails.
+  constructor(node: Counterpart, model: Model, opts: { now?: () => number; forbidden?: string[]; prepareTimeoutMs?: number; goalWaitMs?: number; setup?: () => ModelSetup } = {}) {
     this.goalWaitMs = opts.goalWaitMs ?? GOAL_WAIT_MS;
+    this.setup = opts.setup ?? (() => null);
     this.preparer = new Preparer(opts.prepareTimeoutMs !== undefined ? { timeoutMs: opts.prepareTimeoutMs } : {});
     this.forbidden = (opts.forbidden ?? []).filter((f) => f.length >= 4).map((f) => f.toLowerCase());
     this.node = node;
@@ -105,10 +141,22 @@ export class FrontDesk {
       CREATE TABLE IF NOT EXISTS asks (
         id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, contact_root TEXT NOT NULL, thread_id TEXT NOT NULL, question TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS health (
+        id INTEGER PRIMARY KEY CHECK (id = 1), since INTEGER NOT NULL, last INTEGER NOT NULL, short TEXT NOT NULL, detail TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS checks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, started_at INTEGER, done_at INTEGER, ok INTEGER, short TEXT, detail TEXT, setup TEXT
+      );
     `);
     // Columns added after the table first shipped.
     const cols = (this.db.prepare("PRAGMA table_info(asks)").all() as unknown as { name: string }[]).map((c) => c.name);
     if (!cols.includes("closed_at")) this.db.exec("ALTER TABLE asks ADD COLUMN closed_at INTEGER; ALTER TABLE asks ADD COLUMN closed_how TEXT;");
+    try {
+      if (!cols.includes("reason")) this.db.exec("ALTER TABLE asks ADD COLUMN reason TEXT;");
+    } catch (e) {
+      // The daemon and a command can open the file at the same moment.
+      if (!/duplicate column/i.test((e as Error).message)) throw e;
+    }
   }
 
   close(): void {
@@ -119,13 +167,18 @@ export class FrontDesk {
 
   // ---- configuration, set only by the owner ----
 
-  configure(contactName: string, patch: Partial<Omit<DeskConfig, "contact">>): DeskConfig {
-    const c = this.node.contact(contactName);
-    const cur = this.config(c.name);
-    const next = { ...cur, ...patch };
+  // What configure() would set, or the reason it would refuse. Writes nothing.
+  validate(contactName: string, patch: Partial<Omit<DeskConfig, "contact">>): DeskConfig {
+    const next = { ...this.config(contactName), ...patch };
     if (!Number.isInteger(next.slotsPerThread) || next.slotsPerThread < 1 || next.slotsPerThread > 100) throw new Error("replies per thread must be 1-100");
     if (!Number.isInteger(next.slotsPerDay) || next.slotsPerDay < 1 || next.slotsPerDay > 1000) throw new Error("replies per day must be 1-1000");
     if (!/^[\p{L}\p{N} ._-]{1,40}$/u.test(next.owner)) throw new Error("owner name: 1-40 letters, digits, spaces, dot, dash, underscore");
+    return next;
+  }
+
+  configure(contactName: string, patch: Partial<Omit<DeskConfig, "contact">>): DeskConfig {
+    const c = this.node.contact(contactName);
+    const next = this.validate(c.name, patch);
     this.db
       .prepare("INSERT INTO desks (contact_root, enabled, owner, slots_per_thread, slots_per_day) VALUES (?, ?, ?, ?, ?) ON CONFLICT (contact_root) DO UPDATE SET enabled = excluded.enabled, owner = excluded.owner, slots_per_thread = excluded.slots_per_thread, slots_per_day = excluded.slots_per_day")
       .run(c.rootKey, next.enabled ? 1 : 0, next.owner, next.slotsPerThread, next.slotsPerDay);
@@ -171,7 +224,84 @@ export class FrontDesk {
       id: r.id, at: r.at, contact: names.get(r.contact_root) ?? "?", threadId: r.thread_id, question: r.question,
       state: r.closed_how ?? (ownerWroteAfter(r.thread_id, r.at) ? "answered" : "open"),
       closedAt: r.closed_at,
+      reason: r.reason ?? null,
     }));
+  }
+
+  // ---- whether the model can run ----
+
+  // Null while the model works, or before it was ever called.
+  health(): Health | null {
+    return (this.db.prepare("SELECT since, last, short, detail FROM health WHERE id = 1").get() as Health | undefined) ?? null;
+  }
+
+  private failing(e: Error): void {
+    const now = this.now();
+    this.db
+      .prepare("INSERT INTO health (id, since, last, short, detail) VALUES (1, ?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET last = excluded.last, short = excluded.short, detail = excluded.detail")
+      .run(now, now, shortOf(e), e.message.slice(0, 500));
+  }
+
+  private working(): void {
+    this.db.prepare("DELETE FROM health").run();
+  }
+
+  // Called by the owner's command line: asks the daemon, which runs this desk
+  // with its own environment, to make one tiny model call. Returns an id for
+  // checkResult().
+  requestCheck(): number {
+    return Number(this.db.prepare("INSERT INTO checks (at) VALUES (?)").run(this.now()).lastInsertRowid);
+  }
+
+  // Withdraw a request no daemon has taken, so one started later does not run it.
+  cancelCheck(id: number): void {
+    this.db.prepare("DELETE FROM checks WHERE id = ? AND started_at IS NULL").run(id);
+  }
+
+  // True while the daemon runs a check. It runs one at a time, so a request
+  // made meanwhile waits for it.
+  checkBusy(): boolean {
+    return !!this.db.prepare("SELECT 1 FROM checks WHERE started_at IS NOT NULL AND done_at IS NULL AND at > ?").get(this.now() - CHECK_STALE_MS);
+  }
+
+  // "waiting": no daemon has taken it yet. "running": taken, not finished.
+  checkResult(id: number): "waiting" | "running" | CheckResult {
+    const r = this.db.prepare("SELECT * FROM checks WHERE id = ?").get(id) as CheckRow | undefined;
+    if (!r || r.started_at === null) return "waiting";
+    if (r.done_at === null) return "running";
+    this.db.prepare("DELETE FROM checks WHERE id = ? OR at < ?").run(id, this.now() - CHECK_STALE_MS);
+    return { ok: r.ok === 1, short: r.short, detail: r.detail, setup: r.setup ? (JSON.parse(r.setup) as ModelSetup) : null };
+  }
+
+  // Make one tiny model call here and now.
+  async check(): Promise<CheckResult> {
+    const setup = this.setup();
+    try {
+      const text = await this.model({ ...CHECK, timeoutMs: CHECK_TIMEOUT_MS });
+      if (!text.trim()) throw new ModelError("the model gave an empty answer");
+      if (!this.closed) this.working();
+      return { ok: true, short: null, detail: null, setup };
+    } catch (e) {
+      if (!this.closed) this.failing(e as Error);
+      return { ok: false, short: shortOf(e as Error), detail: (e as Error).message.slice(0, 500), setup };
+    }
+  }
+
+  // Run the oldest check request that nobody has taken. One at a time.
+  private serveChecks(): void {
+    if (this.checking || this.closed) return;
+    const r = this.db.prepare("SELECT id FROM checks WHERE started_at IS NULL AND at > ? ORDER BY id LIMIT 1").get(this.now() - CHECK_STALE_MS) as { id: number } | undefined;
+    if (!r) return;
+    this.db.prepare("UPDATE checks SET started_at = ? WHERE id = ?").run(this.now(), r.id);
+    this.checking = this.check()
+      .then((c) => {
+        if (!this.closed) this.db.prepare("UPDATE checks SET done_at = ?, ok = ?, short = ?, detail = ?, setup = ? WHERE id = ?").run(this.now(), c.ok ? 1 : 0, c.short, c.detail, c.setup ? JSON.stringify(c.setup) : null, r.id);
+        this.onCheck(c);
+      })
+      .catch((e: Error) => this.onError(e))
+      .finally(() => {
+        this.checking = null;
+      });
   }
 
   // Only ever called by the owner. With text, the text goes to the contact as
@@ -203,13 +333,23 @@ export class FrontDesk {
 
   start(intervalMs = 500): this {
     this.timer = setInterval(() => void this.tick().catch((e: Error) => this.onError(e)), intervalMs);
+    // Checks run beside answering, so a long answer does not hold one up.
+    this.checkTimer = setInterval(() => {
+      try {
+        this.serveChecks();
+      } catch (e) {
+        this.onError(e as Error);
+      }
+    }, intervalMs);
     return this;
   }
 
   async stop(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
+    if (this.checkTimer) clearInterval(this.checkTimer);
     this.timer = null;
-    await this.running.catch(() => {});
+    this.checkTimer = null;
+    await Promise.all([this.running.catch(() => {}), this.checking]);
   }
 
   // Look at everything applied since last time and answer where due. Calls are
@@ -324,17 +464,23 @@ export class FrontDesk {
     }
 
     const latest = goalOnly ? thread.goal : (question.body as { text: string }).text;
+    // Something on this machine failed. The reason goes to the owner in the
+    // run record and with the question in their asks; the contact is told only
+    // that the question was passed on, since the reason may name local paths.
+    const passOn = async (reason: string, detail: string, extra: { bundleHash?: string } = {}): Promise<void> => {
+      const replyEventId = await post(TEXT.unavailable(cfg.owner));
+      this.db
+        .prepare("INSERT INTO asks (at, contact_root, thread_id, question, reason) VALUES (?, ?, ?, ?, ?)")
+        .run(this.now(), contact.rootKey, threadId, latest.replace(/\s+/g, " ").trim().slice(0, ASK_CHARS) || "(an empty message)", reason);
+      record("failed", { replyEventId, detail, ...extra });
+    };
     let material: Material | null;
     try {
       material = await this.preparer.run(this.node.home, contact, cfg.owner, queryFrom(thread.goal, log));
     } catch (e) {
-      // A shared repository that moved, cannot be read, or took too long. The
-      // reason goes to the owner in the run record; the contact is told only
-      // that the question was passed on, and the owner finds it in their asks.
+      // A shared repository that moved, cannot be read, or took too long.
       if (this.closed || !this.config(contact.name).enabled) return false;
-      const replyEventId = await post(TEXT.unavailable(cfg.owner));
-      this.db.prepare("INSERT INTO asks (at, contact_root, thread_id, question) VALUES (?, ?, ?, ?)").run(this.now(), contact.rootKey, threadId, latest.replace(/\s+/g, " ").trim().slice(0, ASK_CHARS) || "(an empty message)");
-      record("failed", { replyEventId, detail: `could not read what is shared: ${(e as Error).message.slice(0, 250)}` });
+      await passOn("the shared files could not be read", `could not read what is shared: ${(e as Error).message.slice(0, 250)}`);
       return false;
     }
     if (!material) {
@@ -346,11 +492,22 @@ export class FrontDesk {
     try {
       raw = await this.model({ system: material.system, prompt: userPrompt(contact.name, thread.goal, log, goalOnly) });
     } catch (e) {
-      // The slot stays spent: a peer must not get free retries by making the model fail.
-      record("failed", { bundleHash: material.hash, detail: (e as Error).message.slice(0, 300) });
+      // The model could not run: not logged in, not found, timed out. The slot
+      // stays spent and the message is not tried again, so a peer gets no free
+      // retries by making the model fail, and nothing loops. The contact hears
+      // that the question was passed on; the owner gets it in their asks.
+      if (this.closed) return false;
+      this.failing(e as Error);
       setAnswered(inputOrd);
+      const detail = (e as Error).message.slice(0, 300);
+      if (!this.config(contact.name).enabled || ownerSpokeAfter(question.ord!)) {
+        record("failed", { bundleHash: material.hash, detail });
+        return false;
+      }
+      await passOn(`the model could not run (${shortOf(e as Error)})`, detail, { bundleHash: material.hash });
       return false;
     }
+    if (!this.closed) this.working();
 
     // The owner may have turned the desk off or changed what is shared while
     // the model was working. An answer made under the old rules is not sent.
@@ -440,6 +597,15 @@ interface AskRow {
   question: string;
   closed_at: number | null;
   closed_how: "answered" | "dismissed" | null;
+  reason: string | null;
+}
+interface CheckRow {
+  started_at: number | null;
+  done_at: number | null;
+  ok: number | null;
+  short: string | null;
+  detail: string | null;
+  setup: string | null;
 }
 interface DeskRow {
   enabled: number;

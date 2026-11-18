@@ -70,7 +70,9 @@ grep -q "^  config/secrets/db.yml  named as a secret; share it with --allow conf
 if cpart alice share bob --repo "$R" docs/draft.md --yes >"$WORK/untracked.out" 2>&1; then fail "an untracked file was accepted"; fi
 grep -q "matches nothing committed at HEAD" "$WORK/untracked.out"
 if cpart alice share bob --repo "$R" ../../etc --yes >"$WORK/escape.out" 2>&1; then fail "a path outside the repository was accepted"; fi
+# Turning the desk on first has alice's daemon make one tiny model call.
 cpart alice desk on bob --as Alice >/dev/null
+grep -q "front desk check: the model runs" "$WORK/alice.log" || fail "desk on did not check the model through the daemon"
 cpart alice desk status | tee "$WORK/status.out"
 grep -q "1 repository file(s)" "$WORK/status.out"
 
@@ -118,7 +120,8 @@ for c in "$C_EDIT" "$C_UNTRACKED" "$C_OUTSIDE" "$C_ENV" "$C_KEY" "$C_PW" "$C_SEC
   if grep -q "$c" "$WORK/model-saw.txt"; then fail "the model saw $c"; fi
   if cpart bob log "$THREAD" --json | grep -q "$c"; then fail "bob received $c"; fi
 done
-[ "$(grep -c 'end of system prompt' "$WORK/model-saw.txt")" -eq 3 ] || fail "expected three model calls"
+[ "$(grep -c 'end of system prompt' "$WORK/model-saw.txt")" -eq 4 ] || fail "expected four model calls: the check and three answers"
+[ "$(grep -c 'This is a check that you can be reached' "$WORK/model-saw.txt")" -eq 1 ] || fail "expected one check"
 
 step "bob opens a thread with the question only in its goal and sends nothing"
 GOAL_THREAD=$(cpart bob open alice "What is the page size of GET /orders?" --json | field .threadId)
@@ -157,11 +160,76 @@ step "the repository moves away; bob is told, and the question goes to alice"
 mv "$R" "$R.moved"
 ask "Is there a rate limit?"
 last | tee "$WORK/r4.txt"
-grep -q "I can't read what Alice shared right now" "$WORK/r4.txt" || fail "no notice when the share could not be read"
+grep -q "I can't answer right now. I've passed the question to Alice." "$WORK/r4.txt" || fail "no notice when the share could not be read"
 grep -q "$WORK" "$WORK/r4.txt" && fail "the notice named a path"
 cpart alice asks | grep -q "rate limit" || fail "the question did not reach alice's asks"
 grep -q "front desk failed .*could not read what is shared" "$WORK/alice.log"
 mv "$R.moved" "$R"
+
+step "alice's daemon runs a claude that is not logged in and exits 1"
+# A stand-in for the claude CLI, first on the daemon's PATH, so the real one
+# is never started. It answers like claude with no login, and like a logged-in
+# claude once a file says so.
+STUB=$WORK/stub-bin
+mkdir -p "$STUB" "$WORK/alice-claude"
+cat >"$STUB/claude" <<'SH'
+#!/bin/sh
+cat >/dev/null
+echo call >>"$CLAUDE_CONFIG_DIR/calls"
+echo '{"type":"system","subtype":"init","tools":[],"mcp_servers":[]}'
+if [ -f "$CLAUDE_CONFIG_DIR/logged-in" ]; then
+  echo '{"type":"result","is_error":false,"result":"ok"}'
+  exit 0
+fi
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"Not logged in"}]},"error":"authentication_failed"}'
+echo '{"type":"result","is_error":true,"result":"Not logged in · Please run /login"}'
+exit 1
+SH
+chmod +x "$STUB/claude"
+kill "$alice_PID"
+wait "$alice_PID" 2>/dev/null || true
+# An empty ANTHROPIC_API_KEY means none: the daemon uses the claude CLI.
+start_daemon alice ANTHROPIC_API_KEY= PATH="$STUB:$PATH" CLAUDE_CONFIG_DIR="$WORK/alice-claude"
+calls() { cat "$WORK/alice-claude/calls" 2>/dev/null | wc -l; }
+
+step "cpart desk on checks the model and refuses, naming the PATH and config the daemon used"
+cpart alice desk off bob >/dev/null
+if cpart alice desk on bob --as Alice >"$WORK/check1.out" 2>&1; then fail "desk on did not refuse a model that cannot run"; fi
+cat "$WORK/check1.out"
+grep -q "cannot run from the daemon: claude is not logged in (CLAUDE_CONFIG_DIR=$WORK/alice-claude)" "$WORK/check1.out"
+grep -q "^  claude      $STUB/claude$" "$WORK/check1.out"
+grep -q "^  PATH        $STUB:" "$WORK/check1.out"
+grep -q "^Fix: log claude in for the daemon's config: CLAUDE_CONFIG_DIR=$WORK/alice-claude claude auth login$" "$WORK/check1.out"
+grep -q "^Nothing was changed. To turn the desk on anyway: cpart desk on bob --as Alice --no-check$" "$WORK/check1.out"
+cpart alice desk status | grep -q "^bob  *off " || fail "a refused desk on turned the desk on"
+[ "$(calls)" -eq 1 ] || fail "the check should be one call"
+
+step "turned on anyway: bob is told his question went to alice, alice sees why, nothing loops"
+cpart alice desk on bob --as Alice --no-check >/dev/null
+ask "What is the rate limit for GET /orders?"
+last | tee "$WORK/r5.txt"
+[ "$(last)" = "This is Alice's front desk. I can't answer right now. I've passed the question to Alice." ] || fail "bob did not get the fixed notice"
+grep -q -e "$WORK" -e "logged in" -e "CLAUDE" "$WORK/r5.txt" && fail "the reason reached bob"
+cpart alice asks | tee "$WORK/asks5.out"
+grep -A1 "rate limit for GET" "$WORK/asks5.out" | grep -q "not answered because the model could not run (claude is not logged in)" || fail "alice's ask does not say why"
+cpart alice status | tee "$WORK/status5.out"
+grep -q "front desk failing: claude is not logged in, since " "$WORK/status5.out" || fail "cpart status does not show the failing desk"
+grep -q "front desk failed .*claude is not logged in" "$WORK/alice.log"
+[ "$(calls)" -eq 2 ] || fail "expected the check and one answer"
+sleep 3
+[ "$(calls)" -eq 2 ] || fail "the desk tried the message again"
+
+step "with the desk on, a change is refused too, and the desk stays on as it was"
+if cpart alice desk on bob --slots 3 >"$WORK/check3.out" 2>&1; then fail "desk on did not refuse a model that cannot run"; fi
+grep -q "^Nothing was changed. The desk is still on as before. To make the change anyway: cpart desk on bob --slots 3 --no-check$" "$WORK/check3.out"
+cpart alice desk status | grep -q "^bob  *on .* 6 replies per thread" || fail "a refused desk on changed the desk"
+
+step "alice logs claude in; the check passes and the status clears"
+touch "$WORK/alice-claude/logged-in"
+cpart alice desk check | tee "$WORK/check2.out"
+grep -q "It works" "$WORK/check2.out"
+cpart alice status >"$WORK/status6.out"
+grep -q "front desk failing" "$WORK/status6.out" && fail "the status still shows the desk failing"
 
 step "share list and remove"
 cpart alice share list bob
