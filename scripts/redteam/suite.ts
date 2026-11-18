@@ -12,6 +12,7 @@ import { copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readFileSyn
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { DatabaseSync } from "node:sqlite";
 import { parseArgs, promisify } from "node:util";
 import { type Attack, attacks, type Turn } from "./attacks.ts";
 import { detect, type Finding, homeCorpus, type Secret } from "./judge.ts";
@@ -294,7 +295,57 @@ export interface TrialResult {
   ended: string;
   seconds: number;
   guardNote: string | null;
+  held?: HeldRecord[]; // what bob's guard held, or with the guard off would have held
   invalid: string | null; // why this trial does not count, if it does not
+}
+
+// One row of the guard's held table on bob's side. With the guard off the
+// guard keeps no text ("unguarded"), only what matched and where.
+export interface HeldRecord {
+  state: string;
+  type: string;
+  reasons: string[];
+  matches: { category: string; rule: string; how: string; field: string; text: string | null }[];
+  text: string | null; // the held message's text fields, cut
+  carries: string[]; // planted secrets the held message carries, by the judge
+}
+
+function heldRecords(home: string, secrets: Secret[]): HeldRecord[] {
+  const file = join(home, "state.db");
+  if (!existsSync(file)) return [];
+  const db = new DatabaseSync(file, { readOnly: true });
+  try {
+    if (!db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'held'").get()) return [];
+    const rows = db.prepare("SELECT state, type, body, reasons, findings FROM held ORDER BY at, rowid").all() as { state: string; type: string; body: string | null; reasons: string; findings: string }[];
+    return rows.map((r) => {
+      const body = r.body === null ? null : (JSON.parse(r.body) as unknown);
+      const fieldText = (path: string): string | null => {
+        let v: unknown = body;
+        for (const k of path.split(".")) v = v && typeof v === "object" ? (v as Record<string, unknown>)[k] : undefined;
+        return typeof v === "string" ? v : null;
+      };
+      const findings = JSON.parse(r.findings) as { category: string; rule: string; how: string; field: string; start: number; end: number }[];
+      const strings: string[] = [];
+      const walk = (v: unknown): void => {
+        if (typeof v === "string") strings.push(v);
+        else if (v && typeof v === "object") for (const x of Object.values(v)) walk(x);
+      };
+      walk(body);
+      return {
+        state: r.state,
+        type: r.type,
+        reasons: JSON.parse(r.reasons) as string[],
+        matches: findings.map((f) => {
+          const t = fieldText(f.field);
+          return { category: f.category, rule: f.rule.replaceAll(dirname(home), "~"), how: f.how, field: f.field, text: t === null ? null : t.slice(f.start, f.end).slice(0, 300) };
+        }),
+        text: body === null ? null : strings.join("\n---\n").slice(0, 3000),
+        carries: body === null ? [] : detect(secrets, strings).filter((f) => f.level !== "none").map((f) => f.name),
+      };
+    });
+  } finally {
+    db.close();
+  }
 }
 
 const worst = (fs: Finding[]): "full" | "partial" | "none" => (fs.some((f) => f.level === "full") ? "full" : fs.some((f) => f.level === "partial") ? "partial" : "none");
@@ -533,6 +584,7 @@ async function trial(a: Attack, n: number): Promise<TrialResult> {
     }
     for (const d of daemons) await stop(d);
     daemons.length = 0;
+    const held = heldRecords(bob, planted.secrets);
 
     const tr: Transcript = { calls: [], results: [], final: "" };
     for (let k = 1; k <= sessions; k++) readTranscript(join(RUNS, `${tag}.session-${k}.jsonl`), tr);
@@ -561,6 +613,7 @@ async function trial(a: Attack, n: number): Promise<TrialResult> {
       ended,
       seconds: Math.round((Date.now() - started) / 1000),
       guardNote,
+      held,
     };
   } finally {
     for (const g of myGroups) killGroup(g, "SIGKILL");
