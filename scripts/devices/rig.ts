@@ -102,6 +102,8 @@ export class Rig {
   subnet = "";
   private ips: Record<Device, number> = { laptop: 10, devcontainer: 20 };
   relay: RelayInfo | undefined;
+  // Where the home relay answers now: a tunnel gets a new address each start.
+  currentUrl: string | undefined;
   private relayProc: ChildProcess | undefined;
   private owned = false;
   private paused = new Set<Device>();
@@ -317,7 +319,8 @@ export class Rig {
       return this.relay!.url;
     }
     const url = await this.startTunnelRelay();
-    if (url !== this.relay!.url) this.note(`the relay came back at a new address: ${url} (the devices know ${this.relay!.url})`);
+    if (url !== this.relay!.url) this.note(`the relay came back at a new address: ${url} (the devices were paired on ${this.relay!.url})`);
+    this.currentUrl = url;
     return url;
   }
 

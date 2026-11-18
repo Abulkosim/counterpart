@@ -122,7 +122,7 @@ class Running {
 
   constructor(s: Scenario) {
     this.s = s;
-    this.vars = { relay: rig.relay?.url ?? "", spare: rig.relay?.spare ?? "", ...PLANTED, secret_tail: PLANTED.secret.slice(-12) };
+    this.vars = { relay: rig.currentUrl ?? rig.relay?.url ?? "", spare: rig.relay?.spare ?? "", ...PLANTED, secret_tail: PLANTED.secret.slice(-12) };
     this.r = {
       name: s.name, title: s.title, file: s.file ?? "", ok: true, error: null, startedAt: new Date(this.t0).toISOString(), durationS: 0,
       timeToFirstAnswerS: null, timeToAgreementS: null, interventions: [], restartedByHand: false, lost: { laptopToDevcontainer: 0, devcontainerToLaptop: 0, held: 0, notDelivered: [] },
@@ -219,11 +219,19 @@ class Running {
       case "cpart": {
         const args = (st.args as string[]).map((a) => this.fill(a));
         const started = Date.now();
-        const r = await rig.cpart(d, args, st.passphrase ? { CPART_PASSPHRASE: PASSPHRASE[d] } : {}, Number(st.timeout ?? 60) * 1000, st.cwd === "repo" ? REPO : undefined);
+        // retries: a person tries again after a failure, 10 seconds later.
+        const tries = 1 + Number(st.retries ?? 0);
+        let r = { code: 1, out: "", err: "" };
+        let n = 0;
+        while (n < tries) {
+          if (n++) await sleep(10_000);
+          r = await rig.cpart(d, args, st.passphrase ? { CPART_PASSPHRASE: PASSPHRASE[d] } : {}, Number(st.timeout ?? 60) * 1000, st.cwd === "repo" ? REPO : undefined);
+          if (r.code === 0) break;
+        }
         const took = Math.round((Date.now() - started) / 100) / 10;
-        if (st.human) this.r.interventions.push({ by: "human", what: `${d}: cpart ${args.join(" ")}`, why: (st.why as string) ?? "", atS: this.at() });
+        if (st.human) this.r.interventions.push({ by: "human", what: `${d}: cpart ${args.join(" ")}${n > 1 ? ` (${n} tries)` : ""}`, why: (st.why as string) ?? "", atS: this.at() });
         // What it printed, for the commands a scenario wants to show.
-        if (st.record) this.r.notes.push(`${d}: cpart ${args.join(" ")} exited ${r.code} after ${took}s: ${(r.out + r.err).trim().replace(/\s+/g, " ").slice(0, 600)}`);
+        if (st.record) this.r.notes.push(`${d}: cpart ${args.join(" ")} exited ${r.code} after ${took}s${n > 1 ? ` and ${n} tries` : ""}: ${(r.out + r.err).trim().replace(/\s+/g, " ").slice(0, 600)}`);
         if (r.code !== 0 && st.may_fail !== true) throw new Error(`${d}: cpart ${args.join(" ")} exited ${r.code}: ${r.err.trim() || r.out.trim()}`);
         return;
       }
@@ -356,7 +364,13 @@ class Running {
         await sleep(Number(st.down_seconds ?? 3) * 1000);
       }
       const url = await rig.startRelayAgain(which);
-      if (which === "relay" && url !== rig.relay!.url) this.r.notes.push(`The relay came back at ${url}. Both identities still point at ${rig.relay!.url}.`);
+      // A tunnel comes back at a new address. {{relay}} is the new one from
+      // here on, {{relay_was}} the one before.
+      if (which === "relay" && url !== this.vars.relay) {
+        this.r.notes.push(`The relay came back at ${url}; the devices knew it as ${this.vars.relay}.`);
+        this.vars.relay_was = this.vars.relay!;
+        this.vars.relay = url;
+      }
       return;
     }
     if (kind === "daemon_down") {
