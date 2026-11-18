@@ -297,7 +297,7 @@ export class Counterpart {
 
   // Throws unless the passphrase unlocks the root key. For commands that must
   // come from the owner and not from their agent.
-  checkPassphrase(passphrase: string): void {
+  checkPassphrase(passphrase?: string): void {
     if (!this.keys.sealedRoot) throw new Error("this identity has no passphrase");
     this.unlock(passphrase);
   }
