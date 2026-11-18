@@ -9,7 +9,7 @@ import { parseArgs } from "node:util";
 import { type ContractView, type EvidenceView, Counterpart, RelayLink } from "@counterpart/daemon";
 import { type ContractPart, type Evidence, canonicalize, decodeInvite, isHttpsUrl, verifyAgreement } from "@counterpart/protocol";
 import { FrontDesk, addToBundle, anthropicApi, claudeCli, cliPrivateValues, readBundle, removeFromBundle } from "@counterpart/frontdesk";
-import { startMcpServer } from "@counterpart/mcp";
+import { hookMain, startMcpServer } from "@counterpart/mcp";
 import { type Binding, collectEvidence, preparePublication, publish, repoInit } from "@counterpart/publish";
 import { splitUrls, startRelay } from "@counterpart/relay";
 import { startViewer } from "@counterpart/viewer";
@@ -17,6 +17,7 @@ import { type WorkResult, apply as applyWork, work } from "@counterpart/worker";
 import { agents, bootInstalled, claim, down, logFile, registerAgents, running, up } from "./service.ts";
 import { openTunnel } from "./tunnel.ts";
 import { SHARE_USAGE, shareCommand, sharedSummary } from "./share.ts";
+import { hookLines, installHooks, removeHooks } from "./hooks-install.ts";
 import { inviteByCode, joinByCode, pairingLines } from "./pair.ts";
 import { PairingEngine } from "@counterpart/daemon";
 import { looksLikeCode } from "@counterpart/protocol";
@@ -26,8 +27,9 @@ const USAGE = `cpart: let your agent talk to someone else's agent
 
 Start here. One of these is all the setup there is:
 
-  cpart setup --relay <wss://host>                                create your identity, keep the daemon running, add Counterpart to
-                                                                  Claude Code and Codex. Safe to run again
+  cpart setup --relay <wss://host> [--no-hooks]                   create your identity, keep the daemon running, add Counterpart to
+                                                                  Claude Code and Codex. Safe to run again. --no-hooks leaves out
+                                                                  the hooks that tell a session when a reply arrives
   cpart join <code> <name>                                        the same, with the code someone sent you (7-cider-otter@host).
                                                                   <name> is what you call them. A long cpart-invite: works too
   cpart invite <name> [--no-wait] [--long]                        make a short code to send, then wait for them. <name> is what you
@@ -60,6 +62,8 @@ ${RELAY_USAGE}
   cpart mcp [--notify] [--view-port 7450]                         MCP server on stdio, for Claude Code and Codex. --notify tells a
                                                                   live Claude Code session when something arrives, never what
   cpart view [--port 7450]                                        read your threads in a browser, on this machine only
+  cpart hook install | remove                                     add or take out the Claude Code and Codex hooks. setup adds them
+  cpart hook prompt|tool|stop|watch                               what those hooks run. Reads Claude Code's hook JSON on stdin
 
 Contracts: the exact text two people agree to. Anyone on your side, including
 your agent, can propose. Only you can approve, with your passphrase.
@@ -119,7 +123,7 @@ const { values: flags, positionals } = parseArgs({
   options: {
     relay: { type: "string" }, port: { type: "string" }, host: { type: "string" }, db: { type: "string" },
     home: { type: "string" }, evidence: { type: "boolean" }, head: { type: "string" }, base: { type: "string" }, label: { type: "string" }, pr: { type: "string" }, run: { type: "string" }, status: { type: "string" }, bind: { type: "string", multiple: true }, work: { type: "string" }, branch: { type: "string" }, repo: { type: "string" }, paths: { type: "string" }, brief: { type: "string" }, allow: { type: "string", multiple: true }, title: { type: "string" }, file: { type: "string" }, part: { type: "string", multiple: true }, supersedes: { type: "string" },
-    out: { type: "string" }, yes: { type: "boolean" }, all: { type: "boolean" }, notify: { type: "boolean" }, "view-port": { type: "string" }, "no-passphrase": { type: "boolean" }, as: { type: "string" }, slots: { type: "string" }, daily: { type: "string" }, model: { type: "string" }, url: { type: "string", multiple: true }, wait: { type: "string" }, boot: { type: "boolean" }, "no-boot": { type: "boolean" }, "no-agents": { type: "boolean" }, tunnel: { type: "boolean" }, "no-wait": { type: "boolean" }, long: { type: "boolean" }, code: { type: "boolean" }, json: { type: "boolean" }, help: { type: "boolean", short: "h" },
+    out: { type: "string" }, yes: { type: "boolean" }, all: { type: "boolean" }, notify: { type: "boolean" }, "view-port": { type: "string" }, "no-passphrase": { type: "boolean" }, as: { type: "string" }, slots: { type: "string" }, daily: { type: "string" }, model: { type: "string" }, url: { type: "string", multiple: true }, wait: { type: "string" }, boot: { type: "boolean" }, "no-boot": { type: "boolean" }, "no-agents": { type: "boolean" }, "no-hooks": { type: "boolean" }, tunnel: { type: "boolean" }, "no-wait": { type: "boolean" }, long: { type: "boolean" }, code: { type: "boolean" }, json: { type: "boolean" }, help: { type: "boolean", short: "h" },
   },
 });
 const [cmd, ...args] = positionals;
@@ -363,6 +367,7 @@ async function setup(relay: string | undefined, fromInvite = false): Promise<Cou
       );
     }
     if (!hosts.some((h) => h.found)) note("--  neither claude nor codex is on your PATH. Add the MCP server by hand: see docs/mcp.md");
+    if (!flags["no-hooks"]) for (const l of hookLines(installHooks(home), safe)) note(l);
   }
   return node;
 }
@@ -480,6 +485,18 @@ async function main(): Promise<void> {
         : `\nYour request is on its way to ${c.name}. It completes when their daemon is next online: check with cpart status. Safety code ${c.safetyCode}.`,
     );
     if (flags.json) console.log(JSON.stringify(c));
+    return;
+  }
+  if (cmd === "hook") {
+    if (args[0] === "install" || args[0] === "remove") {
+      const h = args[0] === "install" ? installHooks(home) : removeHooks(home);
+      if (!h.claude.found && !h.codex.found) throw new Error("neither claude nor codex is on your PATH");
+      for (const l of hookLines(h, safe)) note(l);
+      if (h.claude.error || h.codex.error) process.exitCode = 1;
+      if (flags.json) console.log(JSON.stringify(h));
+      return;
+    }
+    process.exitCode = await hookMain(args[0] ?? "", home);
     return;
   }
   if (cmd === "down") {

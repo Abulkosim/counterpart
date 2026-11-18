@@ -8,6 +8,8 @@ cd "$(dirname "$0")/.."
 source scripts/smoke-lib.sh
 unset CPART_NO_AUTOSTART
 export CPART_NO_BOOT=1 CPART_PASSPHRASE="correct horse battery"
+# Setup also writes Codex's hooks.json itself, not through the stand-in.
+export CODEX_HOME=$WORK/codex CLAUDE_CONFIG_DIR=$WORK/claude
 
 mkdir -p "$WORK/bin"
 for agent in claude codex; do
