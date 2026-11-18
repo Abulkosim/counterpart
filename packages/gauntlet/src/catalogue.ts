@@ -4,14 +4,16 @@ import { evidence } from "./cases/evidence.ts";
 import { hostileRelay } from "./cases/hostile-relay.ts";
 import { model } from "./cases/model.ts";
 import { output } from "./cases/output.ts";
+import { pairing } from "./cases/pairing.ts";
 import { parsing } from "./cases/parsing.ts";
+import { relayChange } from "./cases/relay-change.ts";
 import { relayClients } from "./cases/relay-clients.ts";
 import { replay } from "./cases/replay.ts";
 import { resend } from "./cases/resend.ts";
 import { storage } from "./cases/storage.ts";
 import { CATEGORIES, type Case, type ModelCase } from "./types.ts";
 
-export const cases: Case[] = [...envelope, ...parsing, ...replay, ...authority, ...resend, ...evidence, ...hostileRelay, ...relayClients, ...output, ...storage];
+export const cases: Case[] = [...envelope, ...parsing, ...replay, ...authority, ...resend, ...evidence, ...hostileRelay, ...relayClients, ...relayChange, ...output, ...storage, ...pairing];
 export const modelCases: ModelCase[] = model;
 
 // Problems with the catalogue itself, as opposed to with the code under test.
