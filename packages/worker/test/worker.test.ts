@@ -4,9 +4,8 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { Model, ModelRequest } from "@counterpart/frontdesk";
 import type { Contract } from "@counterpart/protocol";
-import { apply, work } from "../src/index.ts";
+import { type WorkModel as Model, type WorkModelRequest as ModelRequest, apply, work } from "../src/index.ts";
 
 const dirs: string[] = [];
 after(() => {

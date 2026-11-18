@@ -338,9 +338,6 @@ importers:
 
   packages/worker:
     dependencies:
-      '@counterpart/frontdesk':
-        specifier: workspace:*
-        version: link:../frontdesk
       '@counterpart/protocol':
         specifier: workspace:*
         version: link:../protocol
