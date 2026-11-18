@@ -89,7 +89,7 @@ After a restart, run `cpart relay add ws://127.0.0.1:7447 --as wss://<new>.trycl
 
 In `packages/daemon/src/link.ts`, for each relay:
 
-- A connection that has been quiet for 4 seconds is pinged. No answer in 4 more seconds and it is dropped. So a dead path is noticed within about 9 seconds. Relays from this version answer a `ping` frame; with an older relay the daemon uses WebSocket pings instead, because an older relay closes the connection on a frame it does not know.
+- A connection that has been quiet for 4 seconds is pinged. No answer in 4 more seconds and it is dropped. So a dead path is noticed within about 9 seconds. While a message is still being uploaded the answer can be stuck behind it, so each byte sent and not yet confirmed by the relay adds time at 4 KB/s, up to two minutes: a 256 KB message on a dead path is noticed within about 70 seconds. The wait before a send is tried again grows the same way, so a slow upload is not sent twice. Relays from this version answer a `ping` frame; with an older relay the daemon uses WebSocket pings instead, because an older relay closes the connection on a frame it does not know.
 - Dialling and logging in must finish within 10 seconds.
 - Once a second the daemon checks the wall clock against its timers. Timers do not run while a machine sleeps or a process is stopped; the wall clock does. A gap of more than 5 seconds means it slept: every connection is dropped and dialled again at once.
 - Every second it also compares the machine's network addresses. When they change it pings each live connection at once and dials any that are down without waiting.

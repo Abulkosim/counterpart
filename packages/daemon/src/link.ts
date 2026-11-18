@@ -8,6 +8,13 @@ const MAX_BACKLOG = 256;
 const MAX_BUFFERED = 1024 * 1024; // bytes written to a relay and not yet taken by the network
 const INFLIGHT_MS = 10_000; // a send the relay has not answered in this time is tried again, on the next relay if there is one
 const TWIN_MS = 5000; // see twins()
+// A pong or a "stored" can wait behind what we are still uploading. On a slow
+// uplink, a large message takes longer than a ping timeout to leave. So each
+// byte sent and not yet confirmed adds time at this rate, to the ping timeout
+// and to the wait before a send is tried again, up to SLOW_MAX_MS.
+const SLOW_BYTES_PER_S = 4096;
+const SLOW_MAX_MS = 120_000;
+const slowMs = (bytes: number): number => Math.min((bytes / SLOW_BYTES_PER_S) * 1000, SLOW_MAX_MS);
 
 // The relay's error codes are printed and stored. Only plain ones are kept.
 const code = (x: unknown): string => (typeof x === "string" && /^[a-z_]{1,32}$/.test(x) ? x : "unknown");
@@ -82,7 +89,7 @@ export class RelayLink extends EventEmitter<LinkEvents> {
   private ticker: NodeJS.Timeout | null = null;
   private renewer: NodeJS.Timeout | null = null;
   private renewing: Promise<unknown> | null = null;
-  private inflight = new Map<string, { url: string; at: number }>();
+  private inflight = new Map<string, { url: string; at: number; bytes: number }>();
   private inbound: Promise<void> = Promise.resolve();
   private backlog = 0;
   private failures = new Map<string, number>();
@@ -329,8 +336,19 @@ export class RelayLink extends EventEmitter<LinkEvents> {
     }
   }
 
-  private send(ws: WebSocket, frame: ClientFrame): void {
-    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(frame));
+  // Returns the bytes written, 0 if the socket was not open.
+  private send(ws: WebSocket, frame: ClientFrame): number {
+    if (ws.readyState !== ws.OPEN) return 0;
+    const text = JSON.stringify(frame);
+    ws.send(text);
+    return Buffer.byteLength(text);
+  }
+
+  // Bytes on their way to this relay that it has not answered for yet.
+  private unanswered(c: Conn): number {
+    let n = c.ws?.bufferedAmount ?? 0;
+    for (const f of this.inflight.values()) if (f.url === c.url) n += f.bytes;
+    return n;
   }
 
   private onFrame(c: Conn, ws: WebSocket, frame: ServerFrame): void {
@@ -468,7 +486,8 @@ export class RelayLink extends EventEmitter<LinkEvents> {
       if (!c.ready) {
         if (now - c.dialledAt > this.o.loginTimeoutMs) this.drop(c, "no login answer");
       } else if (c.pingSentAt !== null) {
-        if (now - c.pingSentAt > this.o.pingTimeoutMs) this.drop(c, `no answer to a ping in ${Math.round((now - c.pingSentAt) / 1000)}s`);
+        // The pong may be queued behind an upload; see SLOW_BYTES_PER_S.
+        if (now - c.pingSentAt > this.o.pingTimeoutMs + slowMs(this.unanswered(c))) this.drop(c, `no answer to a ping in ${Math.round((now - c.pingSentAt) / 1000)}s`);
       } else if (now - c.lastHeard >= this.o.pingEveryMs) this.ping(c, now);
     }
   }
@@ -526,7 +545,9 @@ export class RelayLink extends EventEmitter<LinkEvents> {
       for (const wire of wires) {
         const id = wire.header.id;
         const f = this.inflight.get(id);
-        if (f && now - f.at < INFLIGHT_MS) continue;
+        // A large message on a slow link is still leaving: sending it again
+        // would only queue a second copy behind the first.
+        if (f && now - f.at < INFLIGHT_MS + slowMs(f.bytes)) continue;
         const route = routes.get(wire.header.to) ?? { preferred: [], fallback: [this.node.relay] };
         // A relay that stops reading must not make us buffer without end.
         const live = (urls: string[]): string[] => [
@@ -545,10 +566,10 @@ export class RelayLink extends EventEmitter<LinkEvents> {
         if (!order.length) continue;
         // If the last one tried did not answer in time, the next.
         const pick = this.conns.get(order[f ? (order.indexOf(f.url) + 1) % order.length : 0]!)!;
-        this.inflight.set(id, { url: pick.url, at: now });
-        this.send(pick.ws!, { t: "send", wire });
+        const bytes = this.send(pick.ws!, { t: "send", wire });
+        this.inflight.set(id, { url: pick.url, at: now, bytes });
       }
-      if (this.inflight.size > 10_000) for (const [id, f] of this.inflight) if (now - f.at > INFLIGHT_MS) this.inflight.delete(id);
+      if (this.inflight.size > 10_000) for (const [id, f] of this.inflight) if (now - f.at > INFLIGHT_MS + slowMs(f.bytes)) this.inflight.delete(id);
     } catch (e) {
       this.emit("error", e as Error);
     }

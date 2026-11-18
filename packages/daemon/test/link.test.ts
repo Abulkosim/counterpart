@@ -2,7 +2,7 @@ import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { createServer } from "node:net";
+import { createConnection, createServer } from "node:net";
 import { join } from "node:path";
 import { WebSocketServer } from "ws";
 import { type Relay, startRelay } from "@counterpart/relay";
@@ -161,6 +161,59 @@ test("a relay without ping frames is kept alive with WebSocket pings, and is nev
   assert.ok(la.online);
   assert.equal(conns, 1, "the connection stayed up");
   assert.ok(!seen.includes("ping"), "sent a ping frame to a relay that did not offer it");
+});
+
+test("a large message on a slow uplink is not cut off by the ping timeout", async () => {
+  // Client to relay limited to 16 KB/s; relay to client as fast as it goes.
+  const RATE = 16 * 1024;
+  let target = 0;
+  const proxy = createServer((a) => {
+    const b = createConnection({ host: "127.0.0.1", port: target });
+    const q: Buffer[] = [];
+    const t = setInterval(() => {
+      let budget = RATE / 10;
+      while (budget > 0 && q.length) {
+        const c = q[0]!;
+        if (c.length <= budget) {
+          b.write(c);
+          budget -= c.length;
+          q.shift();
+        } else {
+          b.write(c.subarray(0, budget));
+          q[0] = c.subarray(budget);
+          budget = 0;
+        }
+      }
+    }, 100);
+    a.on("data", (d: Buffer) => q.push(d));
+    b.on("data", (d: Buffer) => a.write(d));
+    const end = (): void => {
+      clearInterval(t);
+      a.destroy();
+      b.destroy();
+    };
+    for (const s of [a, b]) s.on("close", end).on("error", end);
+  });
+  await new Promise<void>((r) => proxy.listen(0, "127.0.0.1", () => r()));
+  const slowUrl = `ws://127.0.0.1:${(proxy.address() as { port: number }).port}`;
+  const relay = await startRelay({ urls: [slowUrl] });
+  target = relay.port;
+  cleanup.push(() => relay.close(), () => new Promise<void>((r) => proxy.close(() => r())));
+  // Bob's uploads are small; only Alice's large one meets the limit.
+  const alice = await person(slowUrl);
+  const bob = await person(slowUrl);
+  const la = connect(alice);
+  connect(bob);
+  let drops = 0;
+  la.on("relay", (_u, up) => void (up || drops++));
+  await bob.acceptInvite(alice.createInvite("bob"), "alice");
+  await until("pairing", () => bob.contact("alice").state === "active" && alice.contact("bob").state === "active", 15_000);
+  const thread = await alice.openThread("bob", "slow");
+  await until("bob has the thread", () => bob.threads().length === 1, 15_000);
+  // About 55 KB on the wire: over three seconds at 16 KB/s, ten times the ping timeout.
+  await alice.propose(thread, { title: "big", text: "see the part", parts: [{ kind: "text", name: "p1", content: "x".repeat(40_000) }] });
+  await until("stored", () => alice.queued().length === 0, 30_000);
+  assert.equal(drops, 0, "the connection was dropped while the message was leaving");
 });
 
 test("one relay under two names takes one connection, and mail still flows through either name", async () => {
