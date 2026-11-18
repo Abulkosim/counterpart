@@ -3,3 +3,4 @@ export * from "./link.ts";
 export * from "./guard.ts";
 export * from "./pairing.ts";
 export * from "./relays.ts";
+export * from "./waiting.ts";

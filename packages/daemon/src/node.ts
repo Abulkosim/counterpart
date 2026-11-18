@@ -11,6 +11,7 @@ import {
 import { type SealedRoot, DEFAULT_LOG_N, sealRoot, unsealRoot } from "./rootkey.ts";
 import { type GuardOptions, type Held, GUARD_OFF_DOMAIN, MAX_OFF_MINUTES, Guard, Recheck, guardOffMessage } from "./guard.ts";
 import { RelayBook } from "./relays.ts";
+import { type Unanswered, READS_TABLE, unanswered } from "./waiting.ts";
 
 const DAY = 24 * 3600 * 1000;
 const RENEW_BEFORE = 30 * DAY;
@@ -226,6 +227,7 @@ export class Counterpart {
         contact_root TEXT NOT NULL, thread_id TEXT NOT NULL, last_at INTEGER NOT NULL,
         PRIMARY KEY (contact_root, thread_id)
       );
+      ${READS_TABLE};
     `);
     // Columns added after the first databases were made.
     const cols = new Set((this.db.prepare("PRAGMA table_info(outbox)").all() as { name: string }[]).map((c) => c.name));
@@ -732,6 +734,23 @@ export class Counterpart {
       )
       .all(threadId) as unknown as (EventRow & { o_state: Delivery | null; o_received: number | null })[];
     return rows.map((r) => (r.mine && r.o_state ? { ...toStored(r), delivery: r.o_received !== null ? "received" : r.o_state } : toStored(r)));
+  }
+
+  // Someone on this side has read the thread up to this cursor: a session
+  // through a read tool, or the human with cpart log. Never moves back, and
+  // never past what the store holds.
+  markRead(threadId: string, ord: number): void {
+    const last = (this.db.prepare("SELECT MAX(ord) AS m FROM events WHERE thread_id = ? AND status = 'applied'").get(threadId) as { m: number | null }).m ?? 0;
+    const at = Math.min(ord, last);
+    if (!Number.isSafeInteger(at) || at <= 0) return;
+    this.db
+      .prepare("INSERT INTO thread_reads (thread_id, ord, at) VALUES (?, ?, ?) ON CONFLICT (thread_id) DO UPDATE SET ord = MAX(ord, excluded.ord), at = excluded.at")
+      .run(threadId, at, this.now());
+  }
+
+  // Threads where a contact wrote last, since `since`, and nobody here has answered or read it.
+  unanswered(since = 0): Unanswered[] {
+    return unanswered(this.db, since);
   }
 
   // Applied events after a cursor, in the order they took effect. A consumer

@@ -214,6 +214,8 @@ export function createMcpServer(node: Counterpart, opts: McpOptions = {}): McpSe
   const read = (t: ThreadSummary, after: number, messageCap: number): CallToolResult => {
     const r = transcript(node, t, after, messageCap);
     notifier?.markRead(t.id, r.nextCursor);
+    // cpart status and the hooks stop listing it as unread.
+    node.markRead(t.id, r.nextCursor);
     return ok(r.text);
   };
 
