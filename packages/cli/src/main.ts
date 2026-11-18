@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { lookup } from "node:dns/promises";
 import { createServer } from "node:net";
 import { homedir } from "node:os";
@@ -326,8 +326,40 @@ async function relayHealthUrl(relay: string, fromInvite: boolean): Promise<strin
   return `${u.protocol === "wss:" ? "https:" : "http:"}//${u.host}${u.pathname.replace(/\/$/, "")}/healthz`;
 }
 
+// After the daemon starts: did the relay let it in? A relay answers its health
+// check to any address, but refuses a login that names an address it was not
+// started with. Returns the relay's error code, or null when it logged in or
+// nothing was heard in time.
+async function loginRefused(node: Counterpart, relay: string, ms = 8000): Promise<string | null> {
+  const url = node.relayBook.find(relay)?.url ?? relay;
+  const end = Date.now() + ms;
+  for (;;) {
+    const s = node.relayBook.status().find((x) => x.url === url);
+    if (s?.connected) return null;
+    const m = s?.error ? /^refused the login: ([a-z_]{1,40})$/.exec(s.error) : null;
+    if (m) return m[1]!;
+    if (Date.now() > end) return null;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+}
+
+function refusedText(relay: string, code: string, fromInvite: boolean): string {
+  if (code === "wrong_relay_url") {
+    return [
+      `the relay at ${safe(relay)} answers, but refused to log you in (wrong_relay_url): it does not know itself by that address.`,
+      "A relay lets in only the addresses it was started with. Started with none, it knows only its own machine's names, like ws://127.0.0.1.",
+      `${fromInvite ? "Ask whoever runs it to restart it" : "Restart it"} with --url once for every address people use, this one included:`,
+      `  cpart relay ... --url ${safe(relay)} --url <each other address>`,
+      "In a container, set CPART_RELAY_URL to the addresses, separated by commas.",
+    ].join("\n");
+  }
+  return `the relay at ${safe(relay)} answers, but refused to log you in (${code}).`;
+}
+
 async function setup(relay: string | undefined, fromInvite = false): Promise<Counterpart> {
   let node: Counterpart;
+  // What was in the home before this run, so a new identity the relay refuses can be taken away again.
+  let made: Set<string> | null | undefined;
   if (existsSync(join(home, "keys.json"))) {
     node = Counterpart.open(home);
     if (relay && !node.relayBook.find(relay)) throw new Error(`your identity in ${home} does not use the relay ${safe(relay)}. To use it as well: cpart relay add ${safe(relay)}`);
@@ -353,11 +385,26 @@ async function setup(relay: string | undefined, fromInvite = false): Promise<Cou
     if (!ok) throw new Error(`no relay answers at ${safe(relay)}${why ? ` (${why})` : ""}. Nothing was created.`);
     note(`ok  relay ${safe(relay)} answers`);
     const passphrase = flags["no-passphrase"] ? undefined : await newPassphrase();
+    made = existsSync(home) ? new Set(readdirSync(home)) : null;
     node = await Counterpart.init(home, { relay, ...(reach.as ? { relayAs: reach.as } : {}), ...(passphrase !== undefined ? { passphrase } : {}) });
     note(`ok  identity ${node.me.human} created in ${home}${passphrase === undefined ? " (no passphrase: it can talk but cannot approve contracts)" : ""}`);
   }
   const d = await up(home, { boot: !flags["no-boot"] });
   if (!d.state) throw new Error(`the daemon did not start. See ${logFile(home)}`);
+  const target = relay ?? node.relay;
+  const refused = d.state.connected ? null : await loginRefused(node, target);
+  if (refused) {
+    const why = refusedText(target, refused, fromInvite);
+    if (made === undefined) {
+      throw new Error(`${why}\nYour identity is unchanged. Your daemon keeps trying and gets in once the relay accepts the address; cpart status shows it. Then run this again.`);
+    }
+    // A new identity that cannot log in is no use. Take back what this run made.
+    await down(home);
+    node.close();
+    if (made === null) rmSync(home, { recursive: true, force: true });
+    else for (const f of readdirSync(home)) if (!made.has(f)) rmSync(join(home, f), { recursive: true, force: true });
+    throw new Error(`${why}\nNothing was kept. Run this again once the relay is restarted.`);
+  }
   note(`${d.state.connected ? "ok" : "--"}  daemon ${d.started ? "started" : "running"}${d.state.connected ? ", connected" : `, but not connected to ${node.relay} yet`}${d.boot ? ", starts at login" : ""}`);
   if (!flags["no-agents"]) {
     const hosts = registerAgents(home);

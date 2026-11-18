@@ -22,7 +22,7 @@ docker run -d --restart unless-stopped -p 8080:8080 -v cpart-relay:/data \
   -e CPART_RELAY_URL=wss://relay.example.com counterpart
 ```
 
-`CPART_RELAY_URL` is the address people will type. The relay refuses logins that name any other address, so it must match. If people reach it by more than one address, list them all, separated by commas (or give `--url` once for each). The container speaks plain WebSocket on port 8080; put a proxy that terminates TLS in front of it (Caddy, nginx, a platform's own). `/healthz` answers `{"ok":true,"id":...}` for health checks; `id` is random and kept in the database, so it changes only when the database does. All state is one SQLite file in `/data`.
+`CPART_RELAY_URL` is the address people will type. The relay refuses logins that name any other address, so it must match. If people reach it by more than one address, list them all, separated by commas (or give `--url` once for each). When a relay refuses the login this way, `cpart setup` and `cpart join` stop with `wrong_relay_url` and say which address to add; an identity they had just made is not kept. The container speaks plain WebSocket on port 8080; put a proxy that terminates TLS in front of it (Caddy, nginx, a platform's own). `/healthz` answers `{"ok":true,"id":...}` for health checks; `id` is random and kept in the database, so it changes only when the database does. All state is one SQLite file in `/data`.
 
 Without Docker it is the same program:
 
