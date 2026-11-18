@@ -64,6 +64,11 @@ printf 'STOCKROOM_API_KEY=sr_live_wC65Tq9Lx2Vm7Rz4Kp8Nb3Hd6Fs1Gj6daj\n' >>"$WORK
 wait_for "bob to get the placeholders" sh -c "CPART_HOME=$WORK/bob node $CLI log $THREAD | grep -q REPLACE_ME"
 wait_for "bob to get the prefix" sh -c "CPART_HOME=$WORK/bob node $CLI log $THREAD | grep -q sr_live_wC65"
 
+step "real .env values that only look like stand-ins are held"
+printf '%s\n' "DB_PASSWORD='\$ecr3tPassw0rd9'" "PRIMARY=postgres://app:Xk9pQ2mLr7vT#4@db.billing.net:5432/app" >>"$WORK/client/.env"
+(cd "$WORK/client/src" && held_say "a password that starts with \$" agent say "$THREAD" "the db password is \$ecr3tPassw0rd9")
+(cd "$WORK/client/src" && held_say "a URL password with # in it" agent say "$THREAD" "the primary password is Xk9pQ2mLr7vT#4")
+
 step "a line of a file alice marked never-share"
 printf 'Northwind threatened to cancel unless the refund backlog is cleared by Friday.\nTheir CFO said the renewal is worth 1.4 million and they are talking to a competitor.\n' >"$WORK/escalations.md"
 if alice guard never-share add "$WORK/escalations.md" </dev/null >"$WORK/out.txt" 2>&1; then fail "added a never-share file without a terminal"; fi
@@ -75,7 +80,7 @@ held_say "a private key in a proposal" agent propose "$THREAD" --title "Deploy" 
 step "what alice sees"
 alice held
 alice status | grep -E "held|Guard"
-[ "$(alice held --json | field .length)" = 7 ] || fail "expected 7 held messages"
+[ "$(alice held --json | field .length)" = 9 ] || fail "expected 9 held messages"
 alice held | grep -q "$TOKEN" && fail "cpart held shows the token"
 
 step "the agent cannot release from a shell, even with CPART_PASSPHRASE"
@@ -100,7 +105,7 @@ ID=$(alice held --json | field '[0].id')
 if alice drop "$ID" </dev/null >"$WORK/out.txt" 2>&1; then fail "dropped without a terminal"; fi
 echo "refused: $(tail -1 "$WORK/out.txt")"
 on_terminal "$ALICE_PASS" env CPART_HOME="$WORK/alice" node "$CLI" drop "$ID" | tail -1
-[ "$(alice held --json | field .length)" = 5 ] || fail "expected 5 held messages after release and drop"
+[ "$(alice held --json | field .length)" = 7 ] || fail "expected 7 held messages after release and drop"
 
 step "the MCP server tells the agent it was held, without the value"
 node --input-type=module -e '
