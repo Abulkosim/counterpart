@@ -134,7 +134,10 @@ test("while the relay is down the wait between dials doubles up to a cap, with j
   const gaps = dials.slice(1).map((t, i) => t - dials[i]!);
   assert.ok(dials.length >= 4 && dials.length <= 14, `${dials.length} dials in two seconds: ${gaps.join(", ")} ms apart`);
   assert.ok(gaps.slice(-3).every((g) => g >= 150 && g <= 700), `the last gaps should sit at the 400 ms cap with jitter: ${gaps.join(", ")}`);
-  assert.ok(new Set(gaps.slice(-3).map((g) => Math.round(g / 10))).size > 1, `no jitter: ${gaps.join(", ")}`);
+  // Waits are drawn from half to all of the cap. Five of them within 10 ms of
+  // each other would mean there is no jitter.
+  const tail = gaps.slice(-5);
+  assert.ok(Math.max(...tail) - Math.min(...tail) >= 10, `no jitter: ${gaps.join(", ")}`);
   r2 = await startRelay({ port, dbPath: db });
   const t0 = Date.now();
   await until("reconnected", () => la.online, 3000);
