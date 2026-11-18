@@ -258,6 +258,12 @@ export class FrontDesk {
     this.db.prepare("DELETE FROM checks WHERE id = ? AND started_at IS NULL").run(id);
   }
 
+  // True while the daemon runs a check. It runs one at a time, so a request
+  // made meanwhile waits for it.
+  checkBusy(): boolean {
+    return !!this.db.prepare("SELECT 1 FROM checks WHERE started_at IS NOT NULL AND done_at IS NULL AND at > ?").get(this.now() - CHECK_STALE_MS);
+  }
+
   // "waiting": no daemon has taken it yet. "running": taken, not finished.
   checkResult(id: number): "waiting" | "running" | CheckResult {
     const r = this.db.prepare("SELECT * FROM checks WHERE id = ?").get(id) as CheckRow | undefined;

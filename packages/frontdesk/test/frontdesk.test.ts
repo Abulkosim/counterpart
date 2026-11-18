@@ -536,6 +536,35 @@ test("a check asked for by the owner runs in the daemon's desk and reports where
   assert.equal(cli.checkResult(late), "waiting");
 });
 
+test("a second check waits while the daemon runs the first, and the command line can see that", async () => {
+  const { desk: cli, alice } = await setup(async () => {
+    throw new Error("not available here");
+  });
+  let release!: () => void;
+  const gate = new Promise<string>((r) => (release = () => r("ok")));
+  const daemonSide = new FrontDesk(alice, () => gate).start(20);
+  stops.push(() => daemonSide.stop().then(() => daemonSide.close()));
+  assert.equal(cli.checkBusy(), false);
+  const first = cli.requestCheck();
+  await until("the first check runs", () => cli.checkResult(first) === "running");
+  const second = cli.requestCheck();
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(cli.checkResult(second), "waiting");
+  assert.equal(cli.checkBusy(), true);
+  release();
+  // A finished result is read once: reading it removes it.
+  const done = new Map<number, CheckResult>();
+  await until("both are done", () => {
+    for (const id of [first, second]) {
+      const x = done.has(id) ? null : cli.checkResult(id);
+      if (x && typeof x === "object") done.set(id, x);
+    }
+    return done.size === 2;
+  });
+  assert.ok([...done.values()].every((c) => c.ok));
+  assert.equal(cli.checkBusy(), false);
+});
+
 test("the owner marks a question answered with a reply, and it goes out as the owner's own message", async () => {
   const model = scripted("Not covered.\nASK_HUMAN: What are the rate limits?");
   const { alice, bob, desk, ask } = await setup(model);

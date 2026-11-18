@@ -22,16 +22,24 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 export async function deskCheck(desk: FrontDesk, io: CheckIo): Promise<DeskCheck> {
   if (!(await io.daemon())) return { ok: false, kind: "no-daemon", text: "The daemon is not running, so the front desk's model was not checked. The desk answers only while the daemon runs. Start it: cpart up. Then check the model: cpart desk check" };
   const id = desk.requestCheck();
-  const pickup = Date.now() + (io.wait?.pickupMs ?? 15_000);
-  const end = Date.now() + CHECK_TIMEOUT_MS + 30_000;
+  const pickupMs = io.wait?.pickupMs ?? 15_000;
+  let pickup = Date.now() + pickupMs;
+  let end: number | null = null;
   for (;;) {
     const r = desk.checkResult(id);
     if (typeof r === "object") return r.ok ? { ok: true, setup: r.setup } : { ok: false, kind: "failed", text: explain(r, io) };
-    if (r === "waiting" && Date.now() > pickup) {
-      desk.cancelCheck(id);
-      return { ok: false, kind: "no-answer", text: "The daemon did not take the check. If it started before cpart was updated, restart it: cpart down, then cpart up" };
+    if (r === "waiting") {
+      // The daemon runs one check at a time. While it runs one asked for
+      // elsewhere, this one waits its turn; that is not a daemon that ignores it.
+      if (desk.checkBusy()) pickup = Date.now() + pickupMs;
+      else if (Date.now() > pickup) {
+        desk.cancelCheck(id);
+        return { ok: false, kind: "no-answer", text: "The daemon did not take the check. If it started before cpart was updated, restart it: cpart down, then cpart up" };
+      }
+    } else {
+      end ??= Date.now() + CHECK_TIMEOUT_MS + 30_000;
+      if (Date.now() > end) return { ok: false, kind: "no-answer", text: `The daemon took the check but did not finish it. See the daemon's log: ${io.safe(io.log)}` };
     }
-    if (Date.now() > end) return { ok: false, kind: "no-answer", text: `The daemon took the check but did not finish it. See the daemon's log: ${io.safe(io.log)}` };
     await sleep(io.wait?.pollMs ?? 200);
   }
 }

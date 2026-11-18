@@ -29,10 +29,10 @@ test("a failed check says where the daemon looked and how to fix it", () => {
 });
 
 // Only the parts of the desk the check uses.
-function fakeDesk(answer: (n: number) => ReturnType<FrontDesk["checkResult"]>): FrontDesk & { cancelled: number[] } {
+function fakeDesk(answer: (n: number) => ReturnType<FrontDesk["checkResult"]>, busy: (n: number) => boolean = () => false): FrontDesk & { cancelled: number[] } {
   let polls = 0;
   const cancelled: number[] = [];
-  return { requestCheck: () => 7, checkResult: () => answer(++polls), cancelCheck: (id: number) => void cancelled.push(id), cancelled } as unknown as FrontDesk & { cancelled: number[] };
+  return { requestCheck: () => 7, checkResult: () => answer(++polls), checkBusy: () => busy(polls), cancelCheck: (id: number) => void cancelled.push(id), cancelled } as unknown as FrontDesk & { cancelled: number[] };
 }
 
 test("the check waits for the daemon, and says so when there is none or it does not answer", async () => {
@@ -47,6 +47,15 @@ test("the check waits for the daemon, and says so when there is none or it does 
   assert.deepEqual(silent.cancelled, [7], "a request no daemon took is withdrawn");
   const failed = await deskCheck(fakeDesk(() => ({ ok: false, short: "claude exited 1", detail: "claude exited 1: boom", setup: cli() })), { ...io, daemon: async () => true, wait });
   assert.ok(!failed.ok && failed.kind === "failed" && /claude exited 1: boom/.test(failed.text));
+});
+
+test("a check that waits behind another one is not taken for a daemon that ignores it", async () => {
+  const wait = { pickupMs: 50, pollMs: 5 };
+  // The daemon is busy with another check for well past the pickup time, then runs this one.
+  const desk = fakeDesk((n) => (n < 60 ? "waiting" : n < 65 ? "running" : { ok: true, short: null, detail: null, setup: null }), (n) => n < 60);
+  const r = await deskCheck(desk, { ...io, daemon: async () => true, wait });
+  assert.equal(r.ok, true);
+  assert.deepEqual(desk.cancelled, []);
 });
 
 test("the command to turn the desk on without the check keeps what was asked for", () => {
