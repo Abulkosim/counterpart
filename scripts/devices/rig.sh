@@ -13,6 +13,9 @@
 # Needs docker. Scenarios with live sessions need a Claude Code login in
 # ~/.claude/.credentials.json: a temporary copy is mounted read-only into both
 # devices and deleted when the run ends, however it ends.
+#
+# Exit code: 0 when every scenario ended as expected, 3 when the run finished
+# but one or more did not, 130 when stopped by a signal, 1 otherwise.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 ROOT=$PWD
@@ -28,7 +31,7 @@ while [ $# -gt 0 ]; do
     --mode) MODE=$2; shift 2 ;;
     --no-sessions) SESSIONS=0; shift ;;
     --out) OUT=$2; shift 2 ;;
-    -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
     *) args+=("$1"); shift ;;
   esac
 done
@@ -93,7 +96,11 @@ mkdir -p "$OUT/logs"
 cp -r "$WORK/sessions" "$OUT/logs/" 2>/dev/null || true
 cp "$WORK"/*.log "$OUT/logs/" 2>/dev/null || true
 [ -f "$OUT/report.md" ] && cat "$OUT/report.md"
+[ -z "$stopped" ] || { echo "stopped by a signal. See $OUT" >&2; exit 130; }
 [ "$code" = 0 ] || fail "the run stopped early (exit $code). See $OUT"
-n=$(node -e 'const r=require(process.argv[1]); console.log(r.scenarios.filter(s=>s.ok).length + " of " + r.scenarios.length)' "$OUT/results.json")
+n=$(node -e 'const r=require(process.argv[1]); console.log(r.scenarios.filter(s=>s.ok).length, r.scenarios.length)' "$OUT/results.json")
+ok=${n% *} all=${n#* }
 echo
-echo "TWO DEVICES RUN DONE: $n scenarios ended as expected. Results in $OUT"
+echo "TWO DEVICES RUN DONE: $ok of $all scenarios ended as expected. Results in $OUT"
+# 3: the run finished, and at least one scenario did not end as expected.
+[ "$ok" = "$all" ] || exit 3

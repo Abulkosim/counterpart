@@ -59,6 +59,10 @@ For each scenario:
 
 A scenario is `ok` only if every step ran, every check passed, nothing was lost, and nothing was restarted by hand.
 
+`rig.sh` exits 0 when every scenario was `ok`, 3 when the run finished but one or more were not, and 130 when stopped by a signal.
+
+Between scenarios the rig undoes what a scenario left behind: it wakes a sleeping device and puts an offline one back at its old address. A device left at a new address gets its daemon restarted, since its link may be dead while `cpart status` says connected. That restart is noted in the results; it is not counted against the next scenario.
+
 ## Safety on a shared machine
 
 - The login is copied into the run's work directory with mode 600, without its refresh token, mounted read-only into both devices, and deleted when the run ends, however it ends (a `kill -9` of `rig.sh` is the exception). A refresh from inside a device would rotate the refresh token and end the login on this machine; without it, a device can only use the access token until it expires. The rig refuses to start with less than 30 minutes left on it, and starts no session that would outlast it.
