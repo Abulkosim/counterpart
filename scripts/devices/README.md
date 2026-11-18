@@ -62,7 +62,8 @@ A scenario is `ok` only if every step ran, every check passed, nothing was lost,
 ## Safety on a shared machine
 
 - The login is copied into the run's work directory with mode 600, without its refresh token, mounted read-only into both devices, and deleted when the run ends, however it ends (a `kill -9` of `rig.sh` is the exception). A refresh from inside a device would rotate the refresh token and end the login on this machine; without it, a device can only use the access token until it expires. The rig refuses to start with less than 30 minutes left on it, and starts no session that would outlast it.
-- `ENABLE_CLAUDEAI_MCP_SERVERS=false` keeps the account's own connectors out of the devices' sessions. Each session is allowed the Counterpart tools and `Read`, `Grep`, `Glob` in its own repository, nothing else.
+- `ENABLE_CLAUDEAI_MCP_SERVERS=false` keeps the account's own connectors out of the devices' sessions. Each session gets the Counterpart tools and `Read`, `Grep`, `Glob`. Only the Counterpart tools are in `--allowedTools`, so the built-in ones keep the default scope of `claude -p`: the session's own repository. Reads of the login, `~/.cpart`, the Counterpart checkout and `/proc` are also denied outright. A run checked this: with `Read` listed bare in `--allowedTools`, a session could read any file in the device, the login included.
+- The approval passphrases are new for each run and stay on this machine. The rig is left out of the device image. After pairing, both daemons are started again without `CPART_PASSPHRASE`, since `cpart setup` and `cpart join` pass their environment to the daemon they start.
 - Containers and the network are named `two-devices-<run>-...` and removed at the end. In `container` mode no port is opened on the host. `host` and `tunnel` modes take a free port.
 - Devices never touch this machine's `~/.counterpart`, `~/.claude` settings or `~/.codex`. `CPART_NO_BOOT=1` is set inside them.
 

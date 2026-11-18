@@ -4,6 +4,7 @@
 // Claude Code login. See scripts/devices/README.md.
 //
 //   node scripts/devices/run.ts --work DIR --out DIR --image NAME --port N [--mode auto|host|container|tunnel] [--no-sessions] [scenario.json...]
+import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,7 +23,13 @@ const { values: flags, positionals } = parseArgs({
 const WORK = resolve(flags.work ?? "");
 const OUT = resolve(flags.out ?? join(WORK, "results"));
 const MODEL = flags.model ?? "claude-sonnet-5-5";
-const PASSPHRASE: Record<Device, string> = { laptop: "laptop long passphrase", devcontainer: "devcontainer long passphrase" };
+// New for each run and kept on this machine, so nothing in a device can learn
+// them: an agent that could would approve contracts in its human's place.
+const PASSPHRASE: Record<Device, string> = { laptop: randomBytes(18).toString("base64url"), devcontainer: randomBytes(18).toString("base64url") };
+// What a session may read: its own repository, the default scope of claude -p.
+// The rest is denied outright as well, in case a setting widens that scope:
+// the login, the Counterpart home and checkout, and other processes.
+const SESSION_DENY = ["/home/node/.claude-rig", "/home/node/.cpart", "/home/node/counterpart", "/home/node/seed", "/proc"].map((p) => `Read(/${p}/**)`);
 // The devices' copy of the login has no refresh token, so it stops working
 // when the access token expires. No session starts that close to it.
 const LOGIN_UNTIL = Number(flags["login-until"] ?? 0);
@@ -205,14 +212,16 @@ class Running {
   }
 
   // A live Claude Code session in the device's repository, with the
-  // Counterpart tools that `cpart setup` registered for it, nothing more.
+  // Counterpart tools that `cpart setup` registered for it and the listed
+  // built-in tools. Those are not in --allowedTools: listed bare there, Read
+  // would read any file in the device. Left out, it reads the repository only.
   async session(d: Device, id: string, prompt: string, tools: string[], timeoutS: number): Promise<void> {
     const started = Date.now();
     const file = join(WORK, "sessions", `${this.s.name}-${id}.jsonl`);
     say(`  session ${id} on ${d} starts`);
     const r = await rig.exec(
       d,
-      ["timeout", String(timeoutS), "claude", "-p", "--model", MODEL, "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--tools", tools.join(","), "--allowedTools", "mcp__counterpart__*", ...tools],
+      ["timeout", String(timeoutS), "claude", "-p", "--model", MODEL, "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--tools", tools.join(","), "--allowedTools", "mcp__counterpart__*", "--disallowedTools", ...SESSION_DENY],
       { cwd: "/home/node/project", timeoutMs: (timeoutS + 60) * 1000, input: prompt },
     );
     writeFileSync(file, r.out);
@@ -492,12 +501,27 @@ async function setup(res: SetupResult): Promise<SetupResult> {
     return false;
   });
   if (!paired) throw new Error("the two devices did not finish pairing in 60s");
+  const pairedAt = Date.now();
+  // The daemons that setup and join started inherited CPART_PASSPHRASE, and a
+  // session runs as the same user. Start them again without it.
+  for (const d of DEVICES) {
+    await rig.cpart(d, ["down"]);
+    const up = await rig.cpart(d, ["up"]);
+    if (up.code !== 0) throw new Error(`${d}: cpart up failed: ${(up.err || up.out).trim()}`);
+    const left = await rig.exec(d, ["sh", "-c", "grep -ls CPART_PASSPHRASE= /proc/[0-9]*/environ || true"]);
+    if (left.out.trim()) throw new Error(`${d}: a process still holds CPART_PASSPHRASE: ${left.out.trim()}`);
+  }
+  const connected = await rig.until(60_000, async () => {
+    for (const d of DEVICES) if (!(await rig.cpartJson<{ daemon: { connected: boolean } | null }>(d, ["status"]))?.daemon?.connected) return false;
+    return true;
+  }, 2000);
+  if (!connected) throw new Error("the daemons did not connect again in 60s after the restart that drops the passphrase");
   for (const d of DEVICES) {
     const st = await rig.cpartJson<{ agents: { name: string; found: boolean; registered: string }[] }>(d, ["status"]);
     res.agentsRegistered[d] = st?.agents.filter((a) => a.found).map((a) => `${a.name}: ${a.registered}`).join(", ") ?? "unknown";
   }
   res.ok = true;
-  res.durationS = Math.round((Date.now() - t0) / 1000);
+  res.durationS = Math.round((pairedAt - t0) / 1000);
   return res;
 }
 

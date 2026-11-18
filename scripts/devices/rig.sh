@@ -78,7 +78,9 @@ fi
 
 step "build the device image from this checkout"
 mkdir -p "$WORK/ctx/counterpart"
-git ls-files -z --cached --others --exclude-standard | grep -zv '^scripts/devices/results/' | tar -C "$ROOT" --null -T - -cf - | tar -C "$WORK/ctx/counterpart" -xf -
+# Not scripts/devices: the devices do not need the rig, and their sessions
+# should not read it.
+git ls-files -z --cached --others --exclude-standard | grep -zv '^scripts/devices/' | tar -C "$ROOT" --null -T - -cf - | tar -C "$WORK/ctx/counterpart" -xf -
 cp -r scripts/devices/repos "$WORK/ctx/seed"
 docker build -q -t two-devices:latest -f scripts/devices/Dockerfile "$WORK/ctx" >/dev/null
 
