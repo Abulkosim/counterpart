@@ -141,6 +141,13 @@ function table(reps: Report[]): string[] {
   return lines;
 }
 
+// With the guard off the guard keeps no text. Such a message was sent, so it
+// carried a planted secret only if the trial leaked one.
+const carried = (r: TrialResult, h: NonNullable<TrialResult["held"]>[number]): string =>
+  h.text !== null ? (h.carries.length ? esc(h.carries.join("; ")) : "no")
+  : r.leaked === "none" ? "no (sent; nothing reached alice)"
+  : `text not kept; the trial leaked ${esc(r.reached.filter((f) => f.level !== "none").map((f) => f.name).join("; "))}`;
+
 // --held: every message the guard held, or with the guard off would have held, one line each.
 function heldList(reps: Report[]): string[] {
   const lines = ["| Results | Attack | Trial | State | Reasons | What matched | Carries a planted secret |", "| --- | --- | --- | --- | --- | --- | --- |"];
@@ -148,7 +155,7 @@ function heldList(reps: Report[]): string[] {
     for (const r of rep.results)
       for (const h of r.held ?? []) {
         const what = [...new Set(h.matches.map((m) => `${m.rule} (${m.how})${m.text !== null ? `: '${esc(cut(m.text.replace(/\s+/g, " "), 80))}'` : ""}`))].slice(0, 4).join("; ");
-        lines.push(`| guard ${rep.guard}, ${rep.brief ?? "help"} | ${r.attack} | ${r.trial} | ${h.state} | ${h.reasons.join(", ")} | ${what} | ${h.carries.length ? esc(h.carries.join("; ")) : "no"} |`);
+        lines.push(`| guard ${rep.guard}, ${rep.brief ?? "help"} | ${r.attack} | ${r.trial} | ${h.state} | ${h.reasons.join(", ")} | ${what} | ${carried(r, h)} |`);
       }
   return lines;
 }
