@@ -70,11 +70,11 @@ The daemon does the work, over the relay connection it already holds. `cpart inv
 | CPace input | Here |
 | --- | --- |
 | PRS (password) | the two words, joined with a dash |
-| CI (channel identifier) | `lv_cat("counterpart/pair/v1", relay URL, nameplate)` |
+| CI (channel identifier) | `lv_cat("counterpart/pair/v1", relay name, nameplate)` |
 | sid | 16 random bytes from the inviter, sent with its first message |
 | ADa, ADb | `canonical({ v: 1, role, credential })`: the sender's role and its signed device credential, which carries its root key |
 
-So the session key (ISK) depends on the words, the relay URL both sides dialled, the nameplate, and both people's credentials. Each side checks the other's credential signature and role before using it, and refuses its own root key.
+So the session key (ISK) depends on the words, the relay's name (the one it gives itself, the same whichever address each side dialled), the nameplate, and both people's credentials. Each side checks the other's credential signature and role before using it, and refuses its own root key.
 
 **Key confirmation, both ways** (draft section 10.4): `mac_key = SHA-512("CPaceMac" || sid || ISK)`, and each side sends `HMAC-SHA-512(mac_key, lv_cat(its share, its AD))`. The joiner sends its tag with its share. The inviter checks it before saying anything that depends on the key. The joiner checks the inviter's tag before using what comes with it.
 
@@ -88,7 +88,7 @@ The relay is not trusted. It carries every message and can drop, delay, reorder,
 
 - **No offline guessing.** CPace's messages reveal nothing that lets someone test passwords afterwards. Testing a guess means running the protocol live against one of the two people with that guess.
 - **One answer per side per code.** The inviter's daemon looks at the first answer to a code and no other: right or wrong, the run is over. The joiner's daemon answers the first first-message it gets and no other, and a home never answers the same code twice (`this code was already tried here`). A code counts as tried when the daemon answers it, not when you type it, so a try that never reached the inviter (the relay was down, or said `rate_limited`) leaves the code usable. So whoever runs the other end, the relay included, gets at most one guess against each person.
-- **Swapping anything changes the key.** Replacing a share, a credential, the sid, the relay URL or the nameplate makes the two ISKs differ, so the confirmation tags fail and both sides stop.
+- **Swapping anything changes the key.** Replacing a share, a credential, the sid, the relay name or the nameplate makes the two ISKs differ, so the confirmation tags fail and both sides stop.
 - **Fails closed and says so.** A wrong tag ends the run on that side, it tells the other side (`fail`), closes the nameplate, and both people get a sentence. The `fail` message is not authenticated: a relay can use it to end a pairing, which it could do anyway by dropping messages. It can never complete one.
 - **Replays and reflection.** A share equal to one's own is refused (the inviter's first message sent back to it), the roles in ADa and ADb must be the right way round, and an answer from an earlier run fails because the sid and shares differ.
 
@@ -108,7 +108,7 @@ That is enough for something used a few times by people who are talking to each 
 
 ## Limits
 
-- **The relay URL is part of the key.** Both people must dial the relay by the same address, because the relay URL goes into CI and because an identity is tied to its relay's address anyway ([verification.md](verification.md#known-limits)). A Mac and a dev container on that Mac cannot both use `ws://127.0.0.1:7447`: inside the container that address is the container. Use an address both can reach under one name, such as `cpart relay --tunnel`.
+- **The relay's name is part of the key.** The relay's name goes into CI, so both sides must mean the same relay. A relay that answers to several addresses counts as one: the key uses the name the relay gives itself, so a Mac on `ws://127.0.0.1:7447` and a dev container on `ws://host.docker.internal:7447` pair through the same relay ([connectivity.md](connectivity.md)).
 - **Nameplates live in the relay's memory.** A relay restart ends every pairing in progress. Make a new code.
 - **A daemon restart in the middle of a run ends it.** The secrets of a run are kept in memory only; after a restart the daemon marks it failed, says why, and on reconnecting tells the other side and closes the nameplate, so nobody waits for a run that cannot finish. A dropped relay connection does not end a run: after reconnecting, the daemon sends its last pairing messages again, and the relay treats a repeat as one message.
 - **The words sit in `pairing.db`** in your home (mode 600, in a 700 directory) while a pairing is live, so the CLI can show the code and the daemon can run it. When it ends the row is cleared, SQLite zeroes the freed space (`secure_delete`), and the daemon empties the write-ahead log (`pairing.db-wal`) into the database, so the words are not left in either file. A copy can still sit in free blocks of the disk itself, as with any deleted file. The home also keeps, for 30 days, a SHA-256 of each code it answered, so it never answers one twice; a used code is dead, so that hash is worth nothing.
