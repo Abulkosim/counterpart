@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { decodeInvite } from "@counterpart/protocol";
 import { type Relay, startRelay } from "@counterpart/relay";
 import { Counterpart, type LinkOptions, RelayLink } from "../src/index.ts";
 
@@ -95,6 +96,31 @@ test("two names for one relay: one side dials 127.0.0.1, the other host.docker.i
   await bob.say(thread, "from the other name");
   await until("alice reads it", () => texts(alice, thread).length === 2);
   assert.deepEqual(bob.relayBook.route([r.url]).preferred, [other], "bob sends alice's mail through his name for her relay");
+});
+
+test("an invite from the side that dials the other name names the one others use", async () => {
+  const r = await relay();
+  // The container side: dials its own name for the relay, others call it r.url.
+  const box = await person(`ws://localhost:${r.port}`, r.url);
+  const mac = await person(r.url);
+  connect(box);
+  connect(mac);
+  const invite = box.createInvite("mac");
+  assert.equal(decodeInvite(invite).relay, r.url);
+  await mac.acceptInvite(invite, "box");
+  await until("pairing", () => mac.contact("box").state === "active" && box.contact("mac").state === "active");
+  const thread = await mac.openThread("box", "invited by the container");
+  await mac.say(thread, "hello box");
+  await until("box reads it", () => texts(box, thread).length === 1);
+});
+
+test("an invite matches the relay however either side spelled it", async () => {
+  const r = await relay();
+  const alice = await person(`${r.url}/`);
+  const bob = await person(r.url);
+  connect(alice);
+  connect(bob);
+  await pair(alice, bob);
 });
 
 test("a second relay: contacts learn it, and mail moves to it when the first one dies", async () => {

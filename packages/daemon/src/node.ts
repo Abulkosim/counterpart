@@ -344,14 +344,16 @@ export class Counterpart {
     const token = randomId();
     const expiresAt = this.now() + ttlMs;
     this.db.prepare("INSERT INTO invites (token, name, expires_at) VALUES (?, ?, ?)").run(token, name, expiresAt);
-    return encodeInvite({ v: 1, relay: this.relay, credential: this.keys.device.credential, token, expiresAt });
+    // The name others know the home relay by, which is not the one this machine
+    // dials when it reaches the relay another way (from a container, say).
+    return encodeInvite({ v: 1, relay: this.relayBook.homeName(), credential: this.keys.device.credential, token, expiresAt });
   }
 
   async acceptInvite(invite: string, name: string): Promise<Contact> {
     checkName(name);
     const inv = decodeInvite(invite, this.now());
     if (inv.credential.rootKey === this.keys.rootKey) throw new Error("that is your own invite");
-    if (!this.relayBook.find(inv.relay, { exact: true })) throw new Error(`invite is for relay ${inv.relay}, which this identity does not use. Add it first: cpart relay add ${inv.relay}`);
+    if (!this.relayBook.find(inv.relay)) throw new Error(`invite is for relay ${inv.relay}, which this identity does not use. Add it first: cpart relay add ${inv.relay}`);
     if (this.db.prepare("SELECT 1 FROM contacts WHERE name = ? OR root_key = ?").get(name, inv.credential.rootKey)) throw new Error("you already have this contact, or that name is taken");
     const out = await this.build(inv.credential, randomId(), "contact.request", { token: inv.token }, 0, []);
     this.tx(() => {

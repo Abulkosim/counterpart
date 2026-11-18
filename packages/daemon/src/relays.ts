@@ -76,6 +76,12 @@ export class RelayBook {
     return this.mine().find((r) => r.home)?.url ?? this.mine()[0]!.url;
   }
 
+  // The home relay by the name others know it by: what an invite names.
+  homeName(): string {
+    const h = this.mine().find((r) => r.home) ?? this.mine()[0]!;
+    return h.as ?? h.url;
+  }
+
   // The names I announce, most preferred first: each relay's own address and
   // the name others know it by.
   names(): string[] {
@@ -95,12 +101,12 @@ export class RelayBook {
     return (this.db.prepare("SELECT v FROM relay_meta WHERE k = 'version'").get() as { v: number } | undefined)?.v ?? 0;
   }
 
-  // One of my relays, by the address I dial or the one others know it by.
-  // `exact`: spelled exactly so, as an invite must be.
-  find(name: string, opts: { exact?: boolean } = {}): MyRelay | undefined {
+  // One of my relays, by the address I dial or the one others know it by,
+  // however it is spelled ("ws://Host:80/" is "ws://host").
+  find(name: string): MyRelay | undefined {
     if (!isRelayUrl(name)) return undefined;
-    const k = (u: string): string => (opts.exact ? u : relayKey(u));
-    return this.mine().find((r) => k(r.url) === k(name) || (r.as !== null && k(r.as) === k(name)));
+    const k = relayKey(name);
+    return this.mine().find((r) => relayKey(r.url) === k || (r.as !== null && relayKey(r.as) === k));
   }
 
   // Each change gets a version above the last and near the clock, so a list
