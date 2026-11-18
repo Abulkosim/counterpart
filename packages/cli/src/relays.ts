@@ -1,0 +1,217 @@
+// `cpart relay add|remove|move|list`, what the daemon prints about its
+// connections, and finding a relay from inside a container.
+import { existsSync } from "node:fs";
+import { type Counterpart, type RelayLink, waiting } from "@counterpart/daemon";
+import { isRelayUrl, relayKey } from "@counterpart/protocol";
+
+export const RELAY_SUBCOMMANDS = ["add", "remove", "move", "list"];
+
+export const RELAY_USAGE = `  cpart relay list                                                your relays, and which contacts know your current list
+  cpart relay add <url> [--as <url>]                              use another relay too. Contacts are told. --as: the address
+                                                                  others use for the same relay, when you reach it another way
+  cpart relay remove <url> [--yes]                                stop using a relay. Contacts are told. Asks for --yes if a
+                                                                  contact shares no other relay with you
+  cpart relay move <url> [--as <url>] [--wait 60]                 make another relay your home: add it, tell contacts, and drop
+                                                                  the old one once every contact has confirmed`;
+
+// Print what happens to each relay connection, one line each.
+export function logLink(link: RelayLink, connected: (up: boolean) => void, safe: (s: string) => string): void {
+  link.on("relay", (url, up, why) => {
+    connected(link.online);
+    console.log(up ? `connected to ${safe(url)}` : `relay connection lost: ${safe(url)} (${safe(why)}), retrying`);
+  });
+  link.on("twin", (url, of) => console.log(`${safe(url)} is the same relay as ${safe(of)}; using one connection`));
+  link.on("wake", (ms) => console.log(`woke after ${Math.round(ms / 1000)}s asleep, reconnecting`));
+  link.on("network", () => console.log("network changed, checking connections"));
+}
+
+const healthUrl = (relay: string): string => {
+  const u = new URL(relay);
+  return `${u.protocol === "wss:" ? "https:" : "http:"}//${u.host}${u.pathname.replace(/\/$/, "")}/healthz`;
+};
+
+async function answers(relay: string, ms = 5000): Promise<boolean> {
+  return fetch(healthUrl(relay), { signal: AbortSignal.timeout(ms), redirect: "error" }).then((r) => r.ok, () => false);
+}
+
+// The id a relay gives in /healthz: the same under every name it answers to.
+// Relays from before ids give none.
+async function relayIdOf(relay: string, ms = 5000): Promise<string | undefined> {
+  try {
+    const r = await fetch(healthUrl(relay), { signal: AbortSignal.timeout(ms), redirect: "error" });
+    const id = r.ok ? ((await r.json()) as { id?: unknown }).id : undefined;
+    return typeof id === "string" && /^[A-Za-z0-9_-]{8,64}$/.test(id) ? id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const inContainer = (): boolean => existsSync("/.dockerenv") || existsSync("/run/.containerenv");
+
+// The same relay by the name the other side of a container boundary uses.
+// Inside a container, 127.0.0.1 is the container itself and the machine it runs
+// on is host.docker.internal. Outside, it is the other way round.
+export function otherName(relay: string): string | undefined {
+  if (!isRelayUrl(relay)) return undefined;
+  const u = new URL(relay);
+  const loop = ["127.0.0.1", "localhost", "[::1]"].includes(u.hostname);
+  if (inContainer() ? !loop : u.hostname !== "host.docker.internal") return undefined;
+  u.hostname = inContainer() ? "host.docker.internal" : "127.0.0.1";
+  return relayKey(u.href);
+}
+
+// Called before an identity is made from an invite or --relay. If the address
+// does not answer here but its other name does, dial that and remember that
+// others call it by the first. The caller has already checked the address.
+export async function reachable(relay: string): Promise<{ relay: string; as?: string }> {
+  const alt = otherName(relay);
+  if (!alt || (await answers(relay, 2000)) || !(await answers(alt))) return { relay };
+  return { relay: alt, as: relay };
+}
+
+// A command for a person to run, with an address a contact chose in it. Only a
+// plain address (see isRelayUrl) is ever put in one.
+const addCommand = (url: string | undefined): string => (url && isRelayUrl(url) ? `cpart relay add ${url}` : "cpart relay add <their relay>");
+
+// Lines for `cpart status`: contacts whose relays this identity does not use.
+export function relayNotices(node: Counterpart, safe: (s: string) => string): string[] {
+  const contacts = node.contacts().filter((c) => c.state === "active");
+  return node.relayBook.missing(contacts).map((m) => {
+    const c = contacts.find((x) => x.rootKey === m.rootKey)!;
+    return `  ${c.name} can be reached on ${m.relays.map(safe).join(", ")}, and you use none of them\n      ${addCommand(m.relays[0])}`;
+  });
+}
+
+interface Io {
+  out(human: string, data: unknown): void;
+  note(s: string): void;
+  safe(s: string): string;
+  ensureDaemon(): Promise<boolean>;
+  flags: { as?: string; wait?: string; yes?: boolean };
+}
+
+export async function relayCommand(node: Counterpart, args: string[], io: Io): Promise<void> {
+  const book = node.relayBook;
+  const { safe } = io;
+  const sub = args[0] ?? "list";
+  const url = args[1];
+  const as = io.flags.as ?? null;
+  const active = () => node.contacts().filter((c) => c.state === "active");
+  const need = async (what: string): Promise<string> => {
+    if (!url || !isRelayUrl(url)) throw new Error(`usage: cpart relay ${what} <ws:// or wss:// address>`);
+    if (as !== null && !isRelayUrl(as)) throw new Error("--as takes a ws:// or wss:// address");
+    return url;
+  };
+
+  if (sub === "list") {
+    const status = new Map(book.status().map((s) => [s.url, s]));
+    const mine = book.mine();
+    const pending = new Set(book.unconfirmed(active()));
+    const lines = [
+      "Your relays (contacts try them in this order):",
+      ...mine.map((r) => {
+        const s = status.get(r.url);
+        const state = s ? (s.connected ? "connected" : `not connected${s.error ? `: ${safe(s.error)}` : ""}`) : "not seen by a daemon yet";
+        return `  ${r.home ? "home   " : r.leaving ? "leaving" : "       "}  ${safe(r.url)}${r.as ? `  (others call it ${safe(r.as)})` : ""}  ${state}`;
+      }),
+      "",
+      node.contacts().length ? "Contacts:" : "No contacts yet.",
+      ...node.contacts().map((c) => {
+        const t = book.their(c.rootKey, c.relay);
+        const shared = book.route(t.relays).preferred.length > 0;
+        const knows = !shared
+          ? `\n${" ".repeat(19)}you use none of these, so your mail to them may not arrive: ${addCommand(t.relays[0])}`
+          : book.version() === 0 || c.state !== "active" ? "" : t.seen < book.version() ? "  has NOT confirmed your current list" : "  has your current list";
+        return `  ${c.name.padEnd(16)} reach them on ${t.relays.map(safe).join(", ")}${knows}`;
+      }),
+    ];
+    return io.out(lines.join("\n"), {
+      relays: mine.map((r) => ({ ...r, ...(status.get(r.url) ?? {}) })),
+      version: book.version(),
+      contacts: node.contacts().map((c) => ({ name: c.name, ...book.their(c.rootKey, c.relay), confirmed: !pending.has(c.rootKey) })),
+    });
+  }
+
+  if (sub === "add") {
+    const u = await need("add");
+    if (!(await answers(u))) throw new Error(`no relay answers at ${safe(u)}. Nothing was changed.`);
+    // The same relay under a second name would only take a second connection.
+    const id = !book.find(u) && as === null ? await relayIdOf(u) : undefined;
+    if (id) {
+      const others = book.mine();
+      const ids = await Promise.all(others.map((r) => relayIdOf(r.url)));
+      const same = others.find((_, i) => ids[i] === id);
+      if (same)
+        throw new Error(
+          `${safe(u)} is the same relay as ${safe(same.url)}, which you already use. Nothing was changed.\nTo reach it at ${safe(u)} from here, while others keep calling it ${safe(same.as ?? same.url)}: cpart relay add ${safe(u)} --as ${safe(same.as ?? same.url)}`,
+        );
+    }
+    const changed = book.add(u, as, Date.now());
+    const d = changed ? await io.ensureDaemon() : true;
+    return io.out(
+      changed ? `Added ${safe(u)}. Your daemon connects to it and tells your contacts.${d ? "" : " It is not running: start it with cpart up."}` : `${safe(u)} is already one of your relays.`,
+      { added: changed, relays: book.mine() },
+    );
+  }
+
+  if (sub === "remove") {
+    const u = await need("remove");
+    // Contacts this relay is the only way to. They could not be told either.
+    const only = book.onlyVia(active(), u);
+    const cut = active().filter((c) => only.includes(c.rootKey)).map((c) => safe(c.name));
+    if (cut.length && !io.flags.yes)
+      throw new Error(
+        `${cut.join(", ")} share${cut.length > 1 ? "" : "s"} no other relay with you. Without ${safe(u)} your messages would not reach them, and they could not be told it is gone. Nothing was changed.\nTo keep them, have them add one of your other relays first. To remove it anyway: cpart relay remove ${safe(u)} --yes`,
+      );
+    const r = book.remove(u, Date.now());
+    const d = await io.ensureDaemon();
+    return io.out(
+      `Removed ${safe(r.url)}. Your daemon disconnects from it and tells ${cut.length ? `contacts who share another relay with you. Not told, and now out of reach: ${cut.join(", ")}.` : "your contacts."}${d ? "" : " It is not running: start it with cpart up."}`,
+      { removed: r.url, relays: book.mine(), unreachable: cut },
+    );
+  }
+
+  if (sub === "move") {
+    const u = await need("move");
+    const wait = Number(io.flags.wait ?? 60);
+    if (!Number.isFinite(wait) || wait < 0 || wait > 86_400) throw new Error("--wait is a number of seconds");
+    if (!book.find(u)?.home && !(await answers(u))) throw new Error(`no relay answers at ${safe(u)}. Nothing was changed.`);
+    const { version } = book.moveHome(u, as, Date.now());
+    const leaving = book.leaving();
+    if (!leaving.length) return io.out(`${safe(book.home())} is already your home relay.`, { home: book.home(), done: true });
+    io.note(`Home relay is now ${safe(book.home())}. Telling your contacts; ${leaving.map((r) => safe(r.url)).join(", ")} stays until they confirm.`);
+    if (!(await io.ensureDaemon())) io.note("Your daemon is not running, so nobody can be told. Start it with cpart up, then run this again.");
+    const end = Date.now() + wait * 1000;
+    let left = book.unconfirmed(active());
+    let w = book.waits(Date.now());
+    while ((left.length || waiting(w)) && Date.now() < end) {
+      await new Promise((r) => setTimeout(r, 500));
+      left = book.unconfirmed(active());
+      w = book.waits(Date.now());
+    }
+    const gone = left.length || waiting(w) ? null : book.finishMove(active, version, Date.now());
+    if (!gone) {
+      left = book.unconfirmed(active());
+      w = book.waits(Date.now());
+      const old = leaving.map((r) => safe(r.url)).join(", ");
+      const why = [
+        ...active()
+          .filter((c) => left.includes(c.rootKey))
+          .map((c) => {
+            const t = book.their(c.rootKey, c.relay);
+            return `  ${safe(c.name)}: ${t.seen < book.version() ? "has not confirmed your new list yet" : `does not use ${safe(book.home())} or another relay you keep. They need to run: cpart relay add ${safe(book.home())}`}`;
+          }),
+        ...w.invites.map((i) => `  your unused invite for ${safe(i.name)} names ${old}. It stops counting once used, or when it runs out at ${new Date(i.expiresAt).toISOString().slice(0, 16).replace("T", " ")} UTC`),
+        ...w.pending.map((n) => `  your pairing with ${safe(n)} has not completed, and its answer comes through ${old}`),
+        ...w.offline.map((u) => `  your daemon is not connected to ${safe(u)}, which may still hold mail for you`),
+      ];
+      return io.out(
+        `Not finished. ${why.length ? `Waiting for:\n${why.join("\n")}` : "Your relay list changed while waiting."}\nYour daemon keeps ${old} meanwhile. Run the same command again later to finish, or drop the old relay now (anything listed above may then be lost): cpart relay remove ${leaving.map((r) => safe(r.url)).join(" ")}`,
+        { home: book.home(), done: false, unconfirmed: active().filter((c) => left.includes(c.rootKey)).map((c) => c.name), ...w },
+      );
+    }
+    return io.out(`Done. Every contact confirmed. ${gone.map(safe).join(", ")} removed; your daemon tells contacts that too.`, { home: book.home(), done: true, removed: gone });
+  }
+
+  throw new Error(`usage:\n${RELAY_USAGE}`);
+}

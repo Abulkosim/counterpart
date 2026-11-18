@@ -306,7 +306,6 @@ export const parsing: Case[] = [
         ["javascript relay", enc({ ...real, relay: "javascript:alert(1)" })],
         ["file relay", enc({ ...real, relay: "file:///etc/passwd" })],
         ["another relay", enc({ ...real, relay: "ws://relay.attacker.example" })],
-        ["same relay, other spelling", enc({ ...real, relay: `${bob.relay}/` })],
         ["expired", enc({ ...real, expiresAt: Date.now() - 1 })],
         ["float expiry", raw(text.replace(/"expiresAt":\d+,"relay"/, '"expiresAt":1e300,"relay"'))],
         ["credential with swapped encryption key", enc({ ...real, credential: { ...real.credential, encKey: bob.device.credential.encKey } })],
@@ -320,6 +319,12 @@ export const parsing: Case[] = [
       assert.ok(Date.now() - started < 5000, `took ${Date.now() - started} ms`);
       assert.equal(ctx.snapshot(bob), before);
       assert.equal((await bob.acceptInvite(enc(real), "alice")).state, "pending");
+      // The same relay spelled another way is the same relay: logins and routing
+      // compare addresses normalized, so the request goes where Bob reads.
+      const trent = await ctx.person();
+      const respelled = enc({ ...real, relay: `${bob.relay}/`, credential: trent.device.credential, token: randomId() });
+      assert.equal((await bob.acceptInvite(respelled, "trent")).state, "pending");
+      assert.deepEqual(bob.relayBook.route([`${bob.relay}/`]).preferred, [bob.relay]);
     },
   },
   {

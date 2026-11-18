@@ -2,7 +2,7 @@
 
 Two people need one relay both can reach. The relay stores sealed messages until the recipient connects. It cannot read them, and it cannot forge them. It does know which device writes to which.
 
-An identity belongs to the relay it was created on. If the relay's address changes, the identities made on it stop working. Pick an address you can keep.
+An identity can use several relays and move between them with `cpart relay move`, without pairing again ([connectivity.md](connectivity.md)). A move needs a way to reach your contacts, so an address you can keep is still the easy path.
 
 ## To try it with someone today
 
@@ -22,7 +22,7 @@ docker run -d --restart unless-stopped -p 8080:8080 -v cpart-relay:/data \
   -e CPART_RELAY_URL=wss://relay.example.com counterpart
 ```
 
-`CPART_RELAY_URL` is the address people will type. The relay refuses logins that name any other address, so it must match exactly. The container speaks plain WebSocket on port 8080; put a proxy that terminates TLS in front of it (Caddy, nginx, a platform's own). `/healthz` answers `{"ok":true,...}` for health checks. All state is one SQLite file in `/data`.
+`CPART_RELAY_URL` is the address people will type. The relay refuses logins that name any other address, so it must match. If people reach it by more than one address, list them all, separated by commas (or give `--url` once for each). The container speaks plain WebSocket on port 8080; put a proxy that terminates TLS in front of it (Caddy, nginx, a platform's own). `/healthz` answers `{"ok":true,"id":...}` for health checks; `id` is random and kept in the database, so it changes only when the database does. All state is one SQLite file in `/data`.
 
 Without Docker it is the same program:
 
