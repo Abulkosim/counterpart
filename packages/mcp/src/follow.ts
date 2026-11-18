@@ -37,6 +37,7 @@ export function registerFollowTools(server: McpServer, findThread: (id: string) 
           `Asked to follow thread ${t.id} with ${t.contact}.`,
           "If Counterpart's hooks run in this session, a line starting \"Counterpart hook:\" confirms it right after this result.",
           "Without that confirmation nothing will remind or wake this session: call counterpart_wait_for_reply to wait for the reply.",
+          `A reply comes only when ${t.contact} or an agent on ${t.contact}'s side answers. Nothing here says whether anyone is there now. If it takes long, tell the human the question was delivered and is waiting on ${t.contact}'s side.`,
         ].join("\n"),
       );
     },

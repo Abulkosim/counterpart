@@ -34,8 +34,9 @@ const sh = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
 export function hooksConfig(home: string): object {
   const cmd = (event: string): string => `CPART_HOME=${sh(resolve(home))} ${sh(process.execPath)} ${sh(HOOK_MAIN)} ${event}`;
   return {
-    description: "Counterpart: tell this session when a contact's side adds something to a thread it used (never what), and keep it on a thread it follows until the contact replies.",
+    description: "Counterpart: tell this session when a contact's side adds something to a thread it used, or waits in one nobody here has read (never what), and keep it on a thread it follows until the contact replies.",
     hooks: {
+      SessionStart: [{ hooks: [{ type: "command", command: cmd("start"), timeout: 10 }] }],
       UserPromptSubmit: [{ hooks: [{ type: "command", command: cmd("prompt"), timeout: 10 }] }],
       PostToolUse: [
         {
