@@ -104,6 +104,11 @@ cpart alice up >/dev/null
 wait_for "alice to get the message that waited" sh -c "CPART_HOME='$WORK/alice' node packages/cli/src/main.ts log bob | grep -q 'sent while alice was away'"
 cpart alice down >/dev/null
 
+step "--host localhost is checked where it listens, which can be ::1"
+env -u CPART_NO_BOOT node packages/cli/src/main.ts relay --boot --port "$PORT" --host localhost | tee "$WORK/boot3.out"
+grep -q "^Relay service replaced at" "$WORK/boot3.out"
+cpart nobody status | grep -q "^Service   relay on port $PORT starts at login (systemd), answering" || fail "status does not see the relay on localhost"
+
 step "cpart relay --no-boot"
 node packages/cli/src/main.ts relay --no-boot | tee "$WORK/noboot.out"
 grep -q "^Stopped the relay service on port $PORT" "$WORK/noboot.out"

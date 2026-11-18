@@ -6,7 +6,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_RELAY_HOME, defaultRelayDb, oldDbNotice, relayServiceName, relayServices } from "../src/relay-service.ts";
+import { DEFAULT_RELAY_HOME, defaultRelayDb, localUrls, oldDbNotice, relayServiceName, relayServices } from "../src/relay-service.ts";
 import { type ServiceSpec, MAIN, installService, listServices, plistText, unitText } from "../src/service.ts";
 
 const dirs: string[] = [];
@@ -135,4 +135,12 @@ test("no value with a line break is written into a service file, for the relay o
   const r = cli(["relay", "--boot", "--port", "1"], { CPART_NO_BOOT: "", HOME: h2, CPART_RELAY_HOME: `${h2}/rh\nExecStartPre=/bin/true` });
   assert.match(r.out, /CPART_RELAY_HOME cannot hold line breaks|nothing here can start a program at login/);
   assert.ok(!existsSync(join(h2, ".config")), "a unit file was written");
+});
+
+test("a relay on localhost or a wildcard address is checked on both loopback addresses", () => {
+  // "localhost" can be ::1 first, and the relay then listens there only.
+  assert.deepEqual(localUrls({ host: "localhost", port: 7447 }), ["http://127.0.0.1:7447/healthz", "http://[::1]:7447/healthz"]);
+  assert.deepEqual(localUrls({ host: "::", port: 1 }), ["http://127.0.0.1:1/healthz", "http://[::1]:1/healthz"]);
+  assert.deepEqual(localUrls({ host: "10.0.0.2", port: 1 }), ["http://10.0.0.2:1/healthz"]);
+  assert.deepEqual(localUrls({ host: "fd00::2", port: 1 }), ["http://[fd00::2]:1/healthz"]);
 });

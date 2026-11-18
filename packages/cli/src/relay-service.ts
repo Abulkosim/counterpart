@@ -68,14 +68,18 @@ export function relayServices(): RelayService[] {
   return out.sort((a, b) => a.port - b.port);
 }
 
-// The address to check it on from this machine.
-const localUrl = (s: { host: string; port: number }): string => {
-  const h = ["0.0.0.0", "::", "[::]", "127.0.0.1", "localhost"].includes(s.host) ? "127.0.0.1" : s.host.includes(":") ? `[${s.host}]` : s.host;
-  return `http://${h}:${s.port}/healthz`;
+// The addresses to check it on from this machine. A relay told to listen on
+// "localhost" listens on whichever address that name gives first, which is
+// ::1 on some machines, so loopback and wildcard hosts are tried both ways.
+export const localUrls = (s: { host: string; port: number }): string[] => {
+  const both = ["0.0.0.0", "::", "[::]", "127.0.0.1", "::1", "[::1]", "localhost"].includes(s.host);
+  const hosts = both ? ["127.0.0.1", "[::1]"] : [s.host.includes(":") ? `[${s.host}]` : s.host];
+  return hosts.map((h) => `http://${h}:${s.port}/healthz`);
 };
 
 export async function answering(s: { host: string; port: number }, ms = 1500): Promise<boolean> {
-  return fetch(localUrl(s), { signal: AbortSignal.timeout(ms), redirect: "error" }).then((r) => r.ok, () => false);
+  const one = (u: string): Promise<boolean> => fetch(u, { signal: AbortSignal.timeout(ms), redirect: "error" }).then((r) => r.ok, () => false);
+  return (await Promise.all(localUrls(s).map(one))).some(Boolean);
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
