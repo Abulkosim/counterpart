@@ -115,12 +115,15 @@ export function bootInstalled(home: string): Boot | undefined {
 }
 
 // The daemon starts the `claude` CLI for the front desk, so it needs the PATH
-// this shell has. A login service would otherwise get a bare one.
+// this shell has, and the CLAUDE_CONFIG_DIR if one is set, or claude would
+// look for its login somewhere else. A login service would otherwise get a
+// bare environment.
 // systemd splits on spaces and expands % everywhere in a unit file.
 const quote = (s: string): string => `"${s.replace(/["\\]/g, "\\$&").replace(/%/g, "%%")}"`;
 
 function installBoot(home: string, kind: Boot): void {
-  const env = { CPART_HOME: resolve(home), PATH: process.env.PATH ?? "" };
+  const env: Record<string, string> = { CPART_HOME: resolve(home), PATH: process.env.PATH ?? "" };
+  if (process.env.CLAUDE_CONFIG_DIR) env.CLAUDE_CONFIG_DIR = resolve(process.env.CLAUDE_CONFIG_DIR);
   if (kind === "systemd") {
     mkdirSync(dirname(systemdUnit(home)), { recursive: true });
     writeFileSync(
