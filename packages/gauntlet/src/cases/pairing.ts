@@ -322,15 +322,15 @@ export const pairing: Case[] = [
     category: "pairing",
     attacker: "stranger",
     title: "Scan nameplate numbers from one device",
-    claim: "One device can claim at most ten nameplates an hour, so scanning numbers for open codes stops quickly.",
+    claim: "One device can claim at most ten nameplates an hour, and a number nobody opened counts twice, so scanning numbers for open codes stops after five.",
     async run(ctx) {
       const relay = await ctx.relay();
       const { c } = await rawJoiner(ctx, relay.url);
-      for (let n = 1; n <= 10; n++) {
+      for (let n = 1; n <= 5; n++) {
         c.send({ t: "pair.claim", nameplate: n });
         assert.equal(frame(await c.next("pair.error")).code, "nameplate_unknown");
       }
-      c.send({ t: "pair.claim", nameplate: 11 });
+      c.send({ t: "pair.claim", nameplate: 6 });
       assert.equal(frame(await c.next("pair.error")).code, "rate_limited");
     },
   },

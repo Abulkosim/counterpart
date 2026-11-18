@@ -21,6 +21,8 @@ interface Client {
   send(f: unknown): void;
   next(t: string, ms?: number): Promise<PairServerFrame & Record<string, unknown>>;
   none(t: string, ms?: number): Promise<void>;
+  // The first of "pair.claimed", "pair.opened" or "pair.error": its type, or the error code.
+  reply(): Promise<string>;
   ws: WebSocket;
 }
 async function login(r: Relay, d?: DeviceSecrets): Promise<Client> {
@@ -29,10 +31,10 @@ async function login(r: Relay, d?: DeviceSecrets): Promise<Client> {
   open.sockets.push(ws);
   const frames: Record<string, unknown>[] = [];
   ws.on("message", (raw) => frames.push(JSON.parse(raw.toString())));
-  const take = async (t: string, ms = 2000): Promise<Record<string, unknown> | undefined> => {
+  const take = async (t: string | string[], ms = 2000): Promise<Record<string, unknown> | undefined> => {
     const end = Date.now() + ms;
     for (;;) {
-      const i = frames.findIndex((f) => f.t === t);
+      const i = frames.findIndex((f) => (Array.isArray(t) ? t.includes(f.t as string) : f.t === t));
       if (i >= 0) return frames.splice(i, 1)[0];
       if (Date.now() > end) return undefined;
       await new Promise((res) => setTimeout(res, 10));
@@ -49,6 +51,11 @@ async function login(r: Relay, d?: DeviceSecrets): Promise<Client> {
     async none(t, ms = 200) {
       const f = await take(t, ms);
       assert.equal(f, undefined, `unexpected ${t}: ${JSON.stringify(f)}`);
+    },
+    async reply() {
+      const f = await take(["pair.claimed", "pair.opened", "pair.error"], 10_000);
+      if (!f) throw new Error("no reply");
+      return (f.t === "pair.error" ? f.code : f.t) as string;
     },
   };
   const ch = (await c.next("challenge")) as unknown as { nonce: string };
@@ -155,7 +162,7 @@ test("limits count per root key: many free device credentials do not add claims 
     const c = await login(r, await issueDevice(root));
     for (let k = 0; k < 10; k++) {
       c.send({ t: "pair.claim", nameplate: d * 10 + k + 1 });
-      codes.push(await Promise.race([c.next("pair.claimed").then(() => "claimed"), c.next("pair.error").then((f) => f.code as string)]));
+      codes.push(await c.reply());
     }
   }
   // Ten claims an hour for the root key, and a miss counts double: at most
@@ -165,17 +172,17 @@ test("limits count per root key: many free device credentials do not add claims 
   // the first few numbers.
   const joiner = await login(r);
   joiner.send({ t: "pair.claim", nameplate: target });
-  const got = await Promise.race([joiner.next("pair.claimed").then(() => "claimed"), joiner.next("pair.error").then((f) => f.code as string)]);
-  if (target > 5) assert.equal(got, "claimed");
+  const got = await joiner.reply();
+  if (target > 5) assert.equal(got, "pair.claimed");
   // Opens: three at once per root key, however many devices it has.
   const opener = generateSigningKey();
   const results: string[] = [];
   for (let d = 0; d < 4; d++) {
     const c = await login(r, await issueDevice(opener));
     c.send({ t: "pair.open", ref: `o${d}` });
-    results.push(await Promise.race([c.next("pair.opened").then(() => "opened"), c.next("pair.error").then((f) => f.code as string)]));
+    results.push(await c.reply());
   }
-  assert.deepEqual(results, ["opened", "opened", "opened", "rate_limited"]);
+  assert.deepEqual(results, ["pair.opened", "pair.opened", "pair.opened", "rate_limited"]);
 });
 
 test("limits count per source address, but not for loopback, which a tunnel gives everyone", async () => {
