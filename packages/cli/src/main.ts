@@ -20,21 +20,27 @@ import { openTunnel } from "./tunnel.ts";
 import { GUARD_USAGE, guardCommand } from "./guard-cli.ts";
 import { SHARE_USAGE, shareCommand, sharedSummary } from "./share.ts";
 import { hookLines, installHooks, removeHooks } from "./hooks-install.ts";
-import { inviteByCode, joinByCode, pairingLines } from "./pair.ts";
+import { inviteByCode, joinByCode, nextStep, pairingLines } from "./pair.ts";
 import { STATUS_WINDOW, refusedLine, unansweredLines } from "./waiting.ts";
 import { PairingEngine } from "@counterpart/daemon";
 import { looksLikeCode } from "@counterpart/protocol";
 import { RELAY_SUBCOMMANDS, RELAY_USAGE, logLink, reachable, relayCommand, relayNotices } from "./relays.ts";
+import { type RelayService, DEFAULT_PORT, answering, bootRelay, defaultRelayDb, oldDbNotice, relayServiceHint, relayServices, unbootRelay } from "./relay-service.ts";
+import { commandHelp } from "./help.ts";
 
 const USAGE = `cpart: let your agent talk to someone else's agent
 
 Start here. One of these is all the setup there is:
 
-  cpart setup --relay <wss://host> [--no-hooks]                   create your identity, keep the daemon running, add Counterpart to
-                                                                  Claude Code and Codex. Safe to run again. --no-hooks leaves out
-                                                                  the hooks that tell a session when a reply arrives
-  cpart join <code> <name>                                        the same, with the code someone sent you (7-cider-otter@host).
-                                                                  <name> is what you call them. A long cpart-invite: works too
+  cpart setup --relay <wss://host> [--no-agents] [--no-hooks] [--no-passphrase]
+                                                                  create your identity, keep the daemon running, add Counterpart to
+                                                                  Claude Code and Codex. Safe to run again. --no-agents leaves
+                                                                  Claude Code and Codex alone; --no-hooks leaves out only the hooks
+                                                                  that tell a session when a reply arrives
+  cpart join <code> <name> [--yes] [--no-agents] [--no-passphrase]
+                                                                  the same, with the code someone sent you (7-cider-otter@host).
+                                                                  <name> is what you call them. A long cpart-invite: works too.
+                                                                  --yes uses a relay on your own machine or network without asking
   cpart invite <name> [--no-wait] [--long]                        make a short code to send, then wait for them. <name> is what you
                                                                   call them. --long makes the long invite instead. With --json
                                                                   the long invite is printed unless you add --code
@@ -46,10 +52,12 @@ with them, and the first characters of a thread id are enough.
 
 The pieces, if you want to run them yourself:
 
-  cpart relay [--port 7447] [--host 127.0.0.1] [--db relay.db] [--url wss://public.name]... [--tunnel]
-                                                                  run a relay. --url once for each address it answers to.
+  cpart relay [--port 7447] [--host 127.0.0.1] [--db <file>] [--url wss://public.name]... [--tunnel]
+                                                                  run a relay in this terminal. --url once for each address it answers to.
                                                                   --tunnel gives it a public address through
-                                                                  cloudflared, for trying it with someone; the address changes on restart
+                                                                  cloudflared, for trying it with someone; the address changes on restart.
+                                                                  The database is ~/.counterpart-relay/relay-<port>.db unless --db
+  cpart relay --boot [--port 7447] [...] | cpart relay --no-boot  run the relay in the background, from login on, or stop doing that
 ${RELAY_USAGE}
   cpart init --relay <ws://host:port> [--no-passphrase]           create your identity
   cpart renew                                                     renew this device's credential (needs the passphrase)
@@ -124,7 +132,8 @@ ${SHARE_USAGE}
 
 ${GUARD_USAGE}
 
-Identity lives in $CPART_HOME (default ~/.counterpart). Add --json for machine output.`;
+Identity lives in $CPART_HOME (default ~/.counterpart). Add --json for machine output.
+Help for one command: cpart <command> --help`;
 
 const { values: flags, positionals } = parseArgs({
   allowPositionals: true,
@@ -182,8 +191,8 @@ async function secret(prompt: string): Promise<string> {
   }
 }
 
-async function line(prompt: string): Promise<string> {
-  if (!process.stdin.isTTY) throw new Error("this needs a terminal");
+async function line(prompt: string, noTerminal = "this needs a terminal"): Promise<string> {
+  if (!process.stdin.isTTY) throw new Error(noTerminal);
   process.stderr.write(prompt);
   process.stdin.resume();
   try {
@@ -195,7 +204,8 @@ async function line(prompt: string): Promise<string> {
 
 async function newPassphrase(): Promise<string> {
   if (process.env.CPART_PASSPHRASE !== undefined) return process.env.CPART_PASSPHRASE;
-  const a = await secret("Choose a passphrase (8 characters or more). You will type it to approve contracts: ");
+  process.stderr.write("Choose a passphrase. You type it to approve a contract, release or drop a held message, share files with a contact, turn the guard off and renew this device.\n");
+  const a = await secret("Passphrase (8 characters or more): ");
   if (a.length < 8) throw new Error("passphrase must be at least 8 characters");
   if ((await secret("Again: ")) !== a) throw new Error("the two passphrases differ");
   return a;
@@ -267,6 +277,7 @@ function describeEvidence(v: EvidenceView, contact: string): string {
 }
 
 const note = (s: string): void => (flags.json ? console.error(s) : console.log(s));
+const agentsReady = (): boolean => agents(home).some((h) => h.registered === "here");
 
 // Which argument of this command names a thread, if any.
 function threadArg(): number | undefined {
@@ -301,10 +312,10 @@ async function ensureDaemon(): Promise<boolean> {
 
 // Everything between a fresh machine and an agent that can talk. Each step
 // is skipped when already done, so running it again is harmless.
-function portFree(port: number, host: string): Promise<void> {
+function portFree(port: number, host: string, busy = "Nothing was made public. Pick another with --port"): Promise<void> {
   return new Promise((ok, no) => {
     const s = createServer();
-    s.once("error", (e: NodeJS.ErrnoException) => no(new Error(e.code === "EADDRINUSE" ? `port ${port} is already in use. Nothing was made public. Pick another with --port` : e.message)));
+    s.once("error", (e: NodeJS.ErrnoException) => no(new Error(e.code === "EADDRINUSE" ? `port ${port} is already in use. ${busy}` : e.message)));
     s.listen(port, host, () => s.close(() => ok()));
   });
 }
@@ -323,7 +334,10 @@ async function relayHealthUrl(relay: string, fromInvite: boolean): Promise<strin
     const host = u.hostname.replace(/^\[|\]$/g, "");
     const found = await lookup(host, { all: true }).then((l) => l.map((x) => x.address), () => [] as string[]);
     if ([host, ...found].some((h) => PRIVATE.test(h) || h.endsWith(".local")) && !flags.yes && !localRelayOk) {
-      const typed = await line(`This invite names a relay on your own machine or network: ${safe(relay)}\nSomeone outside your network would not send that. Type yes to use it: `);
+      const typed = await line(
+        `This invite names a relay on your own machine or network: ${safe(relay)}\nSomeone outside your network would not send that. Type yes to use it: `,
+        `this needs a terminal: the code or invite names a relay on your own machine or network (${safe(relay)}), and join asks you to confirm such a relay before using it. Nothing was created.\nIf you expect it (your own relay, or a container on the relay's machine), run the same command again with --yes.`,
+      );
       if (typed !== "yes") throw new Error("nothing was created.");
       localRelayOk = true;
     }
@@ -398,7 +412,7 @@ async function setup(relay: string | undefined, fromInvite = false): Promise<Cou
     if (relay && !node.relayBook.find(relay)) throw new Error(`your identity in ${home} does not use the relay ${safe(relay)}. To use it as well: cpart relay add ${safe(relay)}`);
     note(`ok  identity ${node.me.human}`);
   } else {
-    if (!relay) throw new Error("there is no identity here yet, and making one needs a relay.\n  cpart setup --relay <wss://host>     if you have a relay\n  cpart join <invite> <name>           if someone sent you an invite\n  cpart relay --tunnel                 to run a relay yourself and try it");
+    if (!relay) throw new Error("there is no identity here yet, and making one needs a relay.\n  cpart setup --relay <wss://host>     if you have a relay\n  cpart join <code> <name>             if someone sent you a code\n  cpart relay --boot                   to run a relay on this machine\n  cpart relay --tunnel                 to run one with a public address and try it");
     let health = await relayHealthUrl(relay, fromInvite);
     // From inside a container, the machine it runs on has another name. See relays.ts.
     const reach = await reachable(relay);
@@ -420,7 +434,7 @@ async function setup(relay: string | undefined, fromInvite = false): Promise<Cou
     const passphrase = flags["no-passphrase"] ? undefined : await newPassphrase();
     made = existsSync(home) ? new Set(readdirSync(home)) : null;
     node = await Counterpart.init(home, { relay, ...(reach.as ? { relayAs: reach.as } : {}), ...(passphrase !== undefined ? { passphrase } : {}) });
-    note(`ok  identity ${node.me.human} created in ${home}${passphrase === undefined ? " (no passphrase: it can talk but cannot approve contracts)" : ""}`);
+    note(`ok  identity ${node.me.human} created in ${home}${passphrase === undefined ? " (no passphrase: it can talk, but cannot approve contracts, release held messages or turn the guard off)" : ""}`);
   }
   const d = await up(home, { boot: !flags["no-boot"] });
   if (!d.state) throw new Error(`the daemon did not start. See ${logFile(home)}`);
@@ -456,7 +470,15 @@ async function setup(relay: string | undefined, fromInvite = false): Promise<Cou
   return node;
 }
 
-function status(node: Counterpart): void {
+// Relays this machine runs as a service, for cpart status.
+async function relayServiceLines(): Promise<{ lines: string[]; data: (RelayService & { answering: boolean })[] }> {
+  const data = await Promise.all(relayServices().map(async (s) => ({ ...s, answering: await answering(s) })));
+  const lines = data.map((s) => `Service   relay on port ${s.port} starts at login (${s.kind}), ${s.answering ? "answering" : `NOT answering. See ${s.log} and ${relayServiceHint(s)}`}`);
+  return { lines, data };
+}
+
+async function status(node: Counterpart): Promise<void> {
+  const svc = await relayServiceLines();
   const d = running(home);
   const days = Math.floor((node.credentialExpiresAt - Date.now()) / 86_400_000);
   const hosts = agents(home);
@@ -489,8 +511,9 @@ function status(node: Counterpart): void {
     ...pairing.waiting,
   ];
   const lines = [
-    `You       ${node.me.human}  (key ${node.me.rootKey.slice(0, 12)})${node.protected ? "" : "  no passphrase: cannot approve contracts"}`,
+    `You       ${node.me.human}  (key ${node.me.rootKey.slice(0, 12)})${node.protected ? "" : "  no passphrase: cannot approve contracts, release held messages or turn the guard off"}`,
     `Relay     ${safe(node.relay)}${node.relayBook.mine().length > 1 ? ` and ${node.relayBook.mine().length - 1} more (cpart relay list)` : ""}`,
+    ...svc.lines,
     `Daemon    ${d ? `running, ${d.connected ? "connected" : "NOT connected to the relay"}${bootInstalled(home) ? ", starts at login" : ""}` : "NOT running. Nothing is sent or received. Start it: cpart up"}`,
     `Agents    ${hosts.filter((h) => h.found).map((h) => `${h.name}: ${h.registered === "here" ? "has the tools" : h.registered === "elsewhere" ? "has the tools for ANOTHER identity" : "not added (cpart setup adds it)"}`).join("; ") || "neither claude nor codex found on PATH"}`,
     `Contacts  ${contacts.length ? contacts.map((c) => `${c.name}${c.state === "pending" ? " (pending)" : ""}${desks.get(c.name) ? " (front desk on)" : ""}`).join(", ") : "none yet. Pair with: cpart invite <name>"}`,
@@ -500,28 +523,60 @@ function status(node: Counterpart): void {
     waiting.length ? `Waiting for you:\n${waiting.join("\n")}` : "Nothing is waiting for you.",
     ...(pairing.news.length ? ["", `Lately:\n${pairing.news.join("\n")}`] : []),
   ];
-  out(lines.join("\n"), { me: node.me, unanswered: unanswered.map((u) => ({ threadId: u.thread, contact: u.contact, opened: u.opened, messages: u.messages, lastAt: u.lastAt })), daemon: d ?? null, boot: bootInstalled(home) ?? null, agents: hosts, contacts: contacts.map((c) => ({ name: c.name, state: c.state })), threads: threads.length, held: guard.held, unguarded: guard.unguarded, toSign: toSign.map(({ thread, c }) => ({ threadId: thread.id, proposalId: c.proposalId, title: c.contract.title })), asks: asks.length, deskFailing: health ? { short: health.short, since: health.since } : null });
+  out(lines.join("\n"), { me: node.me, unanswered: unanswered.map((u) => ({ threadId: u.thread, contact: u.contact, opened: u.opened, messages: u.messages, lastAt: u.lastAt })), daemon: d ?? null, boot: bootInstalled(home) ?? null, relayServices: svc.data, agents: hosts, contacts: contacts.map((c) => ({ name: c.name, state: c.state })), threads: threads.length, held: guard.held, unguarded: guard.unguarded, toSign: toSign.map(({ thread, c }) => ({ threadId: thread.id, proposalId: c.proposalId, title: c.contract.title })), asks: asks.length, deskFailing: health ? { short: health.short, since: health.since } : null });
 }
 
 async function main(): Promise<void> {
+  const helpFor = cmd === "help" ? args[0] : flags.help ? cmd : undefined;
+  if (helpFor) return console.log(commandHelp(helpFor, USAGE) ?? `No command "${safe(helpFor)}".\n\n${USAGE}`);
   if (!cmd || flags.help || cmd === "help") return console.log(USAGE);
 
   if (cmd === "relay" && !RELAY_SUBCOMMANDS.includes(args[0] ?? "")) {
-    const port = Number(flags.port ?? process.env.PORT ?? 7447);
+    const portText = flags.port ?? process.env.PORT;
+    const port = Number(portText ?? DEFAULT_PORT);
+    if (!/^[0-9]{1,5}$/.test(String(portText ?? DEFAULT_PORT)) || port < 1 || port > 65535) throw new Error(`--port takes a number from 1 to 65535, like ${DEFAULT_PORT}`);
     const host = flags.host ?? "127.0.0.1";
+    const given = flags.url?.length ? flags.url : splitUrls(process.env.CPART_RELAY_URL);
+    if (flags["no-boot"]) {
+      const gone = unbootRelay(flags.port !== undefined ? port : undefined);
+      return out(gone.length ? gone.map((s) => `Stopped the relay service on port ${s.port}. It no longer starts at login. Its database stays in ${s.db}`).join("\n") : "No relay service is installed here.", { removed: gone });
+    }
+    if (flags.boot) {
+      if (flags.tunnel) throw new Error("--tunnel and --boot do not go together: a tunnel's address changes every start, so contacts would lose it. Run cpart relay --tunnel in a terminal, or --boot without it");
+      const r = await bootRelay({ port, host, db: flags.db, urls: given, portFree: (p, h) => portFree(p, h, "If a relay runs there in a terminal, stop it first. Or pick another port with --port") });
+      const container = r.names.find((n) => n.includes("host.docker.internal"));
+      return out(
+        [
+          `Relay ${r.replaced ? "service replaced" : "running"} at ${r.names[0]}. It starts at login and restarts if it stops.`,
+          ...(container ? [`A container on this machine reaches it at ${container}.`] : []),
+          `Database: ${r.service.db}`,
+          `Log:      ${r.service.log}`,
+          "",
+          `Next:  cpart setup --relay ${r.names[0]}`,
+          "Stop it and remove it with: cpart relay --no-boot",
+        ].join("\n"),
+        { ...r.service, names: r.names, replaced: r.replaced },
+      );
+    }
     // A tunnel to a port something else holds would publish that something.
     if (flags.tunnel) await portFree(port, host);
+    const dbPath = flags.db ?? defaultRelayDb(port);
+    if (!flags.db) {
+      const old = oldDbNotice(process.cwd(), dbPath);
+      if (old) console.error(old);
+    }
     const tunnel = flags.tunnel ? await openTunnel(port) : undefined;
-    const given = flags.url?.length ? flags.url : splitUrls(process.env.CPART_RELAY_URL);
     // Behind a tunnel it answers to the tunnel's address and to --url, never to
     // loopback names by default: those are shared by every machine, and the
     // public address would let a relay elsewhere log in with them. See connectivity.md.
     const urls = tunnel ? [tunnel.url, ...given] : given;
-    const relay = await startRelay({ port, host, dbPath: flags.db ?? "relay.db", urls, log: (l) => console.log(l) }).catch((e: Error) => {
+    const relay = await startRelay({ port, host, dbPath, urls, log: (l) => console.log(l) }).catch((e: Error) => {
       tunnel?.close();
-      throw e;
+      const svc = relayServices().find((s) => s.port === port);
+      throw svc ? new Error(`${e.message}\nA relay service runs on port ${port} already (cpart status). To run it here instead: cpart relay --no-boot --port ${port}`) : e;
     });
-    if (tunnel) console.log(`\nAnyone can reach this relay at ${tunnel.url} until it stops. The address will be different next time.\nYou:   cpart setup --relay ${tunnel.url}\nThem:  cpart join <the invite you send them> <your name>\n`);
+    console.log(`database ${dbPath}`);
+    if (tunnel) console.log(`\nAnyone can reach this relay at ${tunnel.url} until it stops. The address will be different next time.\nYou:   cpart setup --relay ${tunnel.url}\nThen:  cpart invite <their name>, and send them the line it prints\n`);
     const stop = (): void => {
       tunnel?.close();
       void relay.close().then(() => process.exit(0));
@@ -566,7 +621,7 @@ async function main(): Promise<void> {
   }
   if (cmd === "join") {
     need(2, "join <code or invite> <what you call them>");
-    if (looksLikeCode(args[0]!)) return joinByCode(home, args[0]!, args[1]!, { out, note, safe }, (relay) => setup(relay, true));
+    if (looksLikeCode(args[0]!)) return joinByCode(home, args[0]!, args[1]!, { out, note, safe, agents: agentsReady }, (relay) => setup(relay, true));
     const inv = decodeInvite(args[0]!);
     const node = await setup(inv.relay, true);
     const known = node.contacts().find((c) => c.rootKey === inv.credential.rootKey);
@@ -579,7 +634,7 @@ async function main(): Promise<void> {
     const c = node.contact(known?.name ?? args[1]!);
     note(
       c.state === "active"
-        ? `\nPaired with ${c.name}. Safety code ${c.safetyCode}: ask ${c.name} to read theirs to you. If the two differ, someone is in the middle.\n\nNow, in Claude Code or Codex, say something like:\n  ask ${c.name}'s agent what their API returns for an empty page`
+        ? `\nPaired with ${c.name}. Safety code ${c.safetyCode}: ask ${c.name} to read theirs to you. If the two differ, someone is in the middle.\n\n${nextStep(c.name, agentsReady())}`
         : `\nYour request is on its way to ${c.name}. It completes when their daemon is next online: check with cpart status. Safety code ${c.safetyCode}.`,
     );
     if (flags.json) console.log(JSON.stringify(c));
@@ -602,7 +657,8 @@ async function main(): Promise<void> {
     return out(was ? "Daemon stopped. It will not start at login." : "No daemon was running.", { stopped: was });
   }
   if (cmd === "status" && !existsSync(join(home, "keys.json"))) {
-    return out(`No identity in ${home} yet.\n  cpart setup --relay <wss://host>     if you have a relay\n  cpart join <invite> <name>           if someone sent you an invite`, { identity: false });
+    const svc = await relayServiceLines();
+    return out(`No identity in ${home} yet.\n  cpart setup --relay <wss://host>     if you have a relay\n  cpart join <code> <name>             if someone sent you a code${svc.lines.length ? `\n\n${svc.lines.join("\n")}` : ""}`, { identity: false, relayServices: svc.data });
   }
 
   // A held event's missing parents are asked for after 30 seconds. Tests shorten it.
@@ -619,7 +675,7 @@ async function main(): Promise<void> {
       return out(`Daemon ${r.started ? "started" : "already running"} (pid ${r.state.pid}), ${r.state.connected ? `connected to ${node.relay}` : `not connected to ${node.relay} yet`}.${r.boot ? " It starts at login." : " It stops when this machine restarts; cpart up --boot makes it start at login."}`, r);
     }
     case "status":
-      return status(node);
+      return await status(node);
     case "whoami": {
       const days = Math.floor((node.credentialExpiresAt - Date.now()) / 86_400_000);
       return out(
@@ -884,7 +940,7 @@ async function main(): Promise<void> {
       const d = await ensureDaemon();
       // Scripts read `invite` from --json, so that stays the long form unless they ask for --code.
       const short = flags.json ? !!flags.code : !flags.long;
-      if (short && (await inviteByCode(node, args[0]!, { out, note, safe }, { daemon: d, wait: !flags["no-wait"] && !flags.json }))) return;
+      if (short && (await inviteByCode(node, args[0]!, { out, note, safe, agents: agentsReady }, { daemon: d, wait: !flags["no-wait"] && !flags.json }))) return;
       if (short) note(d ? "The relay did not give out a short code, so here is a long invite instead." : "A short code needs the daemon running, so here is a long invite instead.");
       const invite = node.createInvite(args[0]!);
       return out(

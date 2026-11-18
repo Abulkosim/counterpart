@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Puts `cpart` on your PATH, running from this checkout.
-#   ./install.sh            then: cpart setup --relay <wss://host>, or cpart join <invite> <name>
+#   ./install.sh            then: cpart setup --relay <wss://host>, or cpart join <code> <name>
 set -euo pipefail
 cd "$(dirname "$0")"
 ROOT=$(pwd)
@@ -14,4 +14,4 @@ printf '#!/bin/sh\nexec node "%s/packages/cli/src/main.ts" "$@"\n' "$ROOT" >"$BI
 chmod +x "$BIN/cpart"
 echo "Installed $BIN/cpart"
 case ":$PATH:" in *":$BIN:"*) ;; *) echo "Add it to your PATH:  export PATH=\"$BIN:\$PATH\"" ;; esac
-echo "Next:  cpart setup --relay <wss://host>     or     cpart join <invite> <name>"
+echo "Next:  cpart setup --relay <wss://host>     or, with a code someone sent you:  cpart join <code> <what you call them>"

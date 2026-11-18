@@ -40,6 +40,9 @@ step "bob, with no identity: cpart join <code@relay> alice"
 cpart bob join "$FULL" alice --yes --no-passphrase --no-agents | tee "$WORK/bob.join"
 grep -q "^ok  identity .* created" "$WORK/bob.join"
 grep -q "^Paired with alice. The code proved who is on each side" "$WORK/bob.join"
+# --no-agents: no agent has the tools, so the hint is the terminal one.
+if grep -q "in Claude Code or Codex, say" "$WORK/bob.join"; then fail "join --no-agents pointed at Claude Code or Codex"; fi
+grep -q 'cpart open alice "<what it is about>"' "$WORK/bob.join" || fail "join --no-agents did not say how to talk from the terminal"
 wait_for "alice to see bob active" sh -c "CPART_HOME='$WORK/alice' node packages/cli/src/main.ts contacts | grep -q '^bob .*active'"
 cpart alice status | tee "$WORK/alice.status2"
 grep -q "paired with bob by code" "$WORK/alice.status2" || fail "alice's status does not say the pairing finished"

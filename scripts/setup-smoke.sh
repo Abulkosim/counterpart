@@ -26,7 +26,7 @@ EOF
 done
 export PATH="$WORK/bin:$PATH"
 cpart() { local who=$1; shift; CPART_HOME="$WORK/$who" node packages/cli/src/main.ts "$@"; }
-stop_all() { for w in alice bob dave erin shared frank; do cpart "$w" down >/dev/null 2>&1 || true; done; }
+stop_all() { for w in alice bob dave erin shared frank henry; do cpart "$w" down >/dev/null 2>&1 || true; done; }
 trap 'stop_all; cleanup' EXIT
 
 step "a relay"
@@ -144,6 +144,8 @@ JOIN=$(cpart alice invite bob --long | grep -o 'cpart-invite:[A-Za-z0-9_-]*')
 # An invite that names a relay on this machine needs a person to say yes.
 if cpart bob join "$JOIN" alice </dev/null >"$WORK/bob.refused" 2>&1; then fail "join used a local relay without asking"; fi
 [ ! -e "$WORK/bob/keys.json" ] || fail "an identity was created before the person agreed"
+grep -q "this needs a terminal: the code or invite names a relay on your own machine or network" "$WORK/bob.refused" || fail "join did not say why it needs a terminal: $(cat "$WORK/bob.refused")"
+grep -q "run the same command again with --yes" "$WORK/bob.refused" || fail "join did not name the flag that goes on"
 cpart bob join "$JOIN" alice --yes | tee "$WORK/bob.join"
 grep -q "Claude Code already has a server named counterpart for another identity" "$WORK/bob.join" || fail "bob was not told the agent tools belong to alice's identity"
 grep -q "^ok  identity .* created" "$WORK/bob.join"
@@ -181,6 +183,22 @@ wait_for "alice to receive bob's message" sh -c "CPART_HOME='$WORK/alice' node p
 cpart alice say bob "hello back" >/dev/null
 wait_for "bob to receive the reply" sh -c "CPART_HOME='$WORK/bob' node packages/cli/src/main.ts log alice | grep -q 'hello back'"
 cpart bob log alice
+
+step "alice invites henry with a code and waits; henry joins with --no-agents"
+cpart alice invite henry >"$WORK/alice.invite" 2>&1 &
+INVITE_PID=$!
+pids+=("$INVITE_PID")
+wait_for "alice's code" grep -q "cpart join .* <your name>" "$WORK/alice.invite"
+CODE=$(grep -o "cpart join [^ ]*" "$WORK/alice.invite" | head -1 | cut -d' ' -f3)
+cpart henry join "$CODE" alice --yes --no-agents --no-passphrase | tee "$WORK/henry.join"
+wait "$INVITE_PID"
+cat "$WORK/alice.invite"
+grep -q "^Paired with henry" "$WORK/alice.invite"
+grep -q "in Claude Code or Codex, say something like" "$WORK/alice.invite" || fail "alice has the agent tools but was not told to use them"
+grep -q "^Paired with alice" "$WORK/henry.join"
+if grep -q "in Claude Code or Codex, say" "$WORK/henry.join"; then fail "join --no-agents pointed at Claude Code or Codex"; fi
+grep -q 'cpart open alice "<what it is about>"' "$WORK/henry.join" || fail "join --no-agents did not say how to talk from the terminal"
+cpart henry down >/dev/null
 
 step "status on both sides"
 cpart alice status | tee "$WORK/alice.status"

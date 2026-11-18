@@ -6,11 +6,13 @@ Now an identity can use several relays, contacts are told when that changes, and
 
 ## A Mac and a dev container on the same Mac
 
-No tunnel and no internet. One relay on the Mac:
+No tunnel and no internet. One relay on the Mac, run as a service so it comes back after a restart ([relay.md](relay.md#on-your-own-machine)):
 
 ```sh
-cpart relay --port 7447
+cpart relay --boot
 ```
+
+`cpart relay --port 7447` does the same in a terminal, until you stop it.
 
 With no `--url`, a relay that listens on this machine answers to `ws://127.0.0.1:7447`, `ws://localhost:7447`, `ws://[::1]:7447` and `ws://host.docker.internal:7447`. The last is the name a container uses for the machine it runs on.
 
@@ -21,13 +23,13 @@ cpart setup --relay ws://127.0.0.1:7447
 cpart invite container
 ```
 
-The project in the container, with the invite:
+The project in the container, with the line `cpart invite` printed:
 
 ```sh
-cpart join cpart-invite:... mac --yes
+cpart join 7-cider-otter@ws://127.0.0.1:7447 mac --yes
 ```
 
-The invite names `ws://127.0.0.1:7447`. Inside a container that is the container itself, so `join` sees nothing answers there, tries `ws://host.docker.internal:7447`, and uses that. It remembers that the Mac calls the same relay `ws://127.0.0.1:7447`, so each side knows the other is on the same relay. `--yes` accepts a relay on your own machine; without it, `join` asks.
+The code names `ws://127.0.0.1:7447`. Inside a container that is the container itself, so `join` sees nothing answers there, tries `ws://host.docker.internal:7447`, and uses that. It remembers that the Mac calls the same relay `ws://127.0.0.1:7447`, so each side knows the other is on the same relay. `--yes` accepts a relay on your own machine; without it, `join` asks, and without a terminal it stops and says to add `--yes`.
 
 What was run: this flow on Linux, in `scripts/connectivity-smoke.sh`, with the invite naming `ws://127.0.0.1:PORT` and Bob in a `node:24-slim` container where `host.docker.internal` points at the relay. On that machine a firewall drops traffic from containers to the host, so the relay itself runs in a container with its port published on the host's loopback; each side dials the same names as on a Mac. **Nothing here was run on a Mac.** Docker's documentation says `host.docker.internal` reaches the host from a container on Docker Desktop. Whether it reaches a relay that listens only on 127.0.0.1 there has not been checked. If it does not, start the relay with `--host 0.0.0.0`, which also makes it reachable from your network.
 

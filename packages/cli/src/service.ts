@@ -2,7 +2,7 @@
 // where the MCP server is. Nothing here touches keys or messages.
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -93,10 +93,24 @@ async function waitFor<T>(ms: number, f: () => T | undefined): Promise<T | undef
 
 // ---- starting at login
 
+// One program the system starts at login and restarts if it stops: the daemon
+// for one home, or a relay. `meta` is one line kept in the file as a comment,
+// so a later run can tell what it is without guessing from the command line.
+export interface ServiceSpec {
+  name: string;
+  description: string;
+  args: string[];
+  env: Record<string, string>;
+  log: string;
+  meta?: string;
+}
+
+const UNIT_DIR = (): string => join(homedir(), ".config/systemd/user");
+const PLIST_DIR = (): string => join(homedir(), "Library/LaunchAgents");
+const unitPath = (name: string): string => join(UNIT_DIR(), `${name}.service`);
+const plistLabel = (name: string): string => `dev.counterpart.${name}`;
+const plistPath = (name: string): string => join(PLIST_DIR(), `${plistLabel(name)}.plist`);
 const unitName = (home: string): string => (resolve(home) === DEFAULT_HOME ? "cpart" : `cpart-${createHash("sha256").update(resolve(home)).digest("hex").slice(0, 8)}`);
-const systemdUnit = (home: string): string => join(homedir(), ".config/systemd/user", `${unitName(home)}.service`);
-const launchdLabel = (home: string): string => `dev.counterpart.${unitName(home)}`;
-const launchdPlist = (home: string): string => join(homedir(), "Library/LaunchAgents", `${launchdLabel(home)}.plist`);
 const run = (cmd: string, args: string[]): boolean => spawnSync(cmd, args, { stdio: "ignore" }).status === 0;
 
 export type Boot = "systemd" | "launchd";
@@ -108,79 +122,139 @@ export function bootKind(): Boot | undefined {
   return undefined;
 }
 
-export function bootInstalled(home: string): Boot | undefined {
-  if (existsSync(systemdUnit(home))) return "systemd";
-  if (existsSync(launchdPlist(home))) return "launchd";
+export function serviceInstalled(name: string): Boot | undefined {
+  if (existsSync(unitPath(name))) return "systemd";
+  if (existsSync(plistPath(name))) return "launchd";
   return undefined;
+}
+
+export const bootInstalled = (home: string): Boot | undefined => serviceInstalled(unitName(home));
+
+// How to see why a service is not running, for messages.
+export const serviceHint = (kind: Boot, name: string): string => (kind === "systemd" ? `systemctl --user status ${name}` : `launchctl list ${plistLabel(name)}`);
+
+// systemd splits on spaces and expands % everywhere in a unit file, and $ in ExecStart.
+const quote = (s: string): string => `"${s.replace(/["\\]/g, "\\$&").replace(/%/g, "%%")}"`;
+const xml = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+
+export function unitText(s: ServiceSpec): string {
+  return [
+    ...(s.meta ? [`# ${s.meta}`] : []),
+    "[Unit]",
+    `Description=${s.description.replace(/%/g, "%%")}`,
+    "After=network-online.target",
+    "",
+    "[Service]",
+    `ExecStart=${[process.execPath, ...s.args].map((a) => quote(a).replace(/\$/g, "$$$$")).join(" ")}`,
+    ...Object.entries(s.env).map(([k, v]) => `Environment=${quote(`${k}=${v}`)}`),
+    "Restart=always",
+    "RestartSec=5",
+    `StandardOutput=append:${resolve(s.log).replace(/%/g, "%%")}`,
+    `StandardError=append:${resolve(s.log).replace(/%/g, "%%")}`,
+    "",
+    "[Install]",
+    "WantedBy=default.target",
+    "",
+  ].join("\n");
+}
+
+export function plistText(s: ServiceSpec): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+${s.meta ? `<!-- ${s.meta.replace(/--+/g, "-")} -->\n` : ""}<plist version="1.0"><dict>
+  <key>Label</key><string>${plistLabel(s.name)}</string>
+  <key>ProgramArguments</key><array>${[process.execPath, ...s.args].map((a) => `<string>${xml(a)}</string>`).join("")}</array>
+  <key>EnvironmentVariables</key><dict>${Object.entries(s.env).map(([k, v]) => `<key>${k}</key><string>${xml(v)}</string>`).join("")}</dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>${xml(resolve(s.log))}</string>
+  <key>StandardErrorPath</key><string>${xml(resolve(s.log))}</string>
+</dict></plist>
+`;
+}
+
+// A line break in any value would end its line in the unit file and start
+// another, which could add a command. Checked before anything is written.
+export function checkServiceSpec(s: ServiceSpec): void {
+  const values = [s.name, s.description, s.log, s.meta ?? "", process.execPath, ...s.args, ...Object.keys(s.env), ...Object.values(s.env)];
+  if (values.some((v) => /[\x00-\x1f\x7f]/.test(v))) throw new Error(`a path or setting for the ${s.description.toLowerCase()} holds a line break or other control character, so it cannot be written as a service. Nothing was installed.`);
+}
+
+// Writes the file and starts it. Throws if the system would not start it.
+export function installService(kind: Boot, s: ServiceSpec): void {
+  checkServiceSpec(s);
+  if (kind === "systemd") {
+    mkdirSync(UNIT_DIR(), { recursive: true });
+    writeFileSync(unitPath(s.name), unitText(s));
+    run("systemctl", ["--user", "daemon-reload"]);
+    if (!run("systemctl", ["--user", "enable", "--now", s.name])) throw new Error(`systemd would not start ${s.name}. See: ${serviceHint(kind, s.name)}`);
+    return;
+  }
+  mkdirSync(PLIST_DIR(), { recursive: true });
+  writeFileSync(plistPath(s.name), plistText(s));
+  if (!run("launchctl", ["load", "-w", plistPath(s.name)])) throw new Error(`launchd would not load ${plistPath(s.name)}`);
+}
+
+// Stops it and deletes the file. True if there was one.
+export function removeService(name: string): boolean {
+  let was = false;
+  if (existsSync(unitPath(name))) {
+    run("systemctl", ["--user", "disable", "--now", name]);
+    rmSync(unitPath(name));
+    run("systemctl", ["--user", "daemon-reload"]);
+    was = true;
+  }
+  if (existsSync(plistPath(name))) {
+    run("launchctl", ["unload", "-w", plistPath(name)]);
+    rmSync(plistPath(name));
+    was = true;
+  }
+  return was;
+}
+
+export const startService = (kind: Boot, name: string): boolean => (kind === "systemd" ? run("systemctl", ["--user", "start", name]) : run("launchctl", ["load", "-w", plistPath(name)]));
+
+// Every installed service whose name starts with prefix, with its meta line.
+export function listServices(prefix: string): { name: string; kind: Boot; meta: string | undefined }[] {
+  const found: { name: string; kind: Boot; meta: string | undefined }[] = [];
+  const scan = (dir: string, kind: Boot, nameOf: (f: string) => string | undefined, metaOf: (text: string) => string | undefined): void => {
+    let files: string[] = [];
+    try {
+      files = readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const f of files) {
+      const name = nameOf(f);
+      if (!name?.startsWith(prefix)) continue;
+      let text = "";
+      try {
+        text = readFileSync(join(dir, f), "utf8");
+      } catch {
+        continue;
+      }
+      found.push({ name, kind, meta: metaOf(text) });
+    }
+  };
+  scan(UNIT_DIR(), "systemd", (f) => (f.endsWith(".service") ? f.slice(0, -".service".length) : undefined), (t) => /^# (.*)$/m.exec(t)?.[1]);
+  scan(PLIST_DIR(), "launchd", (f) => (f.startsWith("dev.counterpart.") && f.endsWith(".plist") ? f.slice("dev.counterpart.".length, -".plist".length) : undefined), (t) => /<!-- (.*) -->/.exec(t)?.[1]);
+  return found;
 }
 
 // The daemon starts the `claude` CLI for the front desk, so it needs the PATH
 // this shell has, and the CLAUDE_CONFIG_DIR if one is set, or claude would
 // look for its login somewhere else. A login service would otherwise get a
 // bare environment.
-// systemd splits on spaces and expands % everywhere in a unit file.
-const quote = (s: string): string => `"${s.replace(/["\\]/g, "\\$&").replace(/%/g, "%%")}"`;
+const daemonService = (home: string): ServiceSpec => ({
+  name: unitName(home),
+  description: "Counterpart daemon",
+  args: [MAIN, "daemon"],
+  env: { CPART_HOME: resolve(home), PATH: process.env.PATH ?? "", ...(process.env.CLAUDE_CONFIG_DIR ? { CLAUDE_CONFIG_DIR: resolve(process.env.CLAUDE_CONFIG_DIR) } : {}) },
+  log: logFile(home),
+});
 
-function installBoot(home: string, kind: Boot): void {
-  const env: Record<string, string> = { CPART_HOME: resolve(home), PATH: process.env.PATH ?? "" };
-  if (process.env.CLAUDE_CONFIG_DIR) env.CLAUDE_CONFIG_DIR = resolve(process.env.CLAUDE_CONFIG_DIR);
-  if (kind === "systemd") {
-    mkdirSync(dirname(systemdUnit(home)), { recursive: true });
-    writeFileSync(
-      systemdUnit(home),
-      [
-        "[Unit]",
-        "Description=Counterpart daemon",
-        "After=network-online.target",
-        "",
-        "[Service]",
-        `ExecStart=${[process.execPath, MAIN, "daemon"].map((a) => quote(a).replace(/\$/g, "$$$$")).join(" ")}`,
-        ...Object.entries(env).map(([k, v]) => `Environment=${quote(`${k}=${v}`)}`),
-        "Restart=always",
-        "RestartSec=5",
-        `StandardOutput=append:${resolve(logFile(home)).replace(/%/g, "%%")}`,
-        `StandardError=append:${resolve(logFile(home)).replace(/%/g, "%%")}`,
-        "",
-        "[Install]",
-        "WantedBy=default.target",
-        "",
-      ].join("\n"),
-    );
-    run("systemctl", ["--user", "daemon-reload"]);
-    if (!run("systemctl", ["--user", "enable", "--now", unitName(home)])) throw new Error(`systemd would not start ${unitName(home)}. See: systemctl --user status ${unitName(home)}`);
-    return;
-  }
-  const xml = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
-  mkdirSync(dirname(launchdPlist(home)), { recursive: true });
-  writeFileSync(
-    launchdPlist(home),
-    `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>Label</key><string>${launchdLabel(home)}</string>
-  <key>ProgramArguments</key><array><string>${xml(process.execPath)}</string><string>${xml(MAIN)}</string><string>daemon</string></array>
-  <key>EnvironmentVariables</key><dict>${Object.entries(env).map(([k, v]) => `<key>${k}</key><string>${xml(v)}</string>`).join("")}</dict>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>${xml(resolve(logFile(home)))}</string>
-  <key>StandardErrorPath</key><string>${xml(resolve(logFile(home)))}</string>
-</dict></plist>
-`,
-  );
-  if (!run("launchctl", ["load", "-w", launchdPlist(home)])) throw new Error(`launchd would not load ${launchdPlist(home)}`);
-}
-
-function removeBoot(home: string): void {
-  if (existsSync(systemdUnit(home))) {
-    run("systemctl", ["--user", "disable", "--now", unitName(home)]);
-    rmSync(systemdUnit(home));
-    run("systemctl", ["--user", "daemon-reload"]);
-  }
-  if (existsSync(launchdPlist(home))) {
-    run("launchctl", ["unload", "-w", launchdPlist(home)]);
-    rmSync(launchdPlist(home));
-  }
-}
+const installBoot = (home: string, kind: Boot): void => installService(kind, daemonService(home));
+const removeBoot = (home: string): void => void removeService(unitName(home));
 
 // ---- up and down
 
@@ -207,8 +281,7 @@ export async function up(home: string, opts: { boot?: boolean } = {}): Promise<U
     }
   }
   if (!installed && !running(home)) {
-    if (boot === "systemd") run("systemctl", ["--user", "start", unitName(home)]);
-    else if (boot === "launchd") run("launchctl", ["load", "-w", launchdPlist(home)]);
+    if (boot) startService(boot, unitName(home));
     else {
       const log = openSync(logFile(home), "a", 0o600);
       spawn(process.execPath, [MAIN, "daemon"], { detached: true, stdio: ["ignore", log, log], env: { ...process.env, CPART_HOME: resolve(home) } }).unref();
