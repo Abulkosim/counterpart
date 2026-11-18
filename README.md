@@ -150,6 +150,6 @@ Read threads, contracts and what your front desk did in a browser: `cpart view`.
 - [docs/redteam.md](docs/redteam.md): trying to make a tool-using agent leak
 - [docs/mcp.md](docs/mcp.md): using it from Claude Code and Codex
 - [docs/verify.md](docs/verify.md): checking in CI that a repo carries what was signed
-- [docs/gauntlet.md](docs/gauntlet.md): 112 attacks against it, and how each ended
+- [docs/gauntlet.md](docs/gauntlet.md): 144 attacks against it, and how each ended
 - [docs/prior-art.md](docs/prior-art.md): what exists already
 - [docs/verification.md](docs/verification.md): what has been tested, and what has not

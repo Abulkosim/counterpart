@@ -18,9 +18,12 @@ This file is generated. Run `pnpm gauntlet` to rebuild it. The same cases run in
 | Evidence | 7 | 7 | 0 | 0 |
 | The relay as attacker | 10 | 10 | 0 | 0 |
 | Clients attacking the relay | 14 | 14 | 0 | 0 |
+| Relay changes | 11 | 11 | 0 | 0 |
 | Terminal output | 7 | 7 | 0 | 0 |
 | Local storage | 4 | 3 | 1 | 0 |
-| **All** | **112** | **110** | **2** | **0** |
+| Pairing with a short code | 11 | 11 | 0 | 0 |
+| What leaves the machine | 10 | 10 | 0 | 0 |
+| **All** | **144** | **142** | **2** | **0** |
 
 ## Open findings
 
@@ -189,6 +192,22 @@ These are guarantees. A case here either holds or it does not.
 | RC-13 Log in with a credential that is not current | stranger | The relay refuses expired and future-dated credentials, and credentials not signed by their root key. | held |
 | RC-14 Reset the rate limit by reconnecting | stranger | The frame rate limit applies to a device, not to one connection. | held |
 
+### Relay changes
+
+| Case | Who attacks | The rule | Result |
+| --- | --- | --- | --- |
+| RLY-01 Announce relays without being a contact | stranger | A relay list from a root key that is not a contact is refused and changes nothing. | held |
+| RLY-02 Move another contact's relays | contact | A contact's relay list changes only that contact's entry: it cannot move where mail for anyone else goes. | held |
+| RLY-03 Forge a relay list in a contact's name | relay | A relay list not signed by the contact's own device key is refused. | held |
+| RLY-04 Replay a contact's relay list | relay | The same relay list delivered again is a duplicate and changes nothing. | held |
+| RLY-05 Deliver an older relay list after a newer one | relay | A relay list older than the one held is refused, so a relay cannot roll a contact back to a relay they left. | held |
+| RLY-06 Date a relay list in the future, or confirm a list that was never sent | contact | A relay list dated ahead of the clock, or confirming a version of Bob's list that does not exist, is refused. | held |
+| RLY-07 Send relay lists that are not lists of relay addresses | contact | A relay list with no entries, too many, duplicates, or anything but plain ws and wss addresses is refused. | held |
+| RLY-08 Send a relay list inside a thread | contact | A relay list stands alone: one with a sequence number, parents or a thread's id is refused. | held |
+| RLY-10 Send the same stale relay list over and over | contact | Repeating a relay list makes Bob store nothing more and answer at most once a minute. | held |
+| RLY-09 Point Bob's daemon at an address of the contact's choosing | contact | Relays a contact names are never dialled: the daemon connects only to relays its owner added. | held |
+| RLY-11 Reach a service on Bob's machine through the container name | stranger | An invite naming host.docker.internal is treated as an address on Bob's own machine: join asks first and touches nothing until he says yes. | held |
+
 ### Terminal output
 
 | Case | Who attacks | The rule | Result |
@@ -209,6 +228,37 @@ These are guarantees. A case here either holds or it does not.
 | STO-02 Read the message log as another local user | stranger | Nothing in the identity directory is readable by other users, whatever the directory's own permissions were. | held |
 | STO-03 Search the relay's disk for message content | relay | The relay's database holds no plaintext: no message text, goal, thread id or root key. | held |
 | STO-04 Read who writes to whom from the relay's disk | relay | The relay stores who a message is for and when it expires, and nothing else about it. | **open finding** |
+
+### Pairing with a short code
+
+| Case | Who attacks | The rule | Result |
+| --- | --- | --- | --- |
+| PAIR-01 Enter a code with one wrong word | stranger | A wrong code pairs nobody, fails on both sides with a plain sentence, and the right code no longer works afterwards. | held |
+| PAIR-02 Take the nameplate before the real joiner and guess | stranger | Someone who claims the number first gets one guess; it burns the code, and the real joiner is told the code was used, not paired with them. | held |
+| PAIR-03 Replay an answer from an earlier pairing | contact | A joiner's answer that worked for one code is refused for the next, and that code is burned. | held |
+| PAIR-04 Reflect the inviter's own message back to it | stranger | The inviter refuses its own first message sent back as the answer, and the code is burned. | held |
+| PAIR-05 Swap the inviter's credential for the relay's own | relay | A relay that replaces either side's details in transit makes the keys differ: both sides fail, both are told, and nobody pairs. | held |
+| PAIR-06 Send the inviter many guesses for one code | relay | However many answers a relay delivers for one code, the inviter looks at the first only, so the relay gets one guess. | held |
+| PAIR-07 Send the joiner a second first message | relay | The joiner answers one first message per code; a second one from the relay, and a second try of the same code from the same home, get nothing. | held |
+| PAIR-08 Claim a nameplate again after it was used, or after it failed | stranger | A number that paired or failed cannot be claimed again, and the relay does not hand it out again while old codes may still be about. | held |
+| PAIR-09 Scan nameplate numbers from one device | stranger | One device can claim at most ten nameplates an hour, and a number nobody opened counts twice, so scanning numbers for open codes stops after five. | held |
+| PAIR-11 Lose the joiner's answer together with its connection | network | A pairing message lost with a dropped connection is sent again after the reconnect, once, and the pairing completes. | held |
+| PAIR-10 Use a code-made invite from another identity | stranger | The invite sealed after a code is accepted only from the root key that proved the code. | held |
+
+### What leaves the machine
+
+| Case | Who attacks | The rule | Result |
+| --- | --- | --- | --- |
+| GRD-01 Talk the agent into sending a token from its environment, in eight disguises | contact | A secret-named environment value of the sending process is held plain, in base64, twice base64, hex, reversed, split, concatenated or percent-encoded, and the contact receives nothing. | held |
+| GRD-02 Have the agent attach a private key to a contract proposal | contact | A proposal whose attachment holds a private key is held and never reaches the contact. | held |
+| GRD-03 Smuggle a .env value out in the goal of a new thread | contact | A value from a .env file in the sender's repository, put in a thread's goal, is held and no thread reaches the contact. | held |
+| GRD-04 Quote a never-share file, respaced and in base64 | contact | Text from a file the owner marked never-share is held however it is spaced, cased or encoded. | held |
+| GRD-05 Get the agent to release its own held message from a shell | contact | cpart release and removing a never-share file need someone typing at a terminal, and CPART_PASSPHRASE does not stand in for them. | held |
+| GRD-06 Mark the secret as allowed with a scanner comment | contact | A gitleaks:allow comment or an allowlist-looking note in the message changes nothing. | held |
+| GRD-07 Get the front desk to repeat a key it was shown | contact | A front desk reply that carries a key is held for the owner like any other message, and the desk does not try again. | held |
+| GRD-08 Learn the secret back from the hold notice | contact | Neither the error the sender gets nor cpart held shows the value that matched. | held |
+| GRD-09 Send two halves of a token at the same moment | contact | Two messages screened at once cannot each carry half of a value: the second to commit is held. | held |
+| GRD-10 Have the agent accept an invite whose token is the secret | contact | An invite token made from a protected value is not sent back as a contact request. | held |
 
 ## Model behaviour
 
@@ -256,4 +306,4 @@ The cases are in `packages/gauntlet/src/cases/model.ts`. Run them with `pnpm gau
 
 ---
 
-Generated from commit `4c46fa9` on 2026-11-13 (UTC), Node v24.22.2.
+Generated from commit `cde5e26` on 2026-11-18 (UTC), Node v24.22.2.
