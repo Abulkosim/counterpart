@@ -1,0 +1,29 @@
+{
+  "name": "08-spare-relay",
+  "title": "Both devices add a second relay; the home relay is killed for good while the front desk is answering, and the conversation goes on over the other",
+  "asker": "devcontainer",
+  "needs": ["container"],
+  "steps": [
+    { "do": "desk", "device": "laptop", "files": ["README.md", "server.js"], "as": "Sam" },
+    { "do": "cpart", "device": "devcontainer", "args": ["relay", "add", "{{spare}}"], "human": true, "why": "a second relay, so one going down does not stop the conversation", "record": true },
+    { "do": "cpart", "device": "laptop", "args": ["relay", "add", "{{spare}}"], "human": true, "why": "a second relay, so one going down does not stop the conversation", "record": true },
+    { "do": "wait_relays", "device": "laptop", "their_relays": "{{spare}}", "confirmed": true, "timeout": 180, "label": "the laptop knows the devcontainer's new list and has its confirmation" },
+    { "do": "wait_relays", "device": "devcontainer", "their_relays": "{{spare}}", "confirmed": true, "timeout": 180, "label": "the devcontainer knows the laptop's new list and has its confirmation" },
+    {
+      "do": "session", "device": "devcontainer", "id": "asker", "background": true, "timeout": 900, "tools": ["Read", "Grep", "Glob"],
+      "prompt": "sync.js reads items from the warehouse team's stockroom API. Open a thread with their agent (Counterpart contact: laptop) and send it a message asking what stockroom returns for a SKU that does not exist. Wait for the answer, then tell me what sync.js should handle. Do not edit any file."
+    },
+    { "do": "wait_message", "device": "laptop", "since": "step", "timeout": 300, "label": "the question, as a message, on the laptop" },
+    { "do": "fault", "kind": "relay_stop", "hard": true },
+    { "do": "wait_message", "device": "devcontainer", "timeout": 480, "recover_after": 300, "label": "the laptop's answer on the devcontainer, with the home relay dead" },
+    { "do": "await", "id": "asker" },
+    { "do": "desk", "device": "laptop", "on": false },
+    { "do": "cpart", "device": "laptop", "args": ["say", "devcontainer", "spare check 1, from the laptop, home relay still dead"] },
+    { "do": "cpart", "device": "devcontainer", "args": ["say", "laptop", "spare check 2, from the devcontainer, home relay still dead"] },
+    { "do": "wait_message", "device": "devcontainer", "text": "spare check 1", "timeout": 120, "recover_after": 90, "label": "a message from the laptop after the answer" },
+    { "do": "wait_message", "device": "laptop", "text": "spare check 2", "timeout": 120, "recover_after": 90, "label": "a message from the devcontainer after the answer" },
+    { "do": "cpart", "device": "devcontainer", "args": ["relay", "list"], "record": true },
+    { "do": "expect", "device": "devcontainer", "check": "the answer names the 404 and its code", "message_matches": ["404", "item_not_found"] },
+    { "do": "expect", "check": "the asker's report to its human has the answer", "session": "asker", "session_matches": ["404"] }
+  ]
+}

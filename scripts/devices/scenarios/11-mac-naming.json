@@ -1,0 +1,26 @@
+{
+  "name": "11-mac-naming",
+  "title": "No model: a relay on the 'Mac' that the laptop dials as 127.0.0.1 and the devcontainer as host.docker.internal, paired by short code; messages both ways and a relay restart",
+  "asker": "devcontainer",
+  "sessions": false,
+  "needs": ["mac"],
+  "steps": [
+    { "do": "expect", "device": "laptop", "check": "the laptop dials the relay as ws://127.0.0.1:7447", "args": ["relay", "list"], "cpart_matches": ["home\\s+ws://127\\.0\\.0\\.1:7447\\s+connected"] },
+    { "do": "expect", "device": "devcontainer", "check": "the devcontainer dials it as ws://host.docker.internal:7447 and knows the laptop calls it ws://127.0.0.1:7447", "args": ["relay", "list"], "cpart_matches": ["home\\s+ws://host\\.docker\\.internal:7447\\s+\\(others call it ws://127\\.0\\.0\\.1:7447\\)\\s+connected"] },
+    { "do": "cpart", "device": "devcontainer", "args": ["open", "laptop", "mac naming check"] },
+    { "do": "cpart", "device": "devcontainer", "args": ["say", "laptop", "naming 1, from the container"] },
+    { "do": "wait_message", "device": "laptop", "text": "naming 1", "timeout": 60, "label": "naming 1 on the laptop" },
+    { "do": "cpart", "device": "laptop", "args": ["say", "devcontainer", "naming 2, from the Mac side"] },
+    { "do": "wait_message", "device": "devcontainer", "text": "naming 2", "timeout": 60, "label": "naming 2 on the devcontainer" },
+    { "do": "fault", "kind": "relay_restart", "down_seconds": 5 },
+    { "do": "cpart", "device": "devcontainer", "args": ["say", "laptop", "naming 3, after the relay restarted"] },
+    { "do": "cpart", "device": "laptop", "args": ["say", "devcontainer", "naming 4, after the relay restarted"] },
+    { "do": "wait_message", "device": "laptop", "text": "naming 3", "timeout": 120, "recover_after": 90, "label": "naming 3 on the laptop" },
+    { "do": "wait_message", "device": "devcontainer", "text": "naming 4", "timeout": 120, "recover_after": 90, "label": "naming 4 on the devcontainer" },
+    { "do": "fault", "kind": "pause", "device": "devcontainer" },
+    { "do": "cpart", "device": "laptop", "args": ["say", "devcontainer", "naming 5, sent while the container sleeps"] },
+    { "do": "sleep", "seconds": 30 },
+    { "do": "fault", "kind": "unpause", "device": "devcontainer" },
+    { "do": "wait_message", "device": "devcontainer", "text": "naming 5", "timeout": 120, "recover_after": 90, "label": "naming 5 on the devcontainer after it wakes" }
+  ]
+}
