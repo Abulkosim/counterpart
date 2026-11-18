@@ -65,6 +65,13 @@ env -u CPART_NO_BOOT node packages/cli/src/main.ts relay --boot --port "$PORT" |
 grep -q "^Relay service replaced at" "$WORK/boot2.out"
 [ "$(curl -sf "http://127.0.0.1:$PORT/healthz" | js id)" = "$ID" ] || fail "the relay id changed, so the database did"
 
+step "a --boot that cannot start puts the service that ran before back"
+if env -u CPART_NO_BOOT node packages/cli/src/main.ts relay --boot --port "$PORT" --host 10.254.254.254 >"$WORK/badboot.out" 2>&1; then fail "--boot on an address this machine does not have succeeded"; fi
+cat "$WORK/badboot.out"
+grep -q "The service that ran before is back, unchanged." "$WORK/badboot.out" || fail "a failed --boot did not say the old service is back"
+[ "$(systemctl --user is-active "$UNIT")" = active ] || fail "a failed --boot left $UNIT stopped"
+[ "$(curl -sf "http://127.0.0.1:$PORT/healthz" | js id)" = "$ID" ] || fail "the relay that ran before does not answer after a failed --boot"
+
 step "a relay in a terminal on the same port is told about the service"
 if node packages/cli/src/main.ts relay --port "$PORT" >"$WORK/clash.out" 2>&1; then fail "a second relay started on a busy port"; fi
 grep -q "A relay service runs on port $PORT already" "$WORK/clash.out"
