@@ -105,7 +105,7 @@ export function writeReport(dir: string, r: RunResult): void {
       `| ${s.name} | ${verdict(s)} | ${s.timeToFirstAnswerS === null ? "none" : `${s.timeToFirstAnswerS}s`} | ${s.timeToAgreementS === null ? "-" : `${s.timeToAgreementS}s`} | ${s.interventions.length} | ${lost}${s.lost.held ? ` (+${s.lost.held} held)` : ""} | ${s.restartedByHand ? "yes" : "no"} | ${s.durationS}s |`,
     );
   }
-  lines.push("", "First answer: from the asker's question to the first reply in the asker's store, both by the asker's clock. Lost: messages one store holds as sent and the other never applied, after up to 90 seconds to settle. Human steps include approvals, which are meant to be human.", "");
+  lines.push("", "First answer: from the asker's first message or thread goal, whichever came first, to the first reply in that thread, both read from the asker's store and clock. Lost: messages one store holds as sent and the other never applied, after up to 90 seconds to settle. Human steps include approvals, which are meant to be human.", "");
   for (const s of r.scenarios) {
     lines.push(`## ${s.name}: ${s.title}`, "", `\`${s.file}\`. ${s.ok ? "Ended as expected." : `**Did not end as expected.**${s.error ? ` ${cell(s.error)}` : ""}`}`, "");
     if (s.faults.length) lines.push(`Faults: ${s.faults.map((f) => `${f.kind}${f.device ? ` ${f.device}` : ""} at ${f.atS}s`).join("; ")}.`, "");

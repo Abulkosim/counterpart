@@ -15,7 +15,7 @@ Setup: `cpart setup` on the laptop, `cpart join` on the devcontainer, paired in 
 | 05-network-drop | **failed** | none | - | 1 | 0 | yes | 565s |
 | 06-relay-restart | ok | 6.2s | - | 0 | 0 | no | 277s |
 
-First answer: from the asker's question to the first reply in the asker's store, both by the asker's clock. Lost: messages one store holds as sent and the other never applied, after up to 90 seconds to settle. Human steps include approvals, which are meant to be human.
+First answer: from the asker's first message (not the thread goal) to the first reply in the asker's store, both by the asker's clock. This run predates counting from the thread goal; see `../README.md`. Lost: messages one store holds as sent and the other never applied, after up to 90 seconds to settle. Human steps include approvals, which are meant to be human.
 
 ## 00-plumbing: No model: messages by hand through sleep, a network drop and a relay restart
 

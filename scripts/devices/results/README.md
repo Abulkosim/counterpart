@@ -11,7 +11,7 @@ Each folder is one run of `rig.sh`: `report.md` to read, `results.json` with eve
 
 ## What worked with no help
 
-- Asking (01): the devcontainer's agent asked, the laptop's front desk answered from the README and `server.js`, and the agent told its human what to change. First answer 9 to 13 seconds. Both bugs in `sync.js` found. Same over the tunnel.
+- Asking (01): the devcontainer's agent asked, the laptop's front desk answered from the README and `server.js`, and the agent told its human what to change. First answer 9 to 13 seconds (see the note on first answer below). Both bugs in `sync.js` found. Same over the tunnel.
 - Negotiating (02): two live sessions, one proposal, accepted as it stood by the other side's agent, both humans approved. Agreement 41 seconds after the thread opened. The two approvals were the only human steps.
 - The laptop offline for two minutes, back at the same address (03): the answer arrived 122 seconds after the question, with nobody touching anything.
 - The laptop asleep for 90 seconds while its front desk was answering (04): answered 95 seconds after the question, 5 seconds after it woke. Same over the tunnel (105 seconds).
@@ -25,6 +25,10 @@ Each folder is one run of `rig.sh`: `report.md` to read, `results.json` with eve
 4. **A tunnel relay that restarts is gone for good.** The quick tunnel came back at a new address (06, tunnel). Both identities still name the old one, and an identity belongs to one relay, so one message stayed queued and nothing a person can do with `cpart up` fixes it.
 5. **The relay has to be told the address the devices use.** Without `--url`, the relay names itself after the address it listens on and refuses every login with `wrong_relay_url`. `cpart setup` and `cpart join` still finished; the pairing never completed. This rig passes `--url`. Not run on a Mac: if the Mac side uses `ws://127.0.0.1:7447` and the dev container uses `ws://host.docker.internal:7447`, the relay accepts only one of the two, and the invite carries the Mac side's address.
 6. **Setup needs a person to type `yes` once on the joining side** when the relay is on a private address, which a relay on the Mac always is for its dev container. Over the tunnel it did not.
+
+## A note on first answer
+
+First answer now counts from the asker's first message or thread goal, whichever came first. `20261117-container` and `20261117-container-long` started before that change, so their figures count from the first message only. Where an agent opened the thread and sent its question in the same moment, the two agree within the seconds between those calls. Where it did not, they differ: 06 in `20261117-container` says 6.2 seconds, and its wait line shows 235. For `20261117-container-b` and `20261117-tunnel` the code they ran is not recorded. These figures were not measured again.
 
 ## What was not tested
 

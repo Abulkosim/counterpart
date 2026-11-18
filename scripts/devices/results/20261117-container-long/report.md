@@ -9,7 +9,7 @@ Setup: `cpart setup` on the laptop, `cpart join` on the devcontainer, paired in 
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 07-drop-no-restart | **failed** | 1585.3s | - | 0 | 0 | no | 1602s |
 
-First answer: from the asker's question to the first reply in the asker's store, both by the asker's clock. Lost: messages one store holds as sent and the other never applied, after up to 90 seconds to settle. Human steps include approvals, which are meant to be human.
+First answer: from the asker's first message (not the thread goal) to the first reply in the asker's store, both by the asker's clock. This run predates counting from the thread goal; see `../README.md`. Lost: messages one store holds as sent and the other never applied, after up to 90 seconds to settle. Human steps include approvals, which are meant to be human.
 
 ## 07-drop-no-restart: No model: after a network drop and a new address, does a message ever arrive without a restart? Takes up to 30 minutes
 

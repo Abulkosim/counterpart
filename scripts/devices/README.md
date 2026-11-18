@@ -51,7 +51,7 @@ The relay is started with `--url` set to the address the devices use. Without it
 
 For each scenario:
 
-- Time to first answer: from the asker's first message to the first reply, both read from the asker's own store and clock.
+- Time to first answer: from the asker's first message or the goal of the thread it opened, whichever came first, to the first reply in that thread. Both are read from the asker's own store and clock. Results committed before 2026-11-18 may have counted from the first message only; `results/README.md` says which.
 - Time to agreement: from the thread opening to the second approval, read from the laptop's store.
 - Human steps: approvals, typing `yes` during setup, and any restart by hand. Approvals are meant to be human; restarts are not.
 - Messages lost: messages one store holds as its own that the other store never applied, after up to 90 seconds to settle. Held messages (waiting for an earlier one) are counted beside them.
