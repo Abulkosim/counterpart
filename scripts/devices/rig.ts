@@ -67,6 +67,9 @@ export class Rig {
   private owned = false;
   private paused = new Set<Device>();
   private offline = new Set<Device>();
+  // Devices back on the network at a new address whose daemon has not been
+  // restarted since. Their link may be dead while status says connected.
+  private moved = new Set<Device>();
   readonly trace: string;
 
   constructor(o: RigOptions) {
@@ -322,6 +325,7 @@ export class Rig {
     if (newAddress) this.ips[d] += 1;
     await this.must(["network", "connect", "--ip", this.ip(d), this.net, this.name(d)]);
     this.offline.delete(d);
+    if (newAddress) this.moved.add(d);
     this.note(`fault over: ${d} back on the network at ${this.ip(d)}`);
   }
 
@@ -332,9 +336,11 @@ export class Rig {
       await this.unpause(d);
       done.push(`unpaused ${d}`);
     }
+    // At the old address: a new one leaves a link that looks connected and
+    // is not, and the next scenario would get the blame.
     for (const d of [...this.offline]) {
-      await this.connect(d);
-      done.push(`reconnected ${d}`);
+      await this.connect(d, false);
+      done.push(`reconnected ${d} at its old address`);
     }
     if (this.relay && this.relay.mode !== "container" && !this.relayRunning()) {
       await this.startRelayAgain();
@@ -348,6 +354,18 @@ export class Rig {
       }
     }
     return done;
+  }
+
+  // The daemon of d was started again, so its link is new.
+  restarted(d: Device): void {
+    this.moved.delete(d);
+  }
+
+  // The devices that moved and were not restarted since, and forgets them.
+  takeMoved(): Device[] {
+    const list = [...this.moved];
+    this.moved.clear();
+    return list;
   }
 
   // Copies the daemon logs and the relay's out of the containers.

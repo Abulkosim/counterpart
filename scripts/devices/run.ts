@@ -143,9 +143,8 @@ class Running {
       // What the person would have seen before deciding to restart.
       const st = await rig.cpartJson<{ daemon: { connected: boolean } | null }>(d, ["status"]);
       why += `; ${d}'s cpart status said the daemon was ${st?.daemon ? (st.daemon.connected ? "running and connected" : "running, not connected") : "not running"}`;
-      await rig.cpart(d, ["down"]);
-      const up = await rig.cpart(d, ["up"]);
-      say(`  restarted ${d}'s daemon by hand: ${up.out.trim() || up.err.trim()}`);
+      const up = await restartDaemon(d);
+      say(`  restarted ${d}'s daemon by hand: ${up}`);
     }
     this.r.restartedByHand = true;
     this.r.interventions.push({ by: "rig, for the human", what: `cpart down, then cpart up, on ${devices.join(" and ")}`, why, atS: this.at() });
@@ -412,12 +411,33 @@ class Running {
     if (accepts.length >= 2 && opened.length) this.r.timeToAgreementS = Math.round((Math.max(...accepts) - Math.min(...opened)) / 1000);
   }
 
-  // Each daemon must be running and connected when the scenario ends.
+  // Each daemon must be running and connected when the scenario ends. This
+  // trusts status, which says connected over a dead link: see cleanUp().
   async afterwards(): Promise<void> {
     for (const d of DEVICES) {
       const ok = await rig.until(60_000, async () => !!(await rig.cpartJson<{ daemon: { connected: boolean } | null }>(d, ["status"]))?.daemon?.connected, 2000);
       if (!ok) await this.restartByHand(`${d}'s daemon was not running and connected 60s after the scenario's last step`, [d]);
     }
+  }
+}
+
+// cpart down, then cpart up, on one device.
+async function restartDaemon(d: Device): Promise<string> {
+  await rig.cpart(d, ["down"]);
+  const up = await rig.cpart(d, ["up"]);
+  rig.restarted(d);
+  return up.out.trim() || up.err.trim();
+}
+
+// A device the scenario left at a new address may hold a link that status
+// calls connected and that carries nothing. Restart its daemon so the next
+// scenario starts clean. This is the rig tidying up, not a person's step, so
+// it is a note, not an intervention.
+async function cleanUp(run: Running): Promise<void> {
+  for (const d of rig.takeMoved()) {
+    await restartDaemon(d);
+    run.r.notes.push(`after the scenario the rig restarted ${d}'s daemon: it had moved to a new address and was not restarted since`);
+    say(`  cleanup: restarted ${d}'s daemon, which had moved to a new address`);
   }
 }
 
@@ -463,6 +483,7 @@ async function runScenario(s: Scenario): Promise<ScenarioResult> {
     const l = await daemonLogSince(d, lines[d]);
     run.r.reconnects[d] = { lost: l.filter((x) => x.startsWith("relay connection lost")).length, connected: l.filter((x) => x.startsWith("connected")).length, errors: l.filter((x) => /^error|front desk: /.test(x)).slice(0, 8) };
   }
+  await cleanUp(run);
   if (run.r.checks.some((c) => !c.pass)) run.r.ok = false;
   if (run.r.lost.laptopToDevcontainer || run.r.lost.devcontainerToLaptop) run.r.ok = false;
   // Getting there only after a restart by hand, or not at all, is not the smooth path.
