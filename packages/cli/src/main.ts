@@ -23,6 +23,7 @@ import { inviteByCode, joinByCode, pairingLines } from "./pair.ts";
 import { PairingEngine } from "@counterpart/daemon";
 import { looksLikeCode } from "@counterpart/protocol";
 import { RELAY_SUBCOMMANDS, RELAY_USAGE, logLink, reachable, relayCommand, relayNotices } from "./relays.ts";
+import { type RelayService, DEFAULT_PORT, answering, bootRelay, defaultRelayDb, oldDbNotice, relayServiceHint, relayServices, unbootRelay } from "./relay-service.ts";
 
 const USAGE = `cpart: let your agent talk to someone else's agent
 
@@ -44,10 +45,12 @@ with them, and the first characters of a thread id are enough.
 
 The pieces, if you want to run them yourself:
 
-  cpart relay [--port 7447] [--host 127.0.0.1] [--db relay.db] [--url wss://public.name]... [--tunnel]
-                                                                  run a relay. --url once for each address it answers to.
+  cpart relay [--port 7447] [--host 127.0.0.1] [--db <file>] [--url wss://public.name]... [--tunnel]
+                                                                  run a relay in this terminal. --url once for each address it answers to.
                                                                   --tunnel gives it a public address through
-                                                                  cloudflared, for trying it with someone; the address changes on restart
+                                                                  cloudflared, for trying it with someone; the address changes on restart.
+                                                                  The database is ~/.counterpart-relay/relay-<port>.db unless --db
+  cpart relay --boot [--port 7447] [...] | cpart relay --no-boot  run the relay in the background, from login on, or stop doing that
 ${RELAY_USAGE}
   cpart init --relay <ws://host:port> [--no-passphrase]           create your identity
   cpart renew                                                     renew this device's credential (needs the passphrase)
@@ -297,10 +300,10 @@ async function ensureDaemon(): Promise<boolean> {
 
 // Everything between a fresh machine and an agent that can talk. Each step
 // is skipped when already done, so running it again is harmless.
-function portFree(port: number, host: string): Promise<void> {
+function portFree(port: number, host: string, busy = "Nothing was made public. Pick another with --port"): Promise<void> {
   return new Promise((ok, no) => {
     const s = createServer();
-    s.once("error", (e: NodeJS.ErrnoException) => no(new Error(e.code === "EADDRINUSE" ? `port ${port} is already in use. Nothing was made public. Pick another with --port` : e.message)));
+    s.once("error", (e: NodeJS.ErrnoException) => no(new Error(e.code === "EADDRINUSE" ? `port ${port} is already in use. ${busy}` : e.message)));
     s.listen(port, host, () => s.close(() => ok()));
   });
 }
@@ -452,7 +455,15 @@ async function setup(relay: string | undefined, fromInvite = false): Promise<Cou
   return node;
 }
 
-function status(node: Counterpart): void {
+// Relays this machine runs as a service, for cpart status.
+async function relayServiceLines(): Promise<{ lines: string[]; data: (RelayService & { answering: boolean })[] }> {
+  const data = await Promise.all(relayServices().map(async (s) => ({ ...s, answering: await answering(s) })));
+  const lines = data.map((s) => `Service   relay on port ${s.port} starts at login (${s.kind}), ${s.answering ? "answering" : `NOT answering. See ${s.log} and ${relayServiceHint(s)}`}`);
+  return { lines, data };
+}
+
+async function status(node: Counterpart): Promise<void> {
+  const svc = await relayServiceLines();
   const d = running(home);
   const days = Math.floor((node.credentialExpiresAt - Date.now()) / 86_400_000);
   const hosts = agents(home);
@@ -477,6 +488,7 @@ function status(node: Counterpart): void {
   const lines = [
     `You       ${node.me.human}  (key ${node.me.rootKey.slice(0, 12)})${node.protected ? "" : "  no passphrase: cannot approve contracts"}`,
     `Relay     ${safe(node.relay)}${node.relayBook.mine().length > 1 ? ` and ${node.relayBook.mine().length - 1} more (cpart relay list)` : ""}`,
+    ...svc.lines,
     `Daemon    ${d ? `running, ${d.connected ? "connected" : "NOT connected to the relay"}${bootInstalled(home) ? ", starts at login" : ""}` : "NOT running. Nothing is sent or received. Start it: cpart up"}`,
     `Agents    ${hosts.filter((h) => h.found).map((h) => `${h.name}: ${h.registered === "here" ? "has the tools" : h.registered === "elsewhere" ? "has the tools for ANOTHER identity" : "not added (cpart setup adds it)"}`).join("; ") || "neither claude nor codex found on PATH"}`,
     `Contacts  ${contacts.length ? contacts.map((c) => `${c.name}${c.state === "pending" ? " (pending)" : ""}${desks.get(c.name) ? " (front desk on)" : ""}`).join(", ") : "none yet. Pair with: cpart invite <name>"}`,
@@ -485,28 +497,58 @@ function status(node: Counterpart): void {
     "",
     waiting.length ? `Waiting for you:\n${waiting.join("\n")}` : "Nothing is waiting for you.",
   ];
-  out(lines.join("\n"), { me: node.me, daemon: d ?? null, boot: bootInstalled(home) ?? null, agents: hosts, contacts: contacts.map((c) => ({ name: c.name, state: c.state })), threads: threads.length, held: guard.held, unguarded: guard.unguarded, toSign: toSign.map(({ thread, c }) => ({ threadId: thread.id, proposalId: c.proposalId, title: c.contract.title })), asks: asks.length });
+  out(lines.join("\n"), { me: node.me, daemon: d ?? null, boot: bootInstalled(home) ?? null, relayServices: svc.data, agents: hosts, contacts: contacts.map((c) => ({ name: c.name, state: c.state })), threads: threads.length, held: guard.held, unguarded: guard.unguarded, toSign: toSign.map(({ thread, c }) => ({ threadId: thread.id, proposalId: c.proposalId, title: c.contract.title })), asks: asks.length });
 }
 
 async function main(): Promise<void> {
   if (!cmd || flags.help || cmd === "help") return console.log(USAGE);
 
   if (cmd === "relay" && !RELAY_SUBCOMMANDS.includes(args[0] ?? "")) {
-    const port = Number(flags.port ?? process.env.PORT ?? 7447);
+    const portText = flags.port ?? process.env.PORT;
+    const port = Number(portText ?? DEFAULT_PORT);
+    if (!/^[0-9]{1,5}$/.test(String(portText ?? DEFAULT_PORT)) || port < 1 || port > 65535) throw new Error(`--port takes a number from 1 to 65535, like ${DEFAULT_PORT}`);
     const host = flags.host ?? "127.0.0.1";
+    const given = flags.url?.length ? flags.url : splitUrls(process.env.CPART_RELAY_URL);
+    if (flags["no-boot"]) {
+      const gone = unbootRelay(flags.port !== undefined ? port : undefined);
+      return out(gone.length ? gone.map((s) => `Stopped the relay service on port ${s.port}. It no longer starts at login. Its database stays in ${s.db}`).join("\n") : "No relay service is installed here.", { removed: gone });
+    }
+    if (flags.boot) {
+      if (flags.tunnel) throw new Error("--tunnel and --boot do not go together: a tunnel's address changes every start, so contacts would lose it. Run cpart relay --tunnel in a terminal, or --boot without it");
+      const r = await bootRelay({ port, host, db: flags.db, urls: given, portFree: (p, h) => portFree(p, h, "If a relay runs there in a terminal, stop it first. Or pick another port with --port") });
+      const container = r.names.find((n) => n.includes("host.docker.internal"));
+      return out(
+        [
+          `Relay ${r.replaced ? "service replaced" : "running"} at ${r.names[0]}. It starts at login and restarts if it stops.`,
+          ...(container ? [`A container on this machine reaches it at ${container}.`] : []),
+          `Database: ${r.service.db}`,
+          `Log:      ${r.service.log}`,
+          "",
+          `Next:  cpart setup --relay ${r.names[0]}`,
+          "Stop it and remove it with: cpart relay --no-boot",
+        ].join("\n"),
+        { ...r.service, names: r.names, replaced: r.replaced },
+      );
+    }
     // A tunnel to a port something else holds would publish that something.
     if (flags.tunnel) await portFree(port, host);
+    const dbPath = flags.db ?? defaultRelayDb(port);
+    if (!flags.db) {
+      const old = oldDbNotice(process.cwd(), dbPath);
+      if (old) console.error(old);
+    }
     const tunnel = flags.tunnel ? await openTunnel(port) : undefined;
-    const given = flags.url?.length ? flags.url : splitUrls(process.env.CPART_RELAY_URL);
     // Behind a tunnel it answers to the tunnel's address and to --url, never to
     // loopback names by default: those are shared by every machine, and the
     // public address would let a relay elsewhere log in with them. See connectivity.md.
     const urls = tunnel ? [tunnel.url, ...given] : given;
-    const relay = await startRelay({ port, host, dbPath: flags.db ?? "relay.db", urls, log: (l) => console.log(l) }).catch((e: Error) => {
+    const relay = await startRelay({ port, host, dbPath, urls, log: (l) => console.log(l) }).catch((e: Error) => {
       tunnel?.close();
-      throw e;
+      const svc = relayServices().find((s) => s.port === port);
+      throw svc ? new Error(`${e.message}\nA relay service runs on port ${port} already (cpart status). To run it here instead: cpart relay --no-boot --port ${port}`) : e;
     });
-    if (tunnel) console.log(`\nAnyone can reach this relay at ${tunnel.url} until it stops. The address will be different next time.\nYou:   cpart setup --relay ${tunnel.url}\nThem:  cpart join <the invite you send them> <your name>\n`);
+    console.log(`database ${dbPath}`);
+    if (tunnel) console.log(`\nAnyone can reach this relay at ${tunnel.url} until it stops. The address will be different next time.\nYou:   cpart setup --relay ${tunnel.url}\nThen:  cpart invite <their name>, and send them the line it prints\n`);
     const stop = (): void => {
       tunnel?.close();
       void relay.close().then(() => process.exit(0));
@@ -587,7 +629,8 @@ async function main(): Promise<void> {
     return out(was ? "Daemon stopped. It will not start at login." : "No daemon was running.", { stopped: was });
   }
   if (cmd === "status" && !existsSync(join(home, "keys.json"))) {
-    return out(`No identity in ${home} yet.\n  cpart setup --relay <wss://host>     if you have a relay\n  cpart join <invite> <name>           if someone sent you an invite`, { identity: false });
+    const svc = await relayServiceLines();
+    return out(`No identity in ${home} yet.\n  cpart setup --relay <wss://host>     if you have a relay\n  cpart join <code> <name>             if someone sent you a code${svc.lines.length ? `\n\n${svc.lines.join("\n")}` : ""}`, { identity: false, relayServices: svc.data });
   }
 
   // A held event's missing parents are asked for after 30 seconds. Tests shorten it.
@@ -604,7 +647,7 @@ async function main(): Promise<void> {
       return out(`Daemon ${r.started ? "started" : "already running"} (pid ${r.state.pid}), ${r.state.connected ? `connected to ${node.relay}` : `not connected to ${node.relay} yet`}.${r.boot ? " It starts at login." : " It stops when this machine restarts; cpart up --boot makes it start at login."}`, r);
     }
     case "status":
-      return status(node);
+      return await status(node);
     case "whoami": {
       const days = Math.floor((node.credentialExpiresAt - Date.now()) / 86_400_000);
       return out(
