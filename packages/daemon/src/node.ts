@@ -6,10 +6,10 @@ import {
   type Agreement, type Approval, type CheckedPart, type Contract, type ContractPart, type DeviceCredential, type DeviceSecrets, type EventBodies, type EventType,
   type Evidence, type KeyPair, type ThreadEvent, type Via, type Wire,
   EVIDENCE_STATE, LIMITS, checkEvidenceParts, contractHash, decodeInvite, deviceId, encodeInvite, generateSigningKey, hashOf, humanId, issueDevice, laneOf, open, parseContract, parseEvidence,
-  randomId, renewDevice, safetyCode, seal, signApproval, verifyAgreement, verifyApproval,
+  randomId, renewDevice, safetyCode, seal, sign, signApproval, verifyAgreement, verifyApproval,
 } from "@counterpart/protocol";
 import { type SealedRoot, DEFAULT_LOG_N, sealRoot, unsealRoot } from "./rootkey.ts";
-import { type GuardOptions, type Held, Guard, Recheck } from "./guard.ts";
+import { type GuardOptions, type Held, GUARD_OFF_DOMAIN, MAX_OFF_MINUTES, Guard, Recheck, guardOffMessage } from "./guard.ts";
 
 const DAY = 24 * 3600 * 1000;
 const RENEW_BEFORE = 30 * DAY;
@@ -233,7 +233,7 @@ export class Counterpart {
       // Another process opening the same home added them first.
       if (!/duplicate column/.test((e as Error).message)) throw e;
     }
-    this.guard = new Guard(this.db, opts.guard ?? {}, now);
+    this.guard = new Guard(this.db, opts.guard ?? {}, now, keys.rootKey);
   }
 
   // With a passphrase the root key is locked from the moment it exists, and the
@@ -387,12 +387,12 @@ export class Counterpart {
   private async open(contactName: string, goal: string, released?: string): Promise<string> {
     const c = this.activeContact(contactName);
     const screened = { contactRoot: c.rootKey, threadId: null, type: "thread.opened", body: { goal } };
-    if (!released) this.guard.screen(screened);
+    const ticket = released ? null : this.guard.screen(screened);
     const threadId = randomId();
     const out = await this.build(c.credential, threadId, "thread.opened", { goal, participants: [this.keys.rootKey, c.rootKey] }, 0, []);
     try {
       this.tx(() => {
-        if (!released) this.guard.recheck(screened);
+        this.guard.recheck(screened, ticket);
         this.db.prepare("INSERT INTO threads (id, goal, contact_root, opened_by_me, created_at, genesis) VALUES (?, ?, ?, 1, ?, ?)").run(threadId, goal, c.rootKey, this.now(), hashOf(out.event));
         this.commitOut(out);
         if (released) this.guard.released(released, out.event.id);
@@ -415,7 +415,7 @@ export class Counterpart {
     if (!t) throw new Error(`no thread ${threadId}`);
     const c = this.activeContact(t.contact_root);
     const screened = { contactRoot: c.rootKey, threadId, type, body };
-    if (!released) this.guard.screen(screened);
+    const ticket = released ? null : this.guard.screen(screened);
     const mine = deviceId(this.keys.device.credential);
     // Sequence numbers are allocated here and committed below; a clash with a
     // concurrent writer fails the unique index and the caller retries.
@@ -426,7 +426,7 @@ export class Counterpart {
       try {
         this.tx(() => {
           // Again inside the commit, so two messages sent at once cannot each carry half of a value.
-          if (!released) this.guard.recheck(screened);
+          this.guard.recheck(screened, ticket);
           this.checkAct(out.event, this.keys.rootKey);
           this.commitOut(out);
           if (released) this.guard.released(released, out.event.id);
@@ -463,6 +463,18 @@ export class Counterpart {
       this.guard.unclaim(h.id);
       throw e;
     }
+  }
+
+  // Turn the outbound guard off for a while. Only the owner may: the
+  // passphrase unlocks the root key, which signs the end time. An identity
+  // without a passphrase cannot, for the same reason it cannot release.
+  guardOff(minutes: number, passphrase?: string): number {
+    if (!this.keys.sealedRoot) throw new Error("this identity was made without a passphrase, so nothing here can tell you from an agent, and the guard cannot be turned off.");
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > MAX_OFF_MINUTES) throw new Error(`give the minutes as a whole number from 1 to ${MAX_OFF_MINUTES}`);
+    const root = this.unlock(passphrase);
+    const until = this.now() + minutes * 60_000;
+    this.guard.setOff(until, sign(root, GUARD_OFF_DOMAIN, guardOffMessage(this.keys.rootKey, until)));
+    return until;
   }
 
   // ---- contracts ----

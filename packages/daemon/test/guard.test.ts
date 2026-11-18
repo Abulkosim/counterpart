@@ -1,10 +1,12 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Counterpart, type GuardOptions, HeldError } from "../src/index.ts";
+import { gzipSync } from "node:zlib";
+import { Counterpart, Guard, type GuardOptions, HeldError, WALK_DEPTH, dotenvFiles, walkLimit } from "../src/index.ts";
 import { measure } from "./guard-corpus/measure.ts";
 
 const dirs: string[] = [];
@@ -180,9 +182,9 @@ test("text from a never-share file is held however it is spaced", async () => {
   await alice.say(thread, "The refund backlog is our priority this week.");
 });
 
-test("CPART_GUARD=off sends, says so every time, and records what it would have held", async () => {
+test("off in code sends, says so every time, and records what it would have held", async () => {
   const lines: string[] = [];
-  const { alice, bob, thread, carry } = await pair({ env: { CPART_GUARD: "off", ORDERS_SERVICE_TOKEN: TOKEN }, cwd: null, log: (l) => lines.push(l) });
+  const { alice, bob, thread, carry } = await pair({ off: true, env: { ORDERS_SERVICE_TOKEN: TOKEN }, cwd: null, log: (l) => lines.push(l) });
   lines.length = 0; // opening the thread was logged too
   await alice.say(thread, `token ${TOKEN}`);
   await alice.say(thread, "nothing secret here");
@@ -322,4 +324,138 @@ test("a large message is checked in reasonable time", async () => {
   const t = Date.now();
   await alice.say(thread, big);
   assert.ok(Date.now() - t < 5000, `took ${Date.now() - t} ms`);
+});
+
+const guardOn = (opts: GuardOptions): Guard => new Guard(new DatabaseSync(":memory:"), opts, Date.now, "no-root-key");
+
+test("CPART_GUARD=off in the environment changes nothing; only the owner's signed word turns the guard off", async () => {
+  const lines: string[] = [];
+  let now = Date.now();
+  const relay = "ws://127.0.0.1:9";
+  const alice = await Counterpart.init(dir(), { relay, passphrase: PASS, logN: 14, now: () => now, guard: { env: { CPART_GUARD: "off", ORDERS_SERVICE_TOKEN: TOKEN }, cwd: null, log: (l) => lines.push(l) } });
+  const bob = await Counterpart.init(dir(), { relay, guard: { env: {}, cwd: null } });
+  const carry = async (): Promise<void> => {
+    for (const [from, to] of [[alice, bob], [bob, alice]] as const) {
+      for (const w of from.queued()) {
+        if (w.header.to !== to.me.device) continue;
+        await to.receive(w);
+        from.markOutbox(w.header.id, "stored");
+      }
+    }
+  };
+  await bob.acceptInvite(alice.createInvite("bob"), "alice");
+  await carry();
+  await carry();
+  const thread = await alice.openThread("bob", "orders");
+  // The variable an agent could set from a shell does nothing.
+  await assert.rejects(alice.say(thread, `token ${TOKEN}`), HeldError);
+  assert.equal(alice.guard.off, false);
+  // Nor does a row written into state.db by hand.
+  const db = new DatabaseSync(join(alice.home, "state.db"));
+  db.prepare("INSERT INTO guard_off (id, until, sig, at) VALUES (1, ?, ?, ?)").run(now + 3600_000, "A".repeat(86), now);
+  assert.equal(alice.guard.off, false);
+  await assert.rejects(alice.say(thread, `token ${TOKEN}`), HeldError);
+  db.exec("DELETE FROM guard_off");
+  assert.throws(() => alice.guard.setOff(now + 60_000, "A".repeat(86)), /not signed/);
+  assert.throws(() => bob.guardOff(10), /without a passphrase/);
+  // The owner, with the passphrase.
+  assert.throws(() => alice.guardOff(10, "wrong"), /wrong passphrase/);
+  assert.throws(() => alice.guardOff(10_000, PASS), /from 1 to/);
+  const until = alice.guardOff(10, PASS);
+  assert.equal(alice.guard.offUntil(), until);
+  lines.length = 0;
+  await alice.say(thread, `token ${TOKEN}`);
+  assert.match(lines[0]!, /^COUNTERPART OUTBOUND GUARD IS OFF \(until .*cpart guard off/);
+  assert.deepEqual(alice.guard.counts(), { held: 2, unguarded: 1 });
+  // The signed end time cannot be moved: changing it breaks the signature.
+  db.prepare("UPDATE guard_off SET until = until + 3600000").run();
+  assert.equal(alice.guard.off, false);
+  db.prepare("UPDATE guard_off SET until = until - 3600000").run();
+  assert.equal(alice.guard.off, true);
+  // It ends by itself, or with cpart guard on.
+  now += 11 * 60_000;
+  assert.equal(alice.guard.off, false);
+  await assert.rejects(alice.say(thread, `token ${TOKEN}`), HeldError);
+  now -= 11 * 60_000;
+  assert.equal(alice.guard.off, true);
+  assert.equal(alice.guard.clearOff(), true);
+  assert.equal(alice.guard.off, false);
+  db.close();
+  await carry();
+  assert.deepEqual(bobTexts(bob, thread), [`token ${TOKEN}`]);
+});
+
+test("names with KEY or PASS as a word count, as they do in .env files", () => {
+  const values = { OPENAI_KEY: "Rk2pW9xL4mT7vQ1zN8bC3dF6", HMAC_KEY: "Mz5xC8vB1nQ4wE7rT2yU9iO3", PARTNER_FEED_KEY: "Hj3kL9mN2bV6cX1zQ8wE5rT4", SMTP_PASS: "plain words pass", KEY_PAIR_SEED: "Ab8cD3eF7gH2iJ6k" };
+  const g = guardOn({ env: values, cwd: null });
+  for (const [k, v] of Object.entries(values)) assert.ok(g.check({ text: `value: ${v}` }).some((f) => f.rule === `env:${k}`), k);
+  // A path, an id, or KEY inside another word is left alone.
+  const other = guardOn({ env: { SSH_KEY_PATH: "/home/me/.ssh/id_ed25519", MONKEY: "Zz9yY8xX7wW6vV5u", SORT_KEY_ID: "Pq7wE2rT9yU4iO1p" }, cwd: null });
+  assert.deepEqual(other.check({ text: "/home/me/.ssh/id_ed25519 Zz9yY8xX7wW6vV5u Pq7wE2rT9yU4iO1p" }).filter((f) => f.rule.startsWith("env:")), []);
+});
+
+test("encodings a fooled agent might be told to use: UTF-16, HTML references, octal, binary, gzip", () => {
+  const g = guardOn({ env: { ORDERS_SERVICE_TOKEN: TOKEN }, cwd: null });
+  const codes = [...TOKEN].map((c) => c.charCodeAt(0));
+  const forms = {
+    "utf-16 base64": Buffer.from(TOKEN, "utf16le").toString("base64"),
+    "html decimal": codes.map((c) => `&#${c};`).join(""),
+    "html hex": codes.map((c) => `&#x${c.toString(16)};`).join(""),
+    octal: codes.map((c) => `\\${c.toString(8)}`).join(""),
+    binary: codes.map((c) => c.toString(2).padStart(8, "0")).join(" "),
+    "gzip base64": gzipSync(TOKEN).toString("base64"),
+    "gzip hex": gzipSync(`config dump: ${TOKEN}`).toString("hex"),
+  };
+  for (const [name, text] of Object.entries(forms)) assert.ok(g.check({ text: `here: ${text}` }).some((f) => f.category === "env-secret"), name);
+  // A compression bomb is not inflated past its bound; it is held as too much to check.
+  assert.ok(g.check({ text: gzipSync(Buffer.alloc(4 * 1024 * 1024, 65)).toString("base64") }).some((f) => f.category === "too-much-to-check"));
+  // Ordinary text with the same shapes passes.
+  assert.deepEqual(g.check({ text: "Use &amp; and &#169; in the footer; modes 0644 and 0755; mask 11111111 00000000." }), []);
+});
+
+test("the .env search goes deep, and says where it stopped", () => {
+  const root = dir();
+  mkdirSync(join(root, ".git"));
+  const deep = join(root, "a", "b", "c", "d", "e", "f");
+  mkdirSync(deep, { recursive: true });
+  writeFileSync(join(deep, ".env"), "DEEP_API_KEY=Hx7pL2mQ9rT4vW8zK3nB6cY1\n");
+  const lines: string[] = [];
+  const g = guardOn({ env: {}, cwd: root, log: (l) => lines.push(l) });
+  assert.ok(g.check({ text: "Hx7pL2mQ9rT4vW8zK3nB6cY1" }).some((f) => f.category === "dotenv-value"));
+  assert.deepEqual(g.problems(), []);
+  mkdirSync(join(root, ...Array.from({ length: WALK_DEPTH + 2 }, (_, i) => `d${i}`)), { recursive: true });
+  assert.match(g.problems().join("\n"), new RegExp(`deeper than ${WALK_DEPTH} directories`));
+  g.check({ text: "hello" });
+  assert.match(lines.join("\n"), /\.env search stopped early/);
+  const limit = walkLimit();
+  limit.dirs = 3;
+  dotenvFiles(root, limit);
+  assert.deepEqual([...limit.cut], [root]);
+});
+
+test("a large never-share file does not make a send slow, and the second look inside the commit is cheap", async () => {
+  const rows: string[] = [];
+  for (let n = 0; n < 1_500_000; ) {
+    const r = `${randomBytes(6).toString("hex")},customer ${rows.length},${randomBytes(12).toString("base64")},2026-01-01\n`;
+    rows.push(r);
+    n += r.length;
+  }
+  const f = join(dir(), "customers.csv");
+  writeFileSync(f, rows.join(""));
+  const { alice, thread } = await pair({ env: { ORDERS_SERVICE_TOKEN: TOKEN }, cwd: null });
+  alice.guard.addPath("never-share", f);
+  await alice.say(thread, "warm up");
+  const log = `build log: ${randomBytes(11_000).toString("base64")}`;
+  let t = Date.now();
+  await alice.say(thread, log);
+  assert.ok(Date.now() - t < 8000, `a 15K message took ${Date.now() - t} ms`);
+  t = Date.now();
+  await assert.rejects(alice.say(thread, `row: ${rows[700]}`), /never-share-file/);
+  assert.ok(Date.now() - t < 8000, `took ${Date.now() - t} ms`);
+  // Inside the commit: nothing sent since screen(), so nothing is scanned again.
+  const out = { contactRoot: alice.contacts()[0]!.rootKey, threadId: thread, type: "talk.posted", body: { text: log } };
+  const ticket = alice.guard.screen(out);
+  t = Date.now();
+  alice.guard.recheck(out, ticket);
+  assert.ok(Date.now() - t < 200, `recheck took ${Date.now() - t} ms`);
 });

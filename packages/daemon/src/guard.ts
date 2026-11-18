@@ -13,10 +13,12 @@
 // "gitleaks:allow" comment is deliberately not honoured: anyone who writes the
 // message could add it.
 
+import { createHash } from "node:crypto";
 import { existsSync, lstatSync, openSync, closeSync, readFileSync, readSync, readdirSync, realpathSync, statSync, fstatSync, constants } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { randomId } from "@counterpart/protocol";
+import { constants as zlib, gunzipSync, inflateSync } from "node:zlib";
+import { randomId, utf8, verify } from "@counterpart/protocol";
 
 export type GuardCategory =
   | "private-key"
@@ -266,8 +268,37 @@ const MAX_DEPTH = 4; // encodings inside encodings
 // when the encoded run was cut at the wrong place or had words glued to it.
 const UNREADABLE = /[�\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]+/;
 function readable(s: string): string[] {
-  return s.split(UNREADABLE).filter((x) => x.length >= 6);
+  const parts = s.split(UNREADABLE).filter((x) => x.length >= 6);
+  // UTF-16 text, as in PowerShell's -EncodedCommand, has a NUL after every
+  // ASCII character. Read it without them too.
+  const nuls = s.length - s.replaceAll("\u0000", "").length;
+  if (nuls >= 6 && nuls * 3 >= s.length) parts.push(...readable(s.replaceAll("\u0000", "")));
+  return parts;
 }
+
+const MAX_INFLATE = 1024 * 1024;
+class TooBig extends Error {}
+
+// Decoded bytes as text. Compressed bytes (gzip or zlib) are inflated too,
+// and what comes out follows a NUL, which `readable` splits on. Output past
+// MAX_INFLATE throws TooBig: the caller holds rather than send it unread.
+function bytesText(b: Buffer): string {
+  const plain = b.toString("utf8");
+  if (b.length < 10) return plain;
+  const gzip = b[0] === 0x1f && b[1] === 0x8b;
+  const deflate = b[0] === 0x78 && (b[0] * 256 + b[1]!) % 31 === 0;
+  if (!gzip && !deflate) return plain;
+  try {
+    // A cut-off stream still gives what it has.
+    const opts = { maxOutputLength: MAX_INFLATE, finishFlush: zlib.Z_SYNC_FLUSH };
+    return `${plain}\u0000${(gzip ? gunzipSync(b, opts) : inflateSync(b, opts)).toString("utf8")}`;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ERR_BUFFER_TOO_LARGE" || e instanceof RangeError) throw new TooBig();
+    return plain; // not compressed after all
+  }
+}
+
+const codePoint = (n: number): string => (n >= 0 && n <= 0x10ffff ? String.fromCodePoint(n) : "\u0000");
 
 const reverse = (s: string): string => [...s].reverse().join("");
 
@@ -301,18 +332,31 @@ const unescape = (s: string): string =>
 const unsplit = (s: string): string => s.replace(/["'`]\s*\+\s*["'`]/g, "").replace(/["'`\s,;|]+/g, "");
 
 // Every encoded run in a text, decoded: [kind, decoded, index, length].
+// Throws TooBig when compressed data inflates past the bound.
 function decodings(text: string): [string, string, number, number][] {
   const out: [string, string, number, number][] = [];
   // Hex, with or without separators, 0x or \x prefixes (the backslash doubled in JSON).
   for (const m of text.matchAll(/(?:(?:\\{1,2}x|0x)?[0-9a-fA-F]{2}[\s:,-]?){8,}/g)) {
     const hex = m[0].replace(/\\{1,2}x|0x|[\s:,-]/g, "");
-    if (hex.length % 2 === 0) out.push(["hex", Buffer.from(hex, "hex").toString("utf8"), m.index, m[0].length]);
+    if (hex.length % 2 === 0) out.push(["hex", bytesText(Buffer.from(hex, "hex")), m.index, m[0].length]);
   }
   // Base64 in either alphabet, tried at each alignment in case it was cut out of a longer run.
   for (const m of text.matchAll(/[A-Za-z0-9+/_-]{8,}={0,2}/g)) {
     const s = m[0];
     if (/^[0-9a-fA-F]+$/.test(s)) continue;
-    for (let skip = 0; skip < 4 && s.length - skip >= 8; skip++) out.push(["base64", Buffer.from(s.slice(skip), "base64").toString("utf8"), m.index, s.length]);
+    for (let skip = 0; skip < 4 && s.length - skip >= 8; skip++) out.push(["base64", bytesText(Buffer.from(s.slice(skip), "base64")), m.index, s.length]);
+  }
+  // Bytes in binary: "01011010 01110100 ...".
+  for (const m of text.matchAll(/(?:\b[01]{8}\b[\s,;]*){6,}/g)) {
+    out.push(["binary", bytesText(Buffer.from(m[0].split(/[\s,;]+/).filter(Boolean).map((b) => parseInt(b, 2)))), m.index, m[0].length]);
+  }
+  // HTML character references, decimal or hex: "&#90;&#x74;".
+  for (const m of text.matchAll(/(?:&#(?:[0-9]{1,7}|[xX][0-9a-fA-F]{1,6});?\s*){4,}/g)) {
+    out.push(["entities", m[0].replace(/&#(?:([0-9]+)|[xX]([0-9a-fA-F]+));?\s*/g, (_, d: string | undefined, h: string | undefined) => codePoint(d ? Number(d) : parseInt(h!, 16))), m.index, m[0].length]);
+  }
+  // Octal escapes: "\132\164" (the backslash doubled in JSON).
+  for (const m of text.matchAll(/(?:\\{1,2}[0-7]{1,3}){4,}/g)) {
+    out.push(["octal", m[0].replace(/\\{1,2}([0-7]{1,3})/g, (_, o: string) => String.fromCharCode(parseInt(o, 8))), m.index, m[0].length]);
   }
   // Percent-encoding.
   for (const m of text.matchAll(/(?:%[0-9a-fA-F]{2}|[A-Za-z0-9._~+-]){6,}/g)) {
@@ -375,7 +419,15 @@ export function views(text: string): Views {
       add(v.text.normalize("NFKC"), chain(v.how, "folded"), v.span, depth, surface + 1);
       if (/\\[nrtu"\\/]/.test(v.text)) add(unescape(v.text), chain(v.how, "escaped"), v.span, depth, surface + 1);
     }
-    for (const [kind, decoded, at, len] of decodings(v.text)) {
+    let runs: ReturnType<typeof decodings>;
+    try {
+      runs = decodings(v.text);
+    } catch (e) {
+      if (!(e instanceof TooBig)) throw e;
+      incomplete = true;
+      continue;
+    }
+    for (const [kind, decoded, at, len] of runs) {
       const span: View["span"] = v.how === "plain" ? [at, at + len] : v.span;
       for (const part of readable(decoded)) {
         // Text that decodes to a piece of itself ("3333" as hex) adds nothing.
@@ -404,7 +456,9 @@ export interface Exact {
   whole?: boolean; // only the whole value counts, not pieces of it (a URL: its host and path are not secret)
 }
 
-const SECRET_NAME = /secret|token|passw|pwd|passphrase|api[_-]?key|apikey|access[_-]?key|private[_-]?key|credential|auth(?!or)|session|cookie|signing|salt|dsn|database[_-]?url|db[_-]?url|conn(?:ection)?[_-]?str|webhook|bearer|jwt|encryption[_-]?key|master[_-]?key|license[_-]?key/i;
+// Any name with KEY or PASS as a word of its own counts (OPENAI_KEY, HMAC_KEY,
+// SMTP_PASS), as well as the names below.
+const SECRET_NAME = /secret|token|passw|pwd|passphrase|(?:^|[_.-])(?:key|pass)(?:$|[_.-])|api[_-]?key|apikey|access[_-]?key|private[_-]?key|credential|auth(?!or)|session|cookie|signing|salt|dsn|database[_-]?url|db[_-]?url|conn(?:ection)?[_-]?str|webhook|bearer|jwt|encryption[_-]?key|master[_-]?key|license[_-]?key/i;
 const NOT_SECRET_NAME = /^(?:XDG_|DBUS_|SSH_AUTH_SOCK$|SSH_AGENT_PID$|GPG_|DESKTOP_SESSION$|SESSION_MANAGER$|TERM_SESSION_ID$|ITERM_SESSION_ID$|TMUX|KITTY_|WINDOWID$)|(?:_SOCK|_SOCKET|_PATH|_DIR|_FILE|_HOME|_PID|_HOST|_PORT|_USER|_USERNAME|_NAME|_EMAIL|_REGION|_ENDPOINT|_ID)$/i;
 const DULL = /^(?:true|false|null|none|yes|no|on|off|localhost|development|production|staging|test|debug|info|warn|warning|error|enabled|disabled)$/i;
 
@@ -502,28 +556,38 @@ function readSmall(path: string): string | null {
 
 const SKIP_DIRS = new Set([".git", "node_modules", "vendor", "dist", "build", "target", ".venv", "venv", "__pycache__", ".next", ".cache", ".turbo", "coverage"]);
 
-// .env files anywhere in a repository, a few levels down, without following links.
-export function dotenvFiles(root: string, limit = { dirs: 2000 }): string[] {
+export const WALK_DEPTH = 12;
+export const WALK_DIRS = 20_000;
+
+// What the .env search could not reach. Filled in by dotenvFiles.
+export interface WalkLimit {
+  dirs: number; // directories left to read
+  cut: Set<string>; // repositories where the search stopped early
+}
+export const walkLimit = (): WalkLimit => ({ dirs: WALK_DIRS, cut: new Set() });
+
+// .env files anywhere in a repository, without following links. The search
+// is bounded; where it stops early, the repository goes in `limit.cut`, so
+// the gap is reported rather than passed over.
+export function dotenvFiles(root: string, limit: WalkLimit = walkLimit()): string[] {
   const out: string[] = [];
   const walk = (dir: string, depth: number): void => {
-    if (depth > 5 || limit.dirs-- <= 0) return;
-    let names: string[];
+    if (depth > WALK_DEPTH || limit.dirs <= 0) {
+      limit.cut.add(root);
+      return;
+    }
+    limit.dirs--;
+    let entries;
     try {
-      names = readdirSync(dir);
+      entries = readdirSync(dir, { withFileTypes: true });
     } catch {
       return;
     }
-    for (const n of names) {
-      const p = join(dir, n);
-      let st;
-      try {
-        st = lstatSync(p);
-      } catch {
-        continue;
-      }
-      if (st.isDirectory()) {
-        if (!SKIP_DIRS.has(n)) walk(p, depth + 1);
-      } else if (st.isFile() && (/^\.env(?:\..+)?$/.test(n) || /.\.env$/.test(n))) out.push(p);
+    for (const d of entries) {
+      // Dirent types come from lstat: a link is neither a directory nor a file here.
+      if (d.isDirectory()) {
+        if (!SKIP_DIRS.has(d.name)) walk(join(dir, d.name), depth + 1);
+      } else if (d.isFile() && (/^\.env(?:\..+)?$/.test(d.name) || /.\.env$/.test(d.name))) out.push(join(dir, d.name));
     }
   };
   walk(root, 0);
@@ -658,24 +722,54 @@ function cover(streams: string[], index: Grams, into = new Map<Exact, Set<number
 }
 
 // What the gram counting looks at in one message: every reading of every field, flattened two ways.
-function streams(fields: Field[]): { streams: string[]; incomplete: boolean } {
+function streams(fields: Field[]): string[] {
   const out: string[] = [];
-  let incomplete = false;
-  for (const f of fields) {
-    const v = views(f.text);
-    incomplete ||= v.incomplete;
-    for (const x of v.list) out.push(compact(x.text), pieces(x.text));
-  }
-  return { streams: out, incomplete };
+  for (const f of fields) for (const x of views(f.text).list) out.push(compact(x.text), pieces(x.text));
+  return out;
 }
 
-// `earlier` is what this side recently sent the same contact, oldest first.
-export function scan(fields: Field[], secrets: Secrets, earlier: Field[][] = []): Finding[] {
-  const found = new Map<string, Finding>();
-  const add = (f: Finding): void => {
-    const k = `${f.field} ${f.rule} ${f.how}`;
-    if (!found.has(k)) found.set(k, f);
-  };
+// Lookups over one set of secrets, built once for it. With a large
+// never-share file there are tens of thousands of values; each reading of a
+// message is then walked once, not searched once per value.
+const KEYLEN = 10;
+interface Prepared {
+  byStart: Map<string, Exact[]>; // values of KEYLEN or more letters and digits, by their first KEYLEN
+  short: Exact[]; // the rest, which only count as written
+  grams: Grams;
+}
+const PREPARED = new WeakMap<Secrets, Prepared>();
+function prepare(s: Secrets): Prepared {
+  const known = PREPARED.get(s);
+  if (known) return known;
+  const byStart = new Map<string, Exact[]>();
+  const short: Exact[] = [];
+  for (const e of s.exact) {
+    if (e.compact.length < KEYLEN) {
+      short.push(e);
+      continue;
+    }
+    const k = e.compact.slice(0, KEYLEN);
+    const list = byStart.get(k);
+    if (list) list.push(e);
+    else byStart.set(k, [e]);
+  }
+  const p = { byStart, short, grams: grams(s.exact) };
+  PREPARED.set(s, p);
+  return p;
+}
+
+// The values whose letters and digits appear whole, in a row, in `flat`.
+function within(flat: string, p: Prepared, into: Set<Exact>, urls: boolean): void {
+  for (let i = 0; i + KEYLEN <= flat.length; i++) {
+    const list = p.byStart.get(flat.slice(i, i + KEYLEN));
+    if (list) for (const e of list) if ((urls || !e.whole) && flat.startsWith(e.compact, i)) into.add(e);
+  }
+}
+
+// The parts of a check that look at one message alone. Returns what the
+// part across messages needs from it.
+function scanOne(fields: Field[], secrets: Secrets, p: Prepared, add: (f: Finding) => void): string[] {
+  const now: string[] = [];
   for (const { field, text } of fields) {
     if (!text) continue;
     const vs = views(text);
@@ -688,13 +782,16 @@ export function scan(fields: Field[], secrets: Secrets, earlier: Field[][] = [])
       }
       const flat = compact(v.text);
       const bits = pieces(v.text);
-      for (const e of secrets.exact) {
+      now.push(flat, bits);
+      // A value written as it is also shows in `flat`, so one walk finds both.
+      const hits = new Set<Exact>();
+      within(flat, p, hits, true);
+      within(bits, p, hits, false);
+      for (const e of p.short) if (v.text.includes(e.value)) hits.add(e);
+      for (const e of hits) {
         const at = v.text.indexOf(e.value);
-        if (at >= 0) {
-          add({ category: e.category, rule: e.rule, field, how: v.how, start: v.how === "plain" ? at : whole[0], end: v.how === "plain" ? at + e.value.length : whole[1] });
-        } else if (e.compact.length >= 10 && (flat.includes(e.compact) || (!e.whole && bits.includes(e.compact)))) {
-          add({ category: e.category, rule: e.rule, field, how: v.how === "plain" ? "split" : `${v.how}>split`, start: whole[0], end: whole[1] });
-        }
+        if (at >= 0) add({ category: e.category, rule: e.rule, field, how: v.how, start: v.how === "plain" ? at : whole[0], end: v.how === "plain" ? at + e.value.length : whole[1] });
+        else add({ category: e.category, rule: e.rule, field, how: v.how === "plain" ? "split" : `${v.how}>split`, start: whole[0], end: whole[1] });
       }
       for (const s of secrets.shingles) {
         for (let i = 0; i + SHINGLE <= flat.length; i++) {
@@ -706,39 +803,70 @@ export function scan(fields: Field[], secrets: Secrets, earlier: Field[][] = [])
       }
     }
   }
+  return now;
+}
+
+// The part of a check that depends on what was sent before. `now` is what
+// scanOne returned for this message.
+function across(fields: Field[], now: string[], p: Prepared, earlier: Field[][], add: (f: Finding) => void): void {
+  const first = fields[0];
+  const where = { field: first?.field ?? "body", start: 0, end: first?.text.length ?? 0 };
   // Short pieces (under six characters) sent one per message: join the
   // key-like runs of the recent messages and this one, and look for ten
   // characters of a value that reach into this message.
   if (earlier.length) {
     const tail = (m: Field[]): string => m.map((f) => pieces(f.text)).join("");
     const before = earlier.map(tail).join("").slice(-HISTORY);
-    const now = tail(fields);
-    const joined = before + now;
-    const first = fields[0];
-    for (const e of secrets.exact) {
-      if (e.compact.length < 16 || e.whole) continue;
-      for (let i = Math.max(0, before.length - COVER + 1); i + COVER <= joined.length && i < joined.length; i++) {
-        const w = joined.slice(i, i + COVER);
-        if (/[a-z]/.test(w) && /[0-9]/.test(w) && e.compact.includes(w)) {
-          add({ category: e.category, rule: e.rule, field: first?.field ?? "body", how: "across messages", start: 0, end: first?.text.length ?? 0 });
-          break;
-        }
+    const joined = before + tail(fields);
+    const done = new Set<Exact>();
+    for (let i = Math.max(0, before.length - COVER + 1); i + COVER <= joined.length; i++) {
+      const w = joined.slice(i, i + COVER);
+      if (!/[a-z]/.test(w) || !/[0-9]/.test(w)) continue;
+      // Every value this window is part of shares a gram with it that has a
+      // letter and a digit; look the values up by that gram.
+      let j = 0;
+      while (j + GRAM <= COVER && !(/[a-z]/.test(w.slice(j, j + GRAM)) && /[0-9]/.test(w.slice(j, j + GRAM)))) j++;
+      for (const { e } of p.grams.get(w.slice(j, j + GRAM)) ?? []) {
+        if (done.has(e) || !e.compact.includes(w)) continue;
+        done.add(e);
+        add({ category: e.category, rule: e.rule, how: "across messages", ...where });
       }
     }
   }
-  const index = grams(secrets.exact);
-  if (index.size) {
-    const now = cover(streams(fields).streams, index);
-    const before = earlier.length ? cover(earlier.flatMap((m) => streams(m).streams), index) : new Map<Exact, Set<number>>();
-    const first = fields[0];
-    for (const [e, here] of now) {
+  if (p.grams.size) {
+    const here = cover(now, p.grams);
+    const before = earlier.length ? cover(earlier.flatMap(streams), p.grams) : new Map<Exact, Set<number>>();
+    for (const [e, got] of here) {
       const was = before.get(e) ?? new Set<number>();
-      const fresh = [...here].filter((k) => !was.has(k));
+      const fresh = [...got].filter((k) => !was.has(k));
       if (!fresh.length || was.size + fresh.length < COVER) continue;
-      add({ category: e.category, rule: e.rule, field: first?.field ?? "body", how: here.size >= COVER ? "part" : "across messages", start: 0, end: first?.text.length ?? 0 });
+      add({ category: e.category, rule: e.rule, how: got.size >= COVER ? "part" : "across messages", ...where });
     }
   }
-  return [...found.values()];
+}
+
+const collector = (): { add: (f: Finding) => void; list: () => Finding[] } => {
+  const found = new Map<string, Finding>();
+  return {
+    add: (f) => {
+      const k = `${f.field} ${f.rule} ${f.how}`;
+      if (!found.has(k)) found.set(k, f);
+    },
+    list: () => [...found.values()],
+  };
+};
+
+// `earlier` is what this side recently sent the same contact, oldest first.
+export function scan(fields: Field[], secrets: Secrets, earlier: Field[][] = []): Finding[] {
+  return scanKeeping(fields, secrets, earlier).findings;
+}
+
+function scanKeeping(fields: Field[], secrets: Secrets, earlier: Field[][]): { findings: Finding[]; now: string[] } {
+  const p = prepare(secrets);
+  const c = collector();
+  const now = scanOne(fields, secrets, p, c.add);
+  across(fields, now, p, earlier, c.add);
+  return { findings: c.list(), now };
 }
 
 // Every string in a body, named by its path. Keys, ids and hashes the
@@ -796,8 +924,25 @@ export interface GuardOptions {
   env?: Record<string, string | undefined>;
   // The repository around this directory has its .env files checked too. null: none.
   cwd?: string | null;
-  // Where warnings go. The off switch is reported here on every use.
+  // Where warnings go. The guard being off is reported here on every use.
   log?: (line: string) => void;
+  // Turns the guard off in this process. Only code that builds the node can
+  // set it (tests). There is no environment variable: an agent with a shell
+  // could set one. People use `cpart guard off`, which needs the passphrase.
+  off?: boolean;
+}
+
+// The owner turning the guard off for a while: signed with the root key, so
+// writing the row into state.db is not enough.
+export const GUARD_OFF_DOMAIN = "guard-off/v1";
+export const guardOffMessage = (rootKey: string, until: number): Uint8Array => utf8(`${rootKey}\n${until}`);
+export const MAX_OFF_MINUTES = 8 * 60;
+
+// What screen() worked out, for the second look inside the commit.
+export interface Ticket {
+  secrets: Secrets;
+  now: string[];
+  earlier: string; // the ids of the earlier messages it looked at
 }
 
 export type PathKind = "repo" | "never-share";
@@ -824,15 +969,32 @@ export class Recheck extends Error {
 // characters and a 32,000 character text). Larger input is held unread.
 const MAX_BODY = 1_000_000;
 
+// A file's identity and last change, to tell when it must be read again.
+function statKey(path: string): string | null {
+  try {
+    const st = lstatSync(path, { bigint: true });
+    return `${st.dev}:${st.ino}:${st.size}:${st.mtimeNs}:${st.ctimeNs}:${st.mode}`;
+  } catch {
+    return null;
+  }
+}
+
 export class Guard {
   private db: DatabaseSync;
   private opts: GuardOptions;
   private now: () => number;
+  private rootKey: string;
+  // Never-share files parsed, by path, kept while the file is unchanged.
+  private parsed = new Map<string, { key: string; result: ReturnType<typeof neverShare> }>();
+  // The last set of secrets, kept while nothing it was built from has changed.
+  private last: { key: string; secrets: Secrets } | null = null;
+  private warnedCut = false;
 
-  constructor(db: DatabaseSync, opts: GuardOptions, now: () => number) {
+  constructor(db: DatabaseSync, opts: GuardOptions, now: () => number, rootKey: string) {
     this.db = db;
     this.opts = opts;
     this.now = now;
+    this.rootKey = rootKey;
     db.exec(`
       CREATE TABLE IF NOT EXISTS held (
         id TEXT PRIMARY KEY, at INTEGER NOT NULL, state TEXT NOT NULL, contact_root TEXT NOT NULL, thread_id TEXT,
@@ -841,6 +1003,9 @@ export class Guard {
       );
       CREATE TABLE IF NOT EXISTS guard_paths (
         kind TEXT NOT NULL, path TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (kind, path)
+      );
+      CREATE TABLE IF NOT EXISTS guard_off (
+        id INTEGER PRIMARY KEY CHECK (id = 1), until INTEGER NOT NULL, sig TEXT NOT NULL, at INTEGER NOT NULL
       );
     `);
     const cols = new Set((db.prepare("PRAGMA table_info(held)").all() as { name: string }[]).map((c) => c.name));
@@ -856,52 +1021,101 @@ export class Guard {
     return this.opts.env ?? process.env;
   }
 
-  // True while CPART_GUARD=off is set in the sending process. For tests and
-  // the red-team comparison only.
+  // When the owner's `cpart guard off` ends, or null when the guard is on.
+  // A row whose signature does not check out is ignored.
+  offUntil(): number | null {
+    const r = this.db.prepare("SELECT until, sig FROM guard_off WHERE id = 1").get() as { until: number; sig: string } | undefined;
+    if (!r || r.until <= this.now()) return null;
+    return verify(this.rootKey, GUARD_OFF_DOMAIN, guardOffMessage(this.rootKey, r.until), r.sig) ? r.until : null;
+  }
+
   get off(): boolean {
-    return this.env.CPART_GUARD === "off";
+    return this.opts.off === true || this.offUntil() !== null;
+  }
+
+  // Store the owner's signed word that the guard is off until `until`.
+  setOff(until: number, sig: string): void {
+    if (!verify(this.rootKey, GUARD_OFF_DOMAIN, guardOffMessage(this.rootKey, until), sig)) throw new Error("that is not signed by this identity's root key");
+    this.db.prepare("INSERT INTO guard_off (id, until, sig, at) VALUES (1, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET until = excluded.until, sig = excluded.sig, at = excluded.at").run(until, sig, this.now());
+  }
+
+  // Turning it back on needs nobody's say.
+  clearOff(): boolean {
+    return this.db.prepare("DELETE FROM guard_off").run().changes > 0;
   }
 
   private log(line: string): void {
     (this.opts.log ?? ((l: string) => console.error(l)))(line);
   }
 
-  // What is checked for exact values right now. Built fresh each time so a
-  // changed .env file counts at once; nothing from it is kept.
-  secrets(): Secrets {
-    const exactList: Exact[] = [...envValues(this.env)];
-    const shingles: Shingles[] = [];
+  // The repositories whose .env files count: the ones added, and the one the sending program runs in.
+  private repos(): string[] {
     const repos = new Set(this.paths("repo"));
     const cwd = this.opts.cwd === undefined ? process.cwd() : this.opts.cwd;
     const here = cwd === null ? null : repoRoot(cwd);
     if (here) repos.add(here);
-    const budget = { dirs: 4000 };
-    for (const repo of repos) for (const f of dotenvFiles(repo, budget)) exactList.push(...dotenvValues(f));
-    for (const file of this.paths("never-share")) {
-      const n = neverShare(file);
-      exactList.push(...n.exact);
-      if (n.shingles) shingles.push(n.shingles);
+    return [...repos];
+  }
+
+  // What is checked for exact values right now. Files are read again when
+  // they change, so an edited .env file counts at once. What was read is kept
+  // in this process's memory while nothing changes, never written anywhere.
+  secrets(): Secrets {
+    const env = envValues(this.env);
+    const limit = walkLimit();
+    const envFiles = this.repos().flatMap((repo) => dotenvFiles(repo, limit));
+    if (limit.cut.size && !this.warnedCut) {
+      this.warnedCut = true;
+      this.log(`Counterpart guard: the .env search stopped early in ${[...limit.cut].join(", ")}. .env files deeper than ${WALK_DEPTH} directories or past the first ${WALK_DIRS} directories are not checked. See: cpart guard`);
     }
+    const files = this.paths("never-share");
+    const key = createHash("sha256")
+      .update(JSON.stringify([env.map((e) => [e.rule, e.value]), envFiles.map((f) => [f, statKey(f)]), files.map((f) => [f, statKey(f)])]))
+      .digest("base64");
+    if (this.last?.key === key) return this.last.secrets;
+
+    const exactList: Exact[] = [...env];
+    for (const f of envFiles) exactList.push(...dotenvValues(f));
+    const shingles: Shingles[] = [];
+    const parsed = new Map<string, { key: string; result: ReturnType<typeof neverShare> }>();
+    for (const file of files) {
+      const k = statKey(file) ?? "";
+      const known = this.parsed.get(file);
+      const result = known && known.key === k ? known.result : neverShare(file);
+      parsed.set(file, { key: k, result });
+      exactList.push(...result.exact);
+      if (result.shingles) shingles.push(result.shingles);
+    }
+    this.parsed = parsed;
     const seen = new Set<string>();
-    return { exact: exactList.filter((e) => !seen.has(e.value) && seen.add(e.value)), shingles };
+    const secrets = { exact: exactList.filter((e) => !seen.has(e.value) && seen.add(e.value)), shingles };
+    this.last = { key, secrets };
+    return secrets;
   }
 
   check(body: unknown, contactRoot?: string): Finding[] {
+    return this.checkKeeping(body, contactRoot).findings;
+  }
+
+  private checkKeeping(body: unknown, contactRoot?: string): { findings: Finding[]; ticket: Ticket | null } {
     const fields = fieldsOf(body);
-    if (fields.reduce((n, f) => n + f.text.length, 0) > MAX_BODY) return [{ category: "too-much-to-check", rule: "guard-limits", field: "body", how: "plain", start: 0, end: 0 }];
+    if (fields.reduce((n, f) => n + f.text.length, 0) > MAX_BODY) return { findings: [{ category: "too-much-to-check", rule: "guard-limits", field: "body", how: "plain", start: 0, end: 0 }], ticket: null };
     // A protection that has stopped working stops everything until the owner
     // restores the file or removes it; otherwise its text would go out unchecked.
     const broken = this.paths("never-share").filter((f) => fileProblem(f) !== null);
-    if (broken.length) return broken.map((f) => ({ category: "never-share-unreadable", rule: `never-share:${f}`, field: "body", how: "plain", start: 0, end: 0 }));
-    return scan(fields, this.secrets(), contactRoot ? this.earlier(contactRoot) : []);
+    if (broken.length) return { findings: broken.map((f) => ({ category: "never-share-unreadable", rule: `never-share:${f}`, field: "body", how: "plain", start: 0, end: 0 })), ticket: null };
+    const secrets = this.secrets();
+    const earlier = contactRoot ? this.earlier(contactRoot) : { fields: [], ids: "" };
+    const r = scanKeeping(fields, secrets, earlier.fields);
+    return { findings: r.findings, ticket: { secrets, now: r.now, earlier: earlier.ids } };
   }
 
   // What this side sent the contact in the last day, up to eight events,
-  // oldest first. Long ones keep their ends, where a piece would join on.
-  private earlier(contactRoot: string): Field[][] {
+  // oldest first, and their ids. Long ones keep their ends, where a piece would join on.
+  private earlier(contactRoot: string): { fields: Field[][]; ids: string } {
     const rows = this.db
-      .prepare("SELECT e.json FROM events e JOIN threads t ON t.id = e.thread_id WHERE e.mine = 1 AND t.contact_root = ? AND e.received_at > ? ORDER BY e.ord DESC LIMIT 8")
-      .all(contactRoot, this.now() - 24 * 3600_000) as { json: string }[];
+      .prepare("SELECT e.id, e.json FROM events e JOIN threads t ON t.id = e.thread_id WHERE e.mine = 1 AND t.contact_root = ? AND e.received_at > ? ORDER BY e.ord DESC LIMIT 8")
+      .all(contactRoot, this.now() - 24 * 3600_000) as { id: string; json: string }[];
     // Newest first, whole, until HISTORY characters; then oldest first.
     const out: Field[][] = [];
     let left = HISTORY;
@@ -916,19 +1130,22 @@ export class Guard {
       left -= n;
       out.push(fields);
     }
-    return out.reverse();
+    return { fields: out.reverse(), ids: rows.map((r) => r.id).join(" ") };
   }
 
   // Throws HeldError, after storing the message, when it must not go out.
-  screen(out: Outgoing): void {
-    const findings = this.check(out.body, out.contactRoot);
+  // Returns what recheck() needs, or null when there is nothing to recheck.
+  screen(out: Outgoing): Ticket | null {
+    const { findings, ticket } = this.checkKeeping(out.body, out.contactRoot);
     const reasons = [...new Set(findings.map((f) => f.category))];
     if (this.off) {
-      this.log(`COUNTERPART OUTBOUND GUARD IS OFF (CPART_GUARD=off). ${out.type} sent unchecked${reasons.length ? `. The guard would have HELD it: ${reasons.join(", ")}` : ""}.`);
+      const until = this.offUntil();
+      const why = until !== null ? `until ${new Date(until).toISOString()}, set with cpart guard off; cpart guard on ends it` : "turned off by the program that runs it";
+      this.log(`COUNTERPART OUTBOUND GUARD IS OFF (${why}). ${out.type} sent unchecked${reasons.length ? `. The guard would have HELD it: ${reasons.join(", ")}` : ""}.`);
       if (reasons.length) this.store(out, "unguarded", reasons, findings, false);
-      return;
+      return null;
     }
-    if (!reasons.length) return;
+    if (!reasons.length) return ticket;
     const id = this.store(out, "held", reasons, findings, true);
     throw new HeldError(id, reasons);
   }
@@ -936,13 +1153,19 @@ export class Guard {
   // The part of the check that depends on what was sent before, run again
   // inside the transaction that commits the message. Two messages screened at
   // the same time could each carry half of a value; the transaction makes the
-  // second one see the first. Throws Recheck, which the caller turns into a
-  // hold once the transaction has been rolled back.
-  recheck(out: Outgoing): void {
-    if (this.off) return;
-    const secrets = this.secrets();
-    const fields = fieldsOf(out.body);
-    const findings = scan(fields, { exact: secrets.exact, shingles: [] }, this.earlier(out.contactRoot)).filter((f) => f.how === "across messages");
+  // second one see the first. It runs inside a write lock, so it does as
+  // little as it can: when no message was sent to this contact since
+  // screen(), there is nothing new to see; otherwise only the part across
+  // messages runs again, with the secrets screen() already read. Throws
+  // Recheck, which the caller turns into a hold once the transaction has been
+  // rolled back.
+  recheck(out: Outgoing, ticket: Ticket | null): void {
+    if (!ticket || this.off) return;
+    const earlier = this.earlier(out.contactRoot);
+    if (earlier.ids === ticket.earlier) return;
+    const c = collector();
+    across(fieldsOf(out.body), ticket.now, prepare(ticket.secrets), earlier.fields, c.add);
+    const findings = c.list();
     if (findings.length) throw new Recheck(out, findings);
   }
 
@@ -1032,6 +1255,9 @@ export class Guard {
       if (p) out.push(`${f} ${p}`);
     }
     for (const r of this.paths("repo")) if (!existsSync(r)) out.push(`${r} cannot be found`);
+    const limit = walkLimit();
+    for (const r of this.repos()) dotenvFiles(r, limit);
+    for (const r of limit.cut) out.push(`${r}: .env files deeper than ${WALK_DEPTH} directories, or past the first ${WALK_DIRS} directories searched, are not checked`);
     return out;
   }
 
