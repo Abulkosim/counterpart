@@ -1,0 +1,462 @@
+{
+  "startedAt": "2026-11-18T06:35:52.183Z",
+  "finishedAt": "2026-11-18T06:40:37.489Z",
+  "relay": {
+    "mode": "container",
+    "url": "ws://host.docker.internal:7447",
+    "spare": "ws://relay-b:7447",
+    "note": "relay in a third container on the devices' network, reached as host.docker.internal; a spare relay in a fourth, reached as relay-b"
+  },
+  "model": "claude-sonnet-5-5",
+  "claudeVersion": "2.1.326 (Claude Code)",
+  "image": "devices-v2:latest",
+  "host": "linux",
+  "setup": {
+    "ok": true,
+    "durationS": 16,
+    "pairing": "short code",
+    "invite": "42-raven-shade@ws://host.docker.internal:7447",
+    "interventions": [
+      {
+        "by": "human",
+        "what": "devcontainer: typed yes to use a relay on a private address (cpart join ... --yes)",
+        "why": "join asks before it uses a relay on a private address; without a terminal it said: cpart: this needs a terminal",
+        "atS": 8
+      }
+    ],
+    "laptop": "ok  relay ws://host.docker.internal:7447 answers\nok  identity h_AbiSHqWKrsToMujed8idGg created in /home/node/.cpart\nok  daemon started, connected\nok  Claude Code now has the counterpart tools. Sessions started from now on see them\nok  Claude Code now has the hooks that tell a session when a reply arrives. Sessions started from now on use them\n\nReady. Next, pair with someone:\n  cpart invite <what you call them>      then send them what it prints\n--- cpart invite devcontainer (exit 0):\nCode for devcontainer: 42-raven-shade\nIt works once, until 06:46. Send devcontainer this line; they run it with the name they call you:\n\n  cpart join 42-raven-shade@ws://host.docker.internal:7447 <your name>\n\nReading it aloud? The number and words are what matter. If devcontainer already uses ws://host.docker.internal:7447, the code alone is enough.\n\nWaiting for devcontainer. Ctrl-C stops waiting; your daemon still finishes the pairing, and cpart status shows how it went.\ndevcontainer proved the code. Waiting for their contact request.\n\nPaired with devcontainer. The code proved who is on each side, so there is no safety code to compare.\n\nNow, in Claude Code or Codex, say something like:\n  ask devcontainer's agent what their API returns for an empty page",
+    "devcontainer": "ok  relay ws://host.docker.internal:7447 answers\nok  identity h_y-FnUkC1Tj6g3iEFLmBUPg created in /home/node/.cpart\nok  daemon started, connected\nok  Claude Code now has the counterpart tools. Sessions started from now on see them\nok  Claude Code now has the hooks that tell a session when a reply arrives. Sessions started from now on use them\n\nChecking the code with ws://host.docker.internal:7447\n\nPaired with laptop. The code proved who is on each side, so there is no safety code to compare.\n\nNow, in Claude Code or Codex, say something like:\n  ask laptop's agent what their API returns for an empty page",
+    "safetyCodesMatch": true,
+    "agentsRegistered": {
+      "laptop": "Claude Code: here",
+      "devcontainer": "Claude Code: here"
+    },
+    "relays": {
+      "laptop": "Your relays (contacts try them in this order):\n  home     ws://host.docker.internal:7447  connected\n\nContacts:\n  devcontainer     reach them on ws://host.docker.internal:7447",
+      "devcontainer": "Your relays (contacts try them in this order):\n  home     ws://host.docker.internal:7447  connected\n\nContacts:\n  laptop           reach them on ws://host.docker.internal:7447"
+    },
+    "error": null
+  },
+  "scenarios": [
+    {
+      "name": "04b-sleep-message",
+      "title": "As 04, with a prompt that says to send a message, since in 04 the agent put the question in the thread goal and the front desk answers only messages",
+      "file": "scripts/devices/scenarios/04b-sleep-message.json",
+      "ok": true,
+      "error": null,
+      "startedAt": "2026-11-18T06:36:28.810Z",
+      "durationS": 120,
+      "timeToFirstAnswerS": 99.5,
+      "timeToAgreementS": null,
+      "interventions": [],
+      "restartedByHand": false,
+      "lost": {
+        "laptopToDevcontainer": 0,
+        "devcontainerToLaptop": 0,
+        "held": 0,
+        "notDelivered": []
+      },
+      "faults": [
+        {
+          "kind": "pause",
+          "device": "laptop",
+          "atS": 10.2
+        },
+        {
+          "kind": "unpause",
+          "device": "laptop",
+          "atS": 100.3
+        }
+      ],
+      "checks": [
+        {
+          "name": "the answer names 600 a minute and the 429",
+          "pass": true,
+          "detail": "1 message(s); first: The limit is 600 requests a minute per API key. [README.md:28 \"600 requests a minute per API key\"]\nGoing over returns HTTP 429 with a Retry-After header in seconds. [README.md:28 \"Past that you get `429` with a `Retry-After` header in seconds\"]\nThe README says to wait that long, because retrying soo"
+        },
+        {
+          "name": "the asker's report to its human has the answer",
+          "pass": true,
+          "detail": "- **Limit:** 600 requests per minute per API key, counted per calendar minute rather than a sliding window.\n- **Over it:** you get HTTP 429 with a `Retry-After` header (seconds until the next minute boundary). Requests are rejected, not queued, and there's no permanent block. Retrying before that time extends the wait."
+        }
+      ],
+      "sessions": [
+        {
+          "id": "asker",
+          "device": "devcontainer",
+          "startedAtS": 2,
+          "durationS": 108,
+          "exit": 0,
+          "counterpartServer": "connected",
+          "turns": 6,
+          "costUsd": 0.0257001,
+          "isError": false,
+          "toolCalls": [
+            "counterpart_open_thread {\"contact\":\"laptop\",\"goal\":\"Find out the stockroom API's rate limit and what happens when a client exceeds it.\"}",
+            "counterpart_say {\"thread\":\"P5X3CbmNyYTj_NySfam_Rg\",\"text\":\"Hi! We call the stockroom API from our sync.js. What is stockroom's rate limit, and what happens when a client goes o",
+            "counterpart_follow {\"thread\":\"P5X3CbmNyYTj_NySfam_Rg\"}",
+            "counterpart_wait_for_reply {\"thread\":\"P5X3CbmNyYTj_NySfam_Rg\",\"after\":4,\"timeout_seconds\":120}",
+            "counterpart_unfollow {\"thread\":\"P5X3CbmNyYTj_NySfam_Rg\"}"
+          ],
+          "toolErrors": [],
+          "finalText": "- **Limit:** 600 requests per minute per API key, counted per calendar minute rather than a sliding window.\n- **Over it:** you get HTTP 429 with a `Retry-After` header (seconds until the next minute boundary). Requests are rejected, not queued, and there's no permanent block. Retrying before that time extends the wait.",
+          "stderr": "",
+          "transcript": "04b-sleep-message-asker.jsonl"
+        }
+      ],
+      "waits": [
+        {
+          "label": "the question, as a message, on the laptop",
+          "device": "laptop",
+          "arrived": true,
+          "afterS": 7,
+          "recovered": false
+        },
+        {
+          "label": "the laptop's answer on the devcontainer",
+          "device": "devcontainer",
+          "arrived": true,
+          "afterS": 5.5,
+          "recovered": false
+        }
+      ],
+      "reconnects": {
+        "laptop": {
+          "lost": 1,
+          "connected": 1,
+          "errors": []
+        },
+        "devcontainer": {
+          "lost": 0,
+          "connected": 0,
+          "errors": []
+        }
+      },
+      "notes": [],
+      "threads": [
+        "P5X3CbmNyYTj_NySfam_Rg"
+      ]
+    },
+    {
+      "name": "06b-relay-restart-message",
+      "title": "As 06, with a prompt that says to send a message, since in 06 the agent put the question in the thread goal and the front desk answers only messages",
+      "file": "scripts/devices/scenarios/06b-relay-restart-message.json",
+      "ok": true,
+      "error": null,
+      "startedAt": "2026-11-18T06:38:30.850Z",
+      "durationS": 50,
+      "timeToFirstAnswerS": 28.3,
+      "timeToAgreementS": null,
+      "interventions": [],
+      "restartedByHand": false,
+      "lost": {
+        "laptopToDevcontainer": 0,
+        "devcontainerToLaptop": 0,
+        "held": 0,
+        "notDelivered": []
+      },
+      "faults": [
+        {
+          "kind": "relay_restart",
+          "device": null,
+          "atS": 13.7
+        }
+      ],
+      "checks": [
+        {
+          "name": "the answer names 50 and 15 minutes",
+          "pass": true,
+          "detail": "1 message(s); first: Default page_size is 50 when the client doesn't specify one. [README.md:11 \"default 50\"]\nCursors expire after 15 minutes, per the README. [README.md:12 \"Cursors expire after 15 minutes\"]\nNote: server.js does not appear to enforce that expiry. A cursor is just the last SKU, looked up by exact match. "
+        },
+        {
+          "name": "the asker's report to its human has the answer",
+          "pass": true,
+          "detail": "- Default `page_size` is 50 (max 200; larger values get a 400, not clamped).\n- Cursors are documented to expire after 15 minutes, but their `server.js` doesn't enforce it (a cursor is just the last SKU), so rely on 15 minutes at most."
+        }
+      ],
+      "sessions": [
+        {
+          "id": "asker",
+          "device": "devcontainer",
+          "startedAtS": 2,
+          "durationS": 38,
+          "exit": 0,
+          "counterpartServer": "connected",
+          "turns": 6,
+          "costUsd": 0.0251281,
+          "isError": false,
+          "toolCalls": [
+            "counterpart_open_thread {\"contact\":\"laptop\",\"goal\":\"Clarify stockroom API pagination for sync.js: default page_size and cursor validity duration.\"}",
+            "counterpart_say {\"thread\":\"QXlt2E8yP8iUdRcGjIDzkQ\",\"text\":\"Hi! Our sync.js pages through your stockroom API. Two questions: (1) What is the default page_size when the client do",
+            "counterpart_follow {\"thread\":\"QXlt2E8yP8iUdRcGjIDzkQ\"}",
+            "counterpart_wait_for_reply {\"thread\":\"QXlt2E8yP8iUdRcGjIDzkQ\",\"after\":7,\"timeout_seconds\":120}",
+            "counterpart_unfollow {\"thread\":\"QXlt2E8yP8iUdRcGjIDzkQ\"}"
+          ],
+          "toolErrors": [],
+          "finalText": "- Default `page_size` is 50 (max 200; larger values get a 400, not clamped).\n- Cursors are documented to expire after 15 minutes, but their `server.js` doesn't enforce it (a cursor is just the last SKU), so rely on 15 minutes at most.",
+          "stderr": "",
+          "transcript": "06b-relay-restart-message-asker.jsonl"
+        }
+      ],
+      "waits": [
+        {
+          "label": "the question, as a message, on the laptop",
+          "device": "laptop",
+          "arrived": true,
+          "afterS": 7.6,
+          "recovered": false
+        },
+        {
+          "label": "the laptop's answer on the devcontainer",
+          "device": "devcontainer",
+          "arrived": true,
+          "afterS": 9.2,
+          "recovered": false
+        }
+      ],
+      "reconnects": {
+        "laptop": {
+          "lost": 1,
+          "connected": 1,
+          "errors": []
+        },
+        "devcontainer": {
+          "lost": 1,
+          "connected": 1,
+          "errors": []
+        }
+      },
+      "notes": [],
+      "threads": [
+        "QXlt2E8yP8iUdRcGjIDzkQ"
+      ]
+    },
+    {
+      "name": "08a-relay-add-both",
+      "title": "No model: both people add the same second relay a second apart; how long until each side knows and has confirmed the other's new list",
+      "file": "scripts/devices/scenarios/08a-relay-add-both.json",
+      "ok": true,
+      "error": null,
+      "startedAt": "2026-11-18T06:39:22.382Z",
+      "durationS": 20,
+      "timeToFirstAnswerS": null,
+      "timeToAgreementS": null,
+      "interventions": [
+        {
+          "by": "human",
+          "what": "devcontainer: cpart relay add ws://relay-b:7447",
+          "why": "a second relay",
+          "atS": 0.8
+        },
+        {
+          "by": "human",
+          "what": "laptop: cpart relay add ws://relay-b:7447",
+          "why": "a second relay",
+          "atS": 1.9
+        }
+      ],
+      "restartedByHand": false,
+      "lost": {
+        "laptopToDevcontainer": 0,
+        "devcontainerToLaptop": 0,
+        "held": 0,
+        "notDelivered": []
+      },
+      "faults": [],
+      "checks": [],
+      "sessions": [],
+      "waits": [
+        {
+          "label": "the laptop holds the devcontainer's new list",
+          "device": "laptop",
+          "arrived": true,
+          "afterS": 0.8,
+          "recovered": false
+        },
+        {
+          "label": "the devcontainer holds the laptop's new list",
+          "device": "devcontainer",
+          "arrived": true,
+          "afterS": 6.7,
+          "recovered": false
+        },
+        {
+          "label": "the devcontainer has confirmed the laptop's new list",
+          "device": "laptop",
+          "arrived": true,
+          "afterS": 0.8,
+          "recovered": false
+        },
+        {
+          "label": "the laptop has confirmed the devcontainer's new list",
+          "device": "devcontainer",
+          "arrived": true,
+          "afterS": 1,
+          "recovered": false
+        }
+      ],
+      "reconnects": {
+        "laptop": {
+          "lost": 0,
+          "connected": 1,
+          "errors": []
+        },
+        "devcontainer": {
+          "lost": 0,
+          "connected": 1,
+          "errors": []
+        }
+      },
+      "notes": [
+        "devcontainer: cpart relay add ws://relay-b:7447 exited 0 after 0.8s: Added ws://relay-b:7447. Your daemon connects to it and tells your contacts.",
+        "laptop: cpart relay add ws://relay-b:7447 exited 0 after 1s: Added ws://relay-b:7447. Your daemon connects to it and tells your contacts.",
+        "laptop: cpart --json relay list exited 0 after 0.9s: {\"relays\":[{\"url\":\"ws://host.docker.internal:7447\",\"as\":null,\"home\":true,\"leaving\":false,\"connected\":true,\"at\":1794983945858,\"error\":null},{\"url\":\"ws://relay-b:7447\",\"as\":null,\"home\":false,\"leaving\":false,\"connected\":true,\"at\":1794983964277,\"error\":null}],\"version\":1794983964176,\"contacts\":[{\"name\":\"devcontainer\",\"relays\":[\"ws://host.docker.internal:7447\",\"ws://relay-b:7447\"],\"version\":1794983963127,\"seen\":1794983964176,\"confirmed\":true}]}",
+        "devcontainer: cpart --json relay list exited 0 after 0.9s: {\"relays\":[{\"url\":\"ws://host.docker.internal:7447\",\"as\":null,\"home\":true,\"leaving\":false,\"connected\":true,\"at\":1794983938683,\"error\":null},{\"url\":\"ws://relay-b:7447\",\"as\":null,\"home\":false,\"leaving\":false,\"connected\":true,\"at\":1794983963185,\"error\":null}],\"version\":1794983963127,\"contacts\":[{\"name\":\"laptop\",\"relays\":[\"ws://host.docker.internal:7447\",\"ws://relay-b:7447\"],\"version\":1794983964176,\"seen\":1794983963127,\"confirmed\":true}]}"
+      ],
+      "threads": []
+    },
+    {
+      "name": "08-spare-relay",
+      "title": "Both devices add a second relay; the home relay is killed for good while the front desk is answering, and the conversation goes on over the other",
+      "file": "scripts/devices/scenarios/08-spare-relay.json",
+      "ok": true,
+      "error": null,
+      "startedAt": "2026-11-18T06:39:44.502Z",
+      "durationS": 53,
+      "timeToFirstAnswerS": 11.7,
+      "timeToAgreementS": null,
+      "interventions": [
+        {
+          "by": "human",
+          "what": "devcontainer: cpart relay add ws://relay-b:7447",
+          "why": "a second relay, so one going down does not stop the conversation",
+          "atS": 3.3
+        },
+        {
+          "by": "human",
+          "what": "laptop: cpart relay add ws://relay-b:7447",
+          "why": "a second relay, so one going down does not stop the conversation",
+          "atS": 4.3
+        }
+      ],
+      "restartedByHand": false,
+      "lost": {
+        "laptopToDevcontainer": 0,
+        "devcontainerToLaptop": 0,
+        "held": 0,
+        "notDelivered": []
+      },
+      "faults": [
+        {
+          "kind": "relay_stop (kill)",
+          "device": null,
+          "atS": 17.3
+        }
+      ],
+      "checks": [
+        {
+          "name": "the answer names the 404 and its code",
+          "pass": true,
+          "detail": "2 message(s); first: Unknown SKU on GET /v1/items/:sku returns HTTP 404 with body {\"error\":{\"code\":\"item_not_found\",\"message\":\"no item with that SKU\"}}. [README.md:24 \"404 {\"error\":{\"code\":\"item_not_found\",\"message\":\"no item with that SKU\"}}\"]\nThe server code does the same: status 404, code item_not_found. [server.js:27"
+        },
+        {
+          "name": "the asker's report to its human has the answer",
+          "pass": true,
+          "detail": "The stockroom agent replied. A missing SKU is a plain `404` with a stable error code. No files were edited.\n\n**What stockroom returns**\n- `GET /v1/items/:sku` for an unknown SKU returns `404` with `{\"error\":{\"code\":\"item_not_found\",\"message\":\"no item with that SKU\"}}`.\n- It never returns a `200` with an empty body or null for a single-item lookup.\n- Match on `error.code`, because the codes are sta"
+        }
+      ],
+      "sessions": [
+        {
+          "id": "asker",
+          "device": "devcontainer",
+          "startedAtS": 6,
+          "durationS": 26,
+          "exit": 0,
+          "counterpartServer": "connected",
+          "turns": 8,
+          "costUsd": 0.0390623,
+          "isError": false,
+          "toolCalls": [
+            "counterpart_open_thread {\"contact\":\"laptop\",\"goal\":\"Find out how the stockroom API responds when a SKU that does not exist is requested, so sync.js can handle it correctly.\"}",
+            "Grep {\"pattern\":\"stockroom|fetch|status|404\",\"path\":\"/home/node/project/sync.js\",\"output_mode\":\"content\"}",
+            "counterpart_say {\"thread\":\"eW70yhU62fDEhFg9cH4zHg\",\"text\":\"Hi! Our sync.js reads items from the stockroom API. What does stockroom return when a SKU that does not exist is requ",
+            "counterpart_follow {\"thread\":\"eW70yhU62fDEhFg9cH4zHg\"}",
+            "counterpart_wait_for_reply {\"thread\":\"eW70yhU62fDEhFg9cH4zHg\",\"after\":12,\"timeout_seconds\":120}",
+            "Read {\"file_path\":\"/home/node/project/sync.js\"}",
+            "counterpart_unfollow {\"thread\":\"eW70yhU62fDEhFg9cH4zHg\"}"
+          ],
+          "toolErrors": [],
+          "finalText": "The stockroom agent replied. A missing SKU is a plain `404` with a stable error code. No files were edited.\n\n**What stockroom returns**\n- `GET /v1/items/:sku` for an unknown SKU returns `404` with `{\"error\":{\"code\":\"item_not_found\",\"message\":\"no item with that SKU\"}}`.\n- It never returns a `200` with an empty body or null for a single-item lookup.\n- Match on `error.code`, because the codes are stable and the messages are not.\n- A SKU with characters outside `A-Z`, `0-9` and `-` (lowercase, for example) doesn't match the item route. It gets `404` with code `not_found` (\"no such path\"), so treat that code as a bad SKU or path.\n- A missing or unknown API key returns `401` with code `unauthorized`.\n- Rate limiting returns `429` with a `Retry-After` header in seconds.\n- The list endpoint `/v1/items` returns `200` with empty `items` and a null `next_cursor` when there is nothing to list. It does not return a `404`.\n\n**What sync.js should handle**\n\nRight now `sync.js` only calls the list endpoint, never `/v1/items/:sku`. It also has gaps that matter more than the unknown-SKU case:\n\n1. **No `res.ok` check (line 13).** On a `401`, `429` or `404`, `page.items` is undefined and `all.push(...page.items)` throws an unhelpful `TypeError`. Check the status and read `error.code` first.\n2. **`429`.** Wait for `Retry-After` seconds and retry.\n3. **`401`.** Fail fast with a clear message about `STOCKROOM_KEY`.\n4. **Null `next_cursor` (line 16).** The loop ends only when `cursor === undefined`. The API returns `null` for the last page, so the loop would never end, and the next request would send `cursor=null`. Use `while (cursor != null)` or `while (cursor)`.\n5. **Unhandled rejection (line 20).** `pullAll()` has no `.catch`, so errors surface as unhandled rejections. Add a `.catch` that logs the error and exits non-zero.\n6. **If you add per-SKU lookups later.** Treat `404` with `item_not_found` as \"item doesn't exist\" (skip or delete locally). Treat `not_found` as a malformed SKU, and make sure you uppercase or validate SKUs first.\n\nThe reply cited README.md and server.js at commit `1dae4cb5fd06`. I haven't checked those against the stockroom repo myself.\n\nWant me to make these changes to `sync.js`?",
+          "stderr": "",
+          "transcript": "08-spare-relay-asker.jsonl"
+        }
+      ],
+      "waits": [
+        {
+          "label": "the laptop knows the devcontainer's new list and has its confirmation",
+          "device": "laptop",
+          "arrived": true,
+          "afterS": 0.9,
+          "recovered": false
+        },
+        {
+          "label": "the devcontainer knows the laptop's new list and has its confirmation",
+          "device": "devcontainer",
+          "arrived": true,
+          "afterS": 1.1,
+          "recovered": false
+        },
+        {
+          "label": "the question, as a message, on the laptop",
+          "device": "laptop",
+          "arrived": true,
+          "afterS": 7.3,
+          "recovered": false
+        },
+        {
+          "label": "the laptop's answer on the devcontainer, with the home relay dead",
+          "device": "devcontainer",
+          "arrived": true,
+          "afterS": 4.6,
+          "recovered": false
+        },
+        {
+          "label": "a message from the laptop after the answer",
+          "device": "devcontainer",
+          "arrived": true,
+          "afterS": 0,
+          "recovered": false
+        },
+        {
+          "label": "a message from the devcontainer after the answer",
+          "device": "laptop",
+          "arrived": true,
+          "afterS": 0,
+          "recovered": false
+        }
+      ],
+      "reconnects": {
+        "laptop": {
+          "lost": 1,
+          "connected": 1,
+          "errors": []
+        },
+        "devcontainer": {
+          "lost": 1,
+          "connected": 0,
+          "errors": []
+        }
+      },
+      "notes": [
+        "devcontainer: cpart relay add ws://relay-b:7447 exited 0 after 1s: ws://relay-b:7447 is already one of your relays.",
+        "laptop: cpart relay add ws://relay-b:7447 exited 0 after 1s: ws://relay-b:7447 is already one of your relays.",
+        "devcontainer: cpart relay list exited 0 after 0.9s: Your relays (contacts try them in this order): home ws://host.docker.internal:7447 not connected: connection closed ws://relay-b:7447 connected Contacts: laptop reach them on ws://host.docker.internal:7447, ws://relay-b:7447 has your current list",
+        "after the steps the rig undid: started the relay"
+      ],
+      "threads": [
+        "eW70yhU62fDEhFg9cH4zHg"
+      ]
+    }
+  ],
+  "fatal": null
+}
