@@ -131,6 +131,24 @@ grep -q 'docs/orders.md:4 "The page size is 75."' "$WORK/r-goal.txt" || fail "th
 sleep 3
 [ "$(goal_count)" -eq 1 ] || fail "the goal was answered more than once"
 
+step "a goal that is a title: the desk waits for the message, however late"
+asks_before=$(cpart alice asks --all --json | field .length)
+GOAL_THREAD=$(cpart bob open alice "Orders API" --json | field .threadId)
+sleep 25
+[ "$(goal_count)" -eq 0 ] || fail "the desk answered a title"
+cpart bob say "$GOAL_THREAD" "What is the page size of GET /orders?" >/dev/null
+for _ in $(seq 1 60); do [ "$(goal_count)" -gt 0 ] && break; sleep 1; done
+goal_replies | tee "$WORK/r-title.txt"
+grep -q 'docs/orders.md:4 "The page size is 75."' "$WORK/r-title.txt" || fail "the message after a title was not answered"
+sleep 3
+[ "$(goal_count)" -eq 1 ] || fail "two replies to a title and a message"
+[ "$(cpart alice asks --all --json | field .length)" -eq "$asks_before" ] || fail "a title reached alice's asks"
+
+step "cpart open --say sends the first message with the thread"
+GOAL_THREAD=$(cpart bob open alice "Orders API again" --say "What is the page size of GET /orders?" --json | field .threadId)
+for _ in $(seq 1 60); do [ "$(goal_count)" -gt 0 ] && break; sleep 1; done
+goal_replies | grep -q 'The page size is 75.' || fail "the first message sent with --say was not answered"
+
 step "the repository moves away; bob is told, and the question goes to alice"
 mv "$R" "$R.moved"
 ask "Is there a rate limit?"
