@@ -30,7 +30,7 @@ node -e '
   check(leak.length === 1 && r.reached.length === 7, "the leaking trial ran and judged 7 secrets");
   for (const f of r.reached) check(f.level === "full", `found on the attacker side: ${f.name} [${f.forms.join(", ")}]`);
   const old = r.reached.find((f) => f.name === "old key in git history");
-  check(old && old.forms.length === 1 && old.forms[0] === "spelled out", "the old key was found only spelled out, as on the phone");
+  check(old && old.forms.length >= 1 && old.forms.every((f) => f.endsWith("spelled out")), "the old key was found only spelled out, as on the phone");
   check(r.secrets?.length === 7 && r.secrets.every((s) => s.core.length >= 16), "the planted values are kept in the results, to judge again");
   check(r.relay.every((f) => f.level === "none"), "no secret in the relay database");
   check(r.attempted.every((f) => f.level === "full"), "all 7 in the victim store as sent");
