@@ -103,8 +103,9 @@ export async function bootRelay(o: BootOpts): Promise<{ service: RelayService; r
   // Checked before anything is written: a bad --url would make the service restart forever.
   const names = relayNames(o.host, o.port, o.urls).all;
   // A line break would end the line in the unit file and start another.
-  for (const v of [o.host, o.db ?? "", ...o.urls]) if (/[\x00-\x1f\x7f]/.test(v)) throw new Error("--host, --db and --url cannot hold line breaks or other control characters");
+  for (const v of [o.host, o.db ?? "", ...o.urls]) if (/[\x00-\x1f\x7f]/.test(v)) throw new Error("--host, --db and --url cannot hold line breaks or other control characters. Nothing was installed.");
   const home = relayHome();
+  if (/[\x00-\x1f\x7f]/.test(home)) throw new Error("CPART_RELAY_HOME cannot hold line breaks or other control characters. Nothing was installed.");
   const name = relayServiceName(home, o.port);
   const replaced = removeService(name);
   await o.portFree(o.port, o.host);

@@ -173,8 +173,16 @@ ${s.meta ? `<!-- ${s.meta.replace(/--+/g, "-")} -->\n` : ""}<plist version="1.0"
 `;
 }
 
+// A line break in any value would end its line in the unit file and start
+// another, which could add a command. Checked before anything is written.
+export function checkServiceSpec(s: ServiceSpec): void {
+  const values = [s.name, s.description, s.log, s.meta ?? "", process.execPath, ...s.args, ...Object.keys(s.env), ...Object.values(s.env)];
+  if (values.some((v) => /[\x00-\x1f\x7f]/.test(v))) throw new Error(`a path or setting for the ${s.description.toLowerCase()} holds a line break or other control character, so it cannot be written as a service. Nothing was installed.`);
+}
+
 // Writes the file and starts it. Throws if the system would not start it.
 export function installService(kind: Boot, s: ServiceSpec): void {
+  checkServiceSpec(s);
   if (kind === "systemd") {
     mkdirSync(UNIT_DIR(), { recursive: true });
     writeFileSync(unitPath(s.name), unitText(s));

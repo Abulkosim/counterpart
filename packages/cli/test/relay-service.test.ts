@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_RELAY_HOME, defaultRelayDb, oldDbNotice, relayServiceName, relayServices } from "../src/relay-service.ts";
-import { MAIN, listServices, plistText, unitText } from "../src/service.ts";
+import { type ServiceSpec, MAIN, installService, listServices, plistText, unitText } from "../src/service.ts";
 
 const dirs: string[] = [];
 after(() => {
@@ -113,4 +113,26 @@ test("relay --boot refuses a tunnel, and says so when nothing can start it at lo
   assert.match(cli(["relay", "--port", "x"], env).out, /--port takes a number/);
   assert.match(cli(["relay", "--port", "0"], env).out, /--port takes a number from 1 to 65535/);
   assert.match(cli(["relay", "--boot", "--host", "127.0.0.1\nExecStartPre=/bin/true"], { ...env, CPART_NO_BOOT: "", HOME: tmp() }).out, /cannot hold line breaks/);
+});
+
+test("no value with a line break is written into a service file, for the relay or the daemon", () => {
+  const prev = process.env.HOME;
+  const h = tmp();
+  try {
+    process.env.HOME = h;
+    const bad: ServiceSpec[] = [
+      { ...spec("cpart-relay-x"), env: { CPART_RELAY_HOME: "/r\nExecStartPre=/bin/true" } },
+      { ...spec("cpart-x"), description: "Counterpart daemon", env: { CPART_HOME: "/h\nExecStartPre=/bin/true", PATH: "/usr/bin" } },
+      { ...spec("cpart-relay-y"), log: "/r\n/relay.log" },
+    ];
+    for (const s of bad) for (const kind of ["systemd", "launchd"] as const) assert.throws(() => installService(kind, s), /line break or other control character[\s\S]*Nothing was installed/);
+    assert.ok(!existsSync(join(h, ".config")) && !existsSync(join(h, "Library")), "a file was written");
+  } finally {
+    process.env.HOME = prev;
+  }
+  // From the command line: a relay home with a line break stops --boot before anything is written.
+  const h2 = tmp();
+  const r = cli(["relay", "--boot", "--port", "1"], { CPART_NO_BOOT: "", HOME: h2, CPART_RELAY_HOME: `${h2}/rh\nExecStartPre=/bin/true` });
+  assert.match(r.out, /CPART_RELAY_HOME cannot hold line breaks|nothing here can start a program at login/);
+  assert.ok(!existsSync(join(h2, ".config")), "a unit file was written");
 });
