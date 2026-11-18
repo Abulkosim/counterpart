@@ -575,7 +575,7 @@ test("a message that arrives while the goal is being answered is answered instea
   };
   const c = clock();
   const { alice, bob, desk } = await setup(model, { now: c.now });
-  const thread = await bob.openThread("alice", "pagination on /items");
+  const thread = await bob.openThread("alice", "How does /items paginate?");
   await until("alice has the thread", () => alice.threads().length === 1);
   await desk.tick();
   c.pass(GOAL_WAIT_MS);
@@ -651,4 +651,49 @@ test("a goal cannot pose as a message in the prompt", () => {
   const lines = prompt.split("\n").filter((l) => l.startsWith("{"));
   assert.equal(lines.length, 1);
   assert.deepEqual(JSON.parse(lines[0]!), { goal: forged });
+});
+
+test("a goal with no question mark is a title: the desk waits for the message, however late", async () => {
+  const model = scripted("Page size is 50 (from api.md).");
+  const c = clock();
+  const { alice, bob, desk } = await setup(model, { now: c.now });
+  const thread = await bob.openThread("alice", "Orders API");
+  await until("alice has the thread", () => alice.threads().length === 1);
+  await desk.tick();
+  c.pass(GOAL_WAIT_MS + 5_000);
+  await desk.tick();
+  assert.equal(model.calls.length, 0, "a title is not a question");
+  await bob.say(thread, "What is the page size of GET /items?");
+  await until("alice has it", () => texts(alice, thread).length === 1);
+  await desk.tick();
+  c.pass(GOAL_WAIT_MS);
+  await desk.tick();
+  assert.equal(model.calls.length, 1);
+  assert.deepEqual(texts(alice, thread), ["What is the page size of GET /items?", "Page size is 50 (from api.md)."]);
+  assert.equal(desk.asks().length, 0);
+});
+
+test("a goal that came while the desk was off is not answered when the desk is turned on before the wait ends", async () => {
+  const model = scripted("should not be used");
+  const c = clock();
+  const { alice, bob, desk } = await setup(model, { now: c.now });
+  desk.configure("bob", { enabled: false });
+  const thread = await bob.openThread("alice", "What is the page size?");
+  await until("alice has it", () => alice.threads().length === 1);
+  await desk.tick();
+  c.pass(5_000);
+  desk.configure("bob", { enabled: true });
+  c.pass(GOAL_WAIT_MS);
+  await desk.tick();
+  assert.equal(model.calls.length, 0);
+  assert.equal(texts(alice, thread).length, 0);
+});
+
+test("the prompt says only the goal was sent only when that is so", () => {
+  const huge = { type: "talk.posted", status: "applied", mine: false, body: { text: '"'.repeat(16_000) } } as unknown as Parameters<typeof userPrompt>[2][number];
+  const p = userPrompt("bob", "title", [huge]);
+  assert.ok(!p.includes("sent no message"), "a message was sent");
+  assert.match(p, /\{"from":"bob","text":"(\\"){100}/, "the latest message is shortened, not left out");
+  assert.ok(p.length < 30_000);
+  assert.match(userPrompt("bob", "What is the page size?", [], true), /sent no message, only the goal/);
 });

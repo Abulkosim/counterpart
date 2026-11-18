@@ -45,6 +45,11 @@ const ROUNDS = 3;
 // send their first message one model turn later; this keeps the desk from
 // answering the goal and then the message.
 export const GOAL_WAIT_MS = 20_000;
+// Only a goal with a question mark is taken as a question. Agents are told to
+// make the goal a short title, like "Orders API", and to ask in a message; a
+// title answered on its own gets a reply that answers nothing and passes the
+// owner a question nobody asked.
+export const goalAsks = (goal: string): boolean => /[?\uff1f\u061f]/.test(goal);
 
 // Answers a contact's questions while the owner is away, from the approved
 // bundle or the files the owner shared from a repository, nothing else. It replies in threads the contact opened, never in ones the
@@ -223,8 +228,9 @@ export class FrontDesk {
       const threads = new Set<string>();
       for (const e of batch) {
         if (!e.mine && e.type === "talk.posted") threads.add(e.threadId);
-        // A thread the contact opened: if no message follows, its goal is the question.
-        if (!e.mine && e.type === "thread.opened") this.db.prepare("INSERT OR IGNORE INTO goal_wait (thread_id, due) VALUES (?, ?)").run(e.threadId, this.now() + this.goalWaitMs);
+        // A thread the contact opened while the desk was on for them: if no
+        // message follows, a goal that asks something is the question.
+        if (!e.mine && e.type === "thread.opened" && this.waitsForGoal(e.threadId)) this.db.prepare("INSERT OR IGNORE INTO goal_wait (thread_id, due) VALUES (?, ?)").run(e.threadId, this.now() + this.goalWaitMs);
         cursor = e.ord!;
       }
       // If we crash mid-batch the cursor has not moved and these threads are
@@ -241,6 +247,11 @@ export class FrontDesk {
       await this.answer(thread_id, true);
       this.db.prepare("DELETE FROM goal_wait WHERE thread_id = ?").run(thread_id);
     }
+  }
+
+  private waitsForGoal(threadId: string): boolean {
+    const t = this.node.threads().find((x) => x.id === threadId);
+    return !!t && !t.openedByMe && goalAsks(t.goal) && this.config(t.contact).enabled;
   }
 
   private async answer(threadId: string, goalDue = false): Promise<void> {
@@ -277,7 +288,7 @@ export class FrontDesk {
     // from the contact: no message, no proposal. It is untrusted text from the
     // contact, like a message, and takes a slot like one.
     const opened = log.find((e) => e.type === "thread.opened");
-    const goalOnly = waiting.length === 0 && goalDue && !!opened && !opened.mine && opened.ord! > use.answered_ord && log.filter((e) => !e.mine).length === 1;
+    const goalOnly = waiting.length === 0 && goalDue && goalAsks(thread.goal) && !!opened && !opened.mine && opened.ord! > use.answered_ord && log.filter((e) => !e.mine).length === 1;
     if (waiting.length === 0 && !goalOnly) return false;
     const question = goalOnly ? opened! : waiting.at(-1)!;
     const inputOrd = log.at(-1)!.ord!;
@@ -333,7 +344,7 @@ export class FrontDesk {
 
     let raw: string;
     try {
-      raw = await this.model({ system: material.system, prompt: userPrompt(contact.name, thread.goal, log) });
+      raw = await this.model({ system: material.system, prompt: userPrompt(contact.name, thread.goal, log, goalOnly) });
     } catch (e) {
       // The slot stays spent: a peer must not get free retries by making the model fail.
       record("failed", { bundleHash: material.hash, detail: (e as Error).message.slice(0, 300) });

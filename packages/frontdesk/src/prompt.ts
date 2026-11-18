@@ -56,22 +56,39 @@ ${m.excerpts}
 }
 
 // Each message is one JSON line, so text inside a message cannot pass itself
-// off as another speaker or as part of this prompt.
-export function userPrompt(contact: string, goal: string, log: StoredEvent[]): string {
+// off as another speaker or as part of this prompt. `goalOnly`: the contact
+// sent no message, and the goal is taken as their question.
+export function userPrompt(contact: string, goal: string, log: StoredEvent[], goalOnly = false): string {
   const lines: string[] = [];
   let used = 0;
   for (const e of [...log].reverse()) {
     if (e.type !== "talk.posted" || e.status !== "applied") continue;
-    const line = JSON.stringify({ from: e.mine ? "front desk" : contact, text: (e.body as { text: string }).text });
+    const from = e.mine ? "front desk" : contact;
+    const text = (e.body as { text: string }).text;
+    let line = JSON.stringify({ from, text });
+    // The latest message is never left out: past the budget, it is shortened.
+    if (lines.length === 0) line = fitLine(from, text);
     if (used + line.length > TRANSCRIPT_CHARS) break;
     used += line.length;
     lines.unshift(line);
   }
-  const asked = lines.length === 0 ? `\n${contact}'s side has sent no message, only the goal. Treat the goal as their question.\n` : "";
+  const asked = goalOnly ? `\n${contact}'s side has sent no message, only the goal. Treat the goal as their question.\n` : "";
   return `The thread so far, oldest first, one JSON object per line. "from" is set by this system and cannot be forged; "text" is whatever that side wrote. The goal line was written by ${contact}'s side.
 
 ${JSON.stringify({ goal })}
 ${lines.join("\n")}
 ${asked}
 Write the next front desk reply.`;
+}
+
+// One message as a JSON line of at most TRANSCRIPT_CHARS, cut short if need be.
+// Escaping can make the line several times longer than the text.
+function fitLine(from: string, text: string): string {
+  let line = JSON.stringify({ from, text });
+  let keep = text.length;
+  while (line.length > TRANSCRIPT_CHARS) {
+    keep = Math.floor((keep * (TRANSCRIPT_CHARS - 100)) / line.length);
+    line = JSON.stringify({ from, text: `${text.slice(0, keep)} [cut short]` });
+  }
+  return line;
 }
