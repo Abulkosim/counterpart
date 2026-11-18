@@ -9,7 +9,8 @@ export const RELAY_SUBCOMMANDS = ["add", "remove", "move", "list"];
 export const RELAY_USAGE = `  cpart relay list                                                your relays, and which contacts know your current list
   cpart relay add <url> [--as <url>]                              use another relay too. Contacts are told. --as: the address
                                                                   others use for the same relay, when you reach it another way
-  cpart relay remove <url>                                        stop using a relay. Contacts are told
+  cpart relay remove <url> [--yes]                                stop using a relay. Contacts are told. Asks for --yes if a
+                                                                  contact shares no other relay with you
   cpart relay move <url> [--as <url>] [--wait 60]                 make another relay your home: add it, tell contacts, and drop
                                                                   the old one once every contact has confirmed`;
 
@@ -155,9 +156,19 @@ export async function relayCommand(node: Counterpart, args: string[], io: Io): P
 
   if (sub === "remove") {
     const u = await need("remove");
+    // Contacts this relay is the only way to. They could not be told either.
+    const only = book.onlyVia(active(), u);
+    const cut = active().filter((c) => only.includes(c.rootKey)).map((c) => safe(c.name));
+    if (cut.length && !io.flags.yes)
+      throw new Error(
+        `${cut.join(", ")} share${cut.length > 1 ? "" : "s"} no other relay with you. Without ${safe(u)} your messages would not reach them, and they could not be told it is gone. Nothing was changed.\nTo keep them, have them add one of your other relays first. To remove it anyway: cpart relay remove ${safe(u)} --yes`,
+      );
     const r = book.remove(u, Date.now());
     const d = await io.ensureDaemon();
-    return io.out(`Removed ${safe(r.url)}. Your daemon disconnects from it and tells your contacts.${d ? "" : " It is not running: start it with cpart up."}`, { removed: r.url, relays: book.mine() });
+    return io.out(
+      `Removed ${safe(r.url)}. Your daemon disconnects from it and tells ${cut.length ? `contacts who share another relay with you. Not told, and now out of reach: ${cut.join(", ")}.` : "your contacts."}${d ? "" : " It is not running: start it with cpart up."}`,
+      { removed: r.url, relays: book.mine(), unreachable: cut },
+    );
   }
 
   if (sub === "move") {

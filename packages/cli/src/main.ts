@@ -873,7 +873,7 @@ async function main(): Promise<void> {
       return;
     }
     case "relay":
-      return relayCommand(node, args, { out, note, safe, ensureDaemon, flags: { ...(flags.as ? { as: flags.as } : {}), ...(flags.wait ? { wait: flags.wait } : {}) } });
+      return relayCommand(node, args, { out, note, safe, ensureDaemon, flags: { ...(flags.as ? { as: flags.as } : {}), ...(flags.wait ? { wait: flags.wait } : {}), ...(flags.yes ? { yes: true } : {}) } });
     case "rejects": {
       const list = node.rejects();
       return out(list.length ? list.map((r) => `${time(r.at)}  ${safe(r.reason)}`).join("\n") : "Nothing has been refused.", list);

@@ -128,6 +128,19 @@ test("add <url> --as <a relay I use>: the same relay, now dialled at <url>", asy
   assert.throws(() => alice.relayBook.add(`ws://127.0.0.2:${r.port}`, local, Date.now()), /already one of your relays/);
 });
 
+test("a relay that is the only one shared with a contact is named before it is removed", async () => {
+  const [a, b] = ["ws://127.0.0.1:1", "ws://127.0.0.1:2"];
+  const alice = await person(a);
+  alice.relayBook.add(b, null, Date.now());
+  const onlyB = { rootKey: "only-b", relay: b }; // paired on b, never sent a list
+  const both = { rootKey: "both", relay: a };
+  alice.relayBook.apply("both", { relays: [a, b], version: Date.now(), seen: 0 }, Date.now());
+  const none = { rootKey: "none", relay: "ws://127.0.0.1:3" };
+  assert.deepEqual(alice.relayBook.onlyVia([onlyB, both, none], b), ["only-b"]);
+  assert.deepEqual(alice.relayBook.onlyVia([onlyB, both, none], a), []);
+  assert.deepEqual(alice.relayBook.onlyVia([onlyB], "ws://127.0.0.1:2/"), ["only-b"], "however it is spelled");
+});
+
 test("an invite matches the relay however either side spelled it", async () => {
   const r = await relay();
   const alice = await person(`${r.url}/`);

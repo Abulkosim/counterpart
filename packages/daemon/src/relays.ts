@@ -293,6 +293,19 @@ export class RelayBook {
       .map((c) => c.rootKey);
   }
 
+  // Of these contacts, those who share no relay with me but this one. Without
+  // it, mail to them, and the news that it is gone, would go where they do not read.
+  onlyVia(contacts: { rootKey: string; relay: string }[], url: string): string[] {
+    const r = this.find(url);
+    if (!r) return [];
+    return contacts
+      .filter((c) => {
+        const p = this.route(this.their(c.rootKey, c.relay).relays).preferred;
+        return p.length > 0 && p.every((u) => u === r.url);
+      })
+      .map((c) => c.rootKey);
+  }
+
   // My contacts' relays that I do not use, so mail from me cannot reach them
   // there. A contact's list never makes this machine dial anything; a person
   // decides with `cpart relay add`.
