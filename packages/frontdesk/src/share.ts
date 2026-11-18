@@ -47,7 +47,8 @@ const PRIVATE: [RegExp, string][] = [
   [/(^|\/)\.(ssh|gnupg|aws|azure|kube|docker)\//, "credentials"],
   [/(^|\/)(kubeconfig|\.htpasswd|\.pgpass|\.git-credentials|\.npmrc|\.pypirc)$/, "credentials"],
   [/\.(p12|pfx|jks|keystore|kdbx|gpg|tfstate|tfvars)$/, "credentials"],
-  [/(^|\/)[^/]*secret[^/]*$/, "named as a secret"],
+  // A file or any directory above it: config/secrets/db.yml as well as secret.txt.
+  [/(^|\/)([^/]*secret[^/]*|vaults?|\.?credentials?)(\/|$)/, "named as a secret"],
 ];
 const NEVER = new Set(["credentials"]);
 
@@ -86,7 +87,7 @@ export function checkPattern(p: string): string {
 
 export function globToRegExp(pattern: string): RegExp {
   if (!/[*?]/.test(pattern)) {
-    const e = pattern.replace(/[.+^${}()|\]\\]/g, "\\$&");
+    const e = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
     return new RegExp(`^${e}(/.*)?$`); // a file, or everything under a directory
   }
   let re = "";

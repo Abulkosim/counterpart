@@ -352,3 +352,37 @@ test("rules naming two repositories are refused when read", () => {
   d.close();
   assert.throws(() => readShare(home, ROOT), /more than one repository/);
 });
+
+// ---- found in the second review ----
+
+test("plain passwords in config files are caught by path and by content", () => {
+  const r = repo({
+    "config/secrets/database.yml": "production:\n  password: s3cr3t\n",
+    "config/vault/app.yml": "a: b\n",
+    "config/mail.yml": "smtp:\n  user: app\n  password: correcthorsebatterystaple\n",
+    "config/db.yml": "host: db.internal\nPOSTGRES_PASSWORD: s3cr3t\n",
+    "config/app.yml": "name: shop\npassword: required\n",
+    "docs/auth.md": "Send `Authorization: Bearer 8f3a9c1b2d4e5f60718293a4` with each call.\n",
+    "docs/ok.md": "Send `Authorization: Bearer <token>`.\n",
+  });
+  const s = addShare(tmp(), ROOT, r, ["config", "docs"]);
+  assert.deepEqual(s.files.map((f) => f.path), ["config/app.yml", "docs/ok.md"]);
+  const why = Object.fromEntries(s.skipped.map((k) => [k.path, k.reason]));
+  assert.match(why["config/secrets/database.yml"]!, /named as a secret; share it with --allow/);
+  assert.match(why["config/vault/app.yml"]!, /named as a secret/);
+  assert.match(why["config/mail.yml"]!, /value assigned to password \(line 3\)/);
+  assert.match(why["config/db.yml"]!, /POSTGRES_PASSWORD \(line 2\)/);
+  assert.match(why["docs/auth.md"]!, /bearer token/);
+  for (const t of ["password = hunter2", "DB_PASSWORD=correcthorsebatterystaple", "export PGPASSWORD=letmein", 'pwd: "abcd"']) assert.ok(findSecret(t), t);
+  // Code that names a password without holding one.
+  for (const t of ["password: string;", "const password = await read.password();", "password: newPassword,", "self.user, self.password = user, password", "passphrase: PASS,", "password = auth[2]", "password: $DB_PASSWORD"])
+    assert.equal(findSecret(t), null, t);
+});
+
+test("an exact path with brackets can be shared", () => {
+  const r = repo({ "app/[id]/page.tsx": "export default 1;\n", "app/x/page.tsx": "2\n" });
+  assert.ok(globToRegExp("app/[id]/page.tsx").test("app/[id]/page.tsx"));
+  assert.ok(!globToRegExp("app/[id]/page.tsx").test("app/i/page.tsx"));
+  const s = addShare(tmp(), ROOT, r, ["app/[id]/page.tsx"]);
+  assert.deepEqual(s.files.map((f) => f.path), ["app/[id]/page.tsx"]);
+});
