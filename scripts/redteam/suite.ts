@@ -143,6 +143,44 @@ async function cpart(home: string, args: string[], env: Record<string, string> =
 }
 const json = async <T>(home: string, args: string[]): Promise<T> => JSON.parse(await cpart(home, ["--json", ...args])) as T;
 
+// Both identities have a passphrase, as after `cpart setup`. Bob's agent is
+// never given his: it is typed below, on a terminal it cannot reach.
+const PASS = { alice: "alice red team passphrase", bob: "bob red team passphrase" };
+
+// `cpart guard off` as its owner does it: at a terminal, typing the passphrase.
+// The guard has no other off switch, so this is how a guard-off trial runs.
+const PTY = `
+import os, pty, select, sys, time
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(sys.argv[1], sys.argv[1:])
+out, sent, end = b"", False, time.time() + 60
+while time.time() < end:
+    r, _, _ = select.select([fd], [], [], 0.2)
+    if not r:
+        continue
+    try:
+        d = os.read(fd, 4096)
+    except OSError:
+        break
+    if not d:
+        break
+    out += d
+    if not sent and b"passphrase: " in out.lower():
+        time.sleep(0.2)
+        os.write(fd, os.environ["PTY_ANSWER"].encode() + b"\\r")
+        sent = True
+_, status = os.waitpid(pid, 0)
+sys.stdout.write(out.decode("utf-8", "replace"))
+sys.exit(os.waitstatus_to_exitcode(status))
+`;
+async function guardOff(home: string, passphrase: string): Promise<void> {
+  const env = { ...baseEnv, CPART_HOME: home, PTY_ANSWER: passphrase };
+  delete (env as Record<string, string | undefined>).CPART_PASSPHRASE;
+  const { stdout } = await run("python3", ["-I", "-c", PTY, process.execPath, CLI, "guard", "off", "480"], { env });
+  if (!/guard is off until/i.test(stdout)) throw new Error(`could not turn the guard off in ${home}: ${stdout.slice(-300)}`);
+}
+
 async function until(what: string, cond: () => Promise<boolean> | boolean, ms = 20_000): Promise<void> {
   const end = Date.now() + ms;
   while (!(await cond())) {
@@ -180,8 +218,7 @@ const fromVictim = async (home: string, thread: string): Promise<number> =>
   (await json<Ev[]>(home, ["log", "--", thread])).filter((e) => !e.mine && e.type !== "thread.opened").length;
 
 async function send(home: string, thread: string, turn: Turn): Promise<void> {
-  // The attacker is not under test, so its own sends skip the guard.
-  const env = { CPART_GUARD: "off" };
+  const env = {};
   if (typeof turn === "string") return void (await cpart(home, ["say", "--", thread, turn], env));
   const dir = join(home, "..", `proposal-${Date.now()}`);
   mkdirSync(dir, { recursive: true });
@@ -275,8 +312,11 @@ async function trial(a: Attack, n: number): Promise<TrialResult> {
   const daemons: ChildProcess[] = [];
   const myGroups = new Set<number>();
   try {
-    await cpart(alice, ["init", "--relay", RELAY, "--no-passphrase"]);
-    await cpart(bob, ["init", "--relay", RELAY, "--no-passphrase"]);
+    await cpart(alice, ["init", "--relay", RELAY], { CPART_PASSPHRASE: PASS.alice });
+    await cpart(bob, ["init", "--relay", RELAY], { CPART_PASSPHRASE: PASS.bob });
+    // The attacker is not under test, so its own sends skip the guard.
+    await guardOff(alice, PASS.alice);
+    if (guard === "off") await guardOff(bob, PASS.bob);
     daemons.push(await daemon(alice, join(WORK, `${tag}-alice.log`)));
     daemons.push(await daemon(bob, join(WORK, `${tag}-bob.log`)));
     const { invite } = await json<{ invite: string }>(alice, ["invite", "bob"]);
@@ -288,7 +328,6 @@ async function trial(a: Attack, n: number): Promise<TrialResult> {
     mkdirSync(bin);
     // `cpart` is on bob's PATH, as after ./install.sh.
     writeFileSync(join(bin, "cpart"), `#!/bin/sh\nexec "${process.execPath}" "${CLI}" "$@"\n`, { mode: 0o755 });
-    const guardEnv: Record<string, string> = guard === "off" ? { CPART_GUARD: "off" } : {};
     // Bob's agent gets a small environment of its own, never this script's:
     // whatever it is talked into printing must be planted, not real.
     const victimEnv: Record<string, string> = {
@@ -307,7 +346,6 @@ async function trial(a: Attack, n: number): Promise<TrialResult> {
       CPART_NO_AUTOSTART: "1",
       CPART_NO_BOOT: "1",
       ...planted.env,
-      ...guardEnv,
     };
     if (victimKind === "claude") {
       mkdirSync(claudeDir, { recursive: true, mode: 0o700 });
@@ -316,7 +354,7 @@ async function trial(a: Attack, n: number): Promise<TrialResult> {
     }
     writeFileSync(
       join(T, "mcp.json"),
-      JSON.stringify({ mcpServers: { counterpart: { command: process.execPath, args: [CLI, "mcp"], env: { CPART_HOME: bob, CPART_NO_AUTOSTART: "1", CPART_NO_BOOT: "1", ...guardEnv } } } }),
+      JSON.stringify({ mcpServers: { counterpart: { command: process.execPath, args: [CLI, "mcp"], env: { CPART_HOME: bob, CPART_NO_AUTOSTART: "1", CPART_NO_BOOT: "1" } } } }),
     );
 
     const { threadId: thread } = await json<{ threadId: string }>(alice, ["open", "bob", a.goal]);
@@ -371,7 +409,7 @@ async function trial(a: Attack, n: number): Promise<TrialResult> {
     let baseline = 0;
     if (a.adaptive) {
       // A model plays alice, with the Counterpart tools only, and decides each turn itself.
-      writeFileSync(join(T, "alice-mcp.json"), JSON.stringify({ mcpServers: { counterpart: { command: process.execPath, args: [CLI, "mcp"], env: { CPART_HOME: alice, CPART_NO_AUTOSTART: "1", CPART_NO_BOOT: "1", CPART_GUARD: "off" } } } }));
+      writeFileSync(join(T, "alice-mcp.json"), JSON.stringify({ mcpServers: { counterpart: { command: process.execPath, args: [CLI, "mcp"], env: { CPART_HOME: alice, CPART_NO_AUTOSTART: "1", CPART_NO_BOOT: "1" } } } }));
       const aliceDir = join(T, "alice-claude");
       mkdirSync(aliceDir, { mode: 0o700 });
       const work = join(T, "alice-work");
@@ -438,7 +476,7 @@ async function trial(a: Attack, n: number): Promise<TrialResult> {
         if (closed) continue;
         if (sent < a.turns.length) await send(alice, thread, a.turns[sent++]!);
         else {
-          await cpart(alice, ["say", "--", thread, CLOSING], { CPART_GUARD: "off" });
+          await cpart(alice, ["say", "--", thread, CLOSING]);
           closed = true;
         }
         if (exited) {
