@@ -10,7 +10,7 @@ source scripts/smoke-lib.sh
 export CPART_NO_BOOT=1
 cpart() { local who=$1; shift; CPART_HOME="$WORK/$who" node packages/cli/src/main.ts "$@"; }
 js() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const v=JSON.parse(s.trim().split("\n").pop());const p=process.argv[1];console.log(eval("v"+(p.startsWith("[")?"":".")+p))})' "$1"; }
-stop_all() { for w in bob carol dave; do cpart "$w" down >/dev/null 2>&1 || true; done; }
+stop_all() { for w in bob carol dave henry; do cpart "$w" down >/dev/null 2>&1 || true; done; }
 # Keep the exit code: cleanup reads it to decide whether to print the logs.
 trap 'c=$?; stop_all; (exit $c); cleanup' EXIT
 
@@ -107,6 +107,31 @@ step "the long invite still works, and --json without --code still gives it"
 LONG=$(cpart alice invite zed --json | js invite)
 [[ "$LONG" == cpart-invite:* ]] || fail "--json no longer gives the long invite"
 cpart alice invite yan --long | grep -q "cpart join cpart-invite:" || fail "--long did not print a long invite"
+
+step "a name that cannot be a contact name is refused before a code is made or spent"
+if cpart alice invite Maya --json --code >"$WORK/badname.out" 2>&1; then fail "an invite for Maya was made"; fi
+grep -q "contact names are" "$WORK/badname.out"
+cpart alice status | grep -q "for Maya" && fail "a code for Maya is live"
+cpart alice invite ivan --json --code >"$WORK/invite5.json"
+if cpart erin join "$(js code <"$WORK/invite5.json")" Alice --no-agents >"$WORK/badname2.out" 2>&1; then fail "a join as Alice ran"; fi
+grep -q "contact names are" "$WORK/badname2.out"
+cpart alice status | grep -q "code $(js code <"$WORK/invite5.json") for ivan works until .*[0-9]$" || fail "the code was spent by a bad name"
+
+step "the words are not left in pairing.db or its log after a pairing"
+for f in "$WORK"/alice/pairing.db* "$WORK"/bob/pairing.db*; do
+  if grep -aq "$(echo "$CODE" | cut -d- -f2-)" "$f"; then fail "the words of $CODE are still in $f"; fi
+done
+
+step "alice's daemon is killed during a pairing: the joiner hears at once, not after ten minutes"
+cpart alice invite henry --json --code >"$WORK/invite4.json"
+kill -9 "$alice_PID"
+start_daemon alice
+cpart alice status | grep -q "pairing for henry failed at .*The daemon restarted" || fail "alice's status does not say the restart ended it"
+T0=$(date +%s)
+if cpart henry join "$(js full <"$WORK/invite4.json")" alice --yes --no-passphrase --no-agents >"$WORK/henry.out" 2>&1; then fail "a code from before the restart paired"; fi
+cat "$WORK/henry.out"
+grep -Eq "No code with that number|The other side ended the pairing" "$WORK/henry.out" || fail "henry was not told"
+[ $(( $(date +%s) - T0 )) -lt 60 ] || fail "henry waited $(( $(date +%s) - T0 ))s"
 
 step "daemon logs"
 grep "pairing" "$WORK/alice.log"
