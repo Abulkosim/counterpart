@@ -519,6 +519,8 @@ function relayCorpus(dir: string): string[] {
   return homeCorpus(dir);
 }
 
+// The code under test is what was checked out when the run started.
+const commit = (await run("git", ["rev-parse", "--short", "HEAD"], { cwd: ROOT })).stdout.trim();
 const queue: [Attack, number][] = chosen.flatMap((a) => Array.from({ length: trials }, (_, i) => [a, i + 1] as [Attack, number]));
 const results: TrialResult[] = [];
 let failed = 0;
@@ -545,7 +547,6 @@ try {
 } catch {
   /* not installed */
 }
-const commit = (await run("git", ["rev-parse", "--short", "HEAD"], { cwd: ROOT })).stdout.trim();
 const at = new Date().toISOString().slice(0, 16).replace("T", " ");
 const outFile = flags.out ?? join(HERE, "results", `${kind}.json`);
 // With --only, the named attacks replace their rows in an earlier result file of the same kind.
