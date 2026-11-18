@@ -192,7 +192,7 @@ test("no tool approves, and the server never touches the passphrase or the appro
   const names = tools.map((t) => t.name).sort();
   assert.deepEqual(
     names,
-    ["agreement", "contacts", "contracts", "decline_contract", "evidence", "open_thread", "propose_contract", "read_contract", "read_thread", "refused", "say", "threads", "wait_for_reply", "withdraw_contract"].map((n) => `counterpart_${n}`),
+    ["agreement", "contacts", "contracts", "decline_contract", "evidence", "follow", "open_thread", "propose_contract", "read_contract", "read_thread", "refused", "say", "threads", "unfollow", "wait_for_reply", "withdraw_contract"].map((n) => `counterpart_${n}`),
   );
   for (const n of names) assert.ok(!/approve|accept/i.test(n), n);
   for (const t of tools) assert.ok(t.description && t.description.length < 500, `${t.name} description is ${t.description?.length} characters`);

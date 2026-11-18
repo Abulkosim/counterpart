@@ -159,8 +159,8 @@ function installBoot(home: string, kind: Boot): void {
   <key>EnvironmentVariables</key><dict>${Object.entries(env).map(([k, v]) => `<key>${k}</key><string>${xml(v)}</string>`).join("")}</dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>${xml(logFile(home))}</string>
-  <key>StandardErrorPath</key><string>${xml(logFile(home))}</string>
+  <key>StandardOutPath</key><string>${xml(resolve(logFile(home)))}</string>
+  <key>StandardErrorPath</key><string>${xml(resolve(logFile(home)))}</string>
 </dict></plist>
 `,
   );

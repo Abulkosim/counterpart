@@ -1,0 +1,783 @@
+{
+  "startedAt": "2026-11-17T22:22:22.993Z",
+  "finishedAt": "2026-11-17T22:52:07.286Z",
+  "relay": {
+    "mode": "container",
+    "url": "ws://host.docker.internal:7447",
+    "note": "relay in a third container on the devices' network, reached as host.docker.internal"
+  },
+  "model": "claude-sonnet-5-5",
+  "claudeVersion": "2.1.326 (Claude Code)",
+  "image": "two-devices:latest",
+  "host": "linux",
+  "setup": {
+    "ok": true,
+    "durationS": 23,
+    "interventions": [
+      {
+        "by": "human",
+        "what": "devcontainer: typed yes to use a relay on a private address (cpart join ... --yes)",
+        "why": "join asks before it uses a relay on a private address; without a terminal it said: cpart: this needs a terminal",
+        "atS": 8
+      }
+    ],
+    "laptop": "ok  relay ws://host.docker.internal:7447 answers\nok  identity h_Ql-xvcPrPUvrVeoLe0eiwA created in /home/node/.cpart\nok  daemon started, connected\nok  Claude Code now has the counterpart tools. Sessions started from now on see them\n\nReady. Next, pair with someone:\n  cpart invite <what you call them>      then send them what it prints",
+    "devcontainer": "ok  relay ws://host.docker.internal:7447 answers\nok  identity h_Nlt7zxpORQqlxPAiDrTbbA created in /home/node/.cpart\nok  daemon started, connected\nok  Claude Code now has the counterpart tools. Sessions started from now on see them\n\nPaired with laptop. Safety code 2190 0908 5806: ask laptop to read theirs to you. If the two differ, someone is in the middle.\n\nNow, in Claude Code or Codex, say something like:\n  ask laptop's agent what their API returns for an empty page",
+    "safetyCodesMatch": true,
+    "agentsRegistered": {
+      "laptop": "Claude Code: here",
+      "devcontainer": "Claude Code: here"
+    },
+    "error": null
+  },
+  "scenarios": [
+    {
+      "name": "00-plumbing",
+      "title": "No model: messages by hand through sleep, a network drop and a relay restart",
+      "file": "scripts/devices/scenarios/00-plumbing.json",
+      "ok": false,
+      "error": null,
+      "startedAt": "2026-11-17T22:22:52.994Z",
+      "durationS": 552,
+      "timeToFirstAnswerS": 3.3,
+      "timeToAgreementS": null,
+      "interventions": [
+        {
+          "by": "rig, for the human",
+          "what": "cpart down, then cpart up, on laptop",
+          "why": "ping 3 on the laptop after the network is back had not arrived 180s after the wait began; laptop's cpart status said the daemon was running and connected",
+          "atS": 306.6
+        },
+        {
+          "by": "rig, for the human",
+          "what": "cpart down, then cpart up, on devcontainer",
+          "why": "pong 4 on the devcontainer after its network is back had not arrived 180s after the wait began; devcontainer's cpart status said the daemon was running and connected",
+          "atS": 542.1
+        }
+      ],
+      "restartedByHand": true,
+      "lost": {
+        "laptopToDevcontainer": 0,
+        "devcontainerToLaptop": 0,
+        "held": 0,
+        "notDelivered": []
+      },
+      "faults": [
+        {
+          "kind": "pause",
+          "device": "laptop",
+          "atS": 7.5
+        },
+        {
+          "kind": "unpause",
+          "device": "laptop",
+          "atS": 53.4
+        },
+        {
+          "kind": "disconnect",
+          "device": "laptop",
+          "atS": 56.1
+        },
+        {
+          "kind": "connect",
+          "device": "laptop",
+          "atS": 77
+        },
+        {
+          "kind": "disconnect",
+          "device": "laptop",
+          "atS": 87.4
+        },
+        {
+          "kind": "connect",
+          "device": "laptop",
+          "atS": 118.4
+        },
+        {
+          "kind": "relay_restart",
+          "device": null,
+          "atS": 314.7
+        },
+        {
+          "kind": "disconnect",
+          "device": "devcontainer",
+          "atS": 325.2
+        },
+        {
+          "kind": "connect",
+          "device": "devcontainer",
+          "atS": 356.4
+        }
+      ],
+      "checks": [],
+      "sessions": [],
+      "waits": [
+        {
+          "label": "ping 1 on the laptop",
+          "device": "laptop",
+          "arrived": true,
+          "afterS": 0.1,
+          "recovered": false
+        },
+        {
+          "label": "pong 1 on the devcontainer",
+          "device": "devcontainer",
+          "arrived": true,
+          "afterS": 0,
+          "recovered": false
+        },
+        {
+          "label": "ping 2 on the laptop after it wakes",
+          "device": "laptop",
+          "arrived": true,
+          "afterS": 0,
+          "recovered": false
+        },
+        {
+          "label": "ping 2b on the laptop, back at the same address",
+          "device": "laptop",
+          "arrived": true,
+          "afterS": 7.5,
+          "recovered": false
+        },
+        {
+          "label": "ping 3 on the laptop after the network is back",
+          "device": "laptop",
+          "arrived": true,
+          "afterS": 188.1,
+          "recovered": true
+        },
+        {
+          "label": "pong 3 on the devcontainer",
+          "device": "devcontainer",
+          "arrived": true,
+          "afterS": 0.1,
+          "recovered": false
+        },
+        {
+          "label": "ping 4 on the laptop after the relay restart",
+          "device": "laptop",
+          "arrived": true,
+          "afterS": 0.8,
+          "recovered": false
+        },
+        {
+          "label": "pong 4 on the devcontainer after its network is back",
+          "device": "devcontainer",
+          "arrived": true,
+          "afterS": 185.4,
+          "recovered": true
+        }
+      ],
+      "reconnects": {
+        "laptop": {
+          "lost": 1,
+          "connected": 2,
+          "errors": []
+        },
+        "devcontainer": {
+          "lost": 1,
+          "connected": 2,
+          "errors": []
+        }
+      },
+      "notes": [],
+      "threads": [
+        "dzHkZ8DN6JzI8rumkZydgw"
+      ]
+    },
+    {
+      "name": "01-ask",
+      "title": "The devcontainer's agent asks a question only the laptop's repo can answer; the laptop's front desk answers",
+      "file": "scripts/devices/scenarios/01-ask.json",
+      "ok": true,
+      "error": null,
+      "startedAt": "2026-11-17T22:32:05.938Z",
+      "durationS": 33,
+      "timeToFirstAnswerS": 8.7,
+      "timeToAgreementS": null,
+      "interventions": [],
+      "restartedByHand": false,
+      "lost": {
+        "laptopToDevcontainer": 0,
+        "devcontainerToLaptop": 0,
+        "held": 0,
+        "notDelivered": []
+      },
+      "faults": [],
+      "checks": [
+        {
+          "name": "the answer names the 200 limit and the null cursor",
+          "pass": true,
+          "detail": "1 message(s); first: (1) stockroom rejects page_size=500. It does not honor it or clamp it. The maximum is 200, and anything above that gets `400 {\"error\":{\"code\":\"page_size_too_large\"}}` (from README.md). The item count is not a signal, because no items come back at all. The server code behaves the same way (from serve"
+        },
+        {
+          "name": "the asker's report to its human names both",
+          "pass": true,
+          "detail": "Stockroom's agent answered, so here is what to change in `sync.js`. I haven't edited any file.\n\n1. **Page size (line 10):** stockroom rejects `page_size=500` with `400 page_size_too_large`. The maximum is 200. Change the value to `\"200\"` or lower.\n2. **Loop end (line 16):** on the last page `next_cursor` is `null`. It is never omitted. `cursor !== undefined` will therefore never end the loop. Use "
+        }
+      ],
+      "sessions": [
+        {
+          "id": "asker",
+          "device": "devcontainer",
+          "startedAtS": 2,
+          "durationS": 23,
+          "exit": 0,
+          "counterpartServer": "connected",
+          "turns": 7,
+          "costUsd": 0.0319807,
+          "isError": false,
+          "toolCalls": [
+            "Grep {\"pattern\":\"page_size|next_cursor|cursor\",\"path\":\"/home/node/project\",\"output_mode\":\"content\",\"glob\":\"sync.js\"}",
+            "counterpart_contacts {}",
+            "Read {\"file_path\":\"/home/node/project/sync.js\"}",
+            "counterpart_open_thread {\"contact\":\"laptop\",\"goal\":\"Verify how our client pages through the stockroom GET /v1/items API: behavior of page_size=500, and what next_cursor looks like on t",
+            "counterpart_say {\"thread\":\"VpxKibgMEsplnuBkfmTFgg\",\"text\":\"Hi! Our sync client calls GET /v1/items?page_size=500 (plus &cursor=<next_cursor> on later pages), appends page.items",
+            "counterpart_wait_for_reply {\"thread\":\"VpxKibgMEsplnuBkfmTFgg\",\"after\":13,\"timeout_seconds\":120}"
+          ],
+          "toolErrors": [],
+          "finalText": "Stockroom's agent answered, so here is what to change in `sync.js`. I haven't edited any file.\n\n1. **Page size (line 10):** stockroom rejects `page_size=500` with `400 page_size_too_large`. The maximum is 200. Change the value to `\"200\"` or lower.\n2. **Loop end (line 16):** on the last page `next_cursor` is `null`. It is never omitted. `cursor !== undefined` will therefore never end the loop. Use `while (cursor)` or `cursor != null`.\n3. **Status check (after line 12):** a 400 response has no `next_cursor` and no `items`. Today that would make `all.push(...page.items)` throw, or the sync would end silently with nothing. Add `if (!res.ok) throw new Error(...)` before parsing the body.\n4. **Cursor expiry:** cursors expire after 15 minutes, so a very slow sync could fail partway through. An empty stockroom returns `{\"items\": [], \"next_cursor\": null}` with a 200, which the current code already handles.\n\nLaptop's agent said its answers come from stockroom's README.md and server.js. I haven't checked them against those files myself.",
+          "stderr": "",
+          "transcript": "01-ask-asker.jsonl"
+        }
+      ],
+      "waits": [
+        {
+          "label": "the laptop's answer on the devcontainer",
+          "device": "devcontainer",
+          "arrived": true,
+          "afterS": 18.8,
+          "recovered": false
+        }
+      ],
+      "reconnects": {
+        "laptop": {
+          "lost": 0,
+          "connected": 0,
+          "errors": []
+        },
+        "devcontainer": {
+          "lost": 0,
+          "connected": 0,
+          "errors": []
+        }
+      },
+      "notes": [],
+      "threads": [
+        "VpxKibgMEsplnuBkfmTFgg"
+      ]
+    },
+    {
+      "name": "02-negotiate",
+      "title": "Two live sessions negotiate a small contract, taking turns; both humans approve it",
+      "file": "scripts/devices/scenarios/02-negotiate.json",
+      "ok": true,
+      "error": null,
+      "startedAt": "2026-11-17T22:32:40.061Z",
+      "durationS": 58,
+      "timeToFirstAnswerS": null,
+      "timeToAgreementS": 41,
+      "interventions": [
+        {
+          "by": "human",
+          "what": "laptop approves \"stockroom list API: page_size up to 250 at a lower rate limit\" (cpart approve)",
+          "why": "only a human can sign",
+          "atS": 43.7
+        },
+        {
+          "by": "human",
+          "what": "devcontainer approves \"stockroom list API: page_size up to 250 at a lower rate limit\" (cpart approve)",
+          "why": "only a human can sign",
+          "atS": 45.4
+        }
+      ],
+      "restartedByHand": false,
+      "lost": {
+        "laptopToDevcontainer": 0,
+        "devcontainerToLaptop": 0,
+        "held": 0,
+        "notDelivered": []
+      },
+      "faults": [],
+      "checks": [
+        {
+          "name": "both sides hold the agreement",
+          "pass": true,
+          "detail": "agreed on laptop: true, on devcontainer: true"
+        }
+      ],
+      "sessions": [
+        {
+          "id": "laptop-1",
+          "device": "laptop",
+          "startedAtS": 1,
+          "durationS": 19,
+          "exit": 0,
+          "counterpartServer": "connected",
+          "turns": 5,
+          "costUsd": 0.035155399999999996,
+          "isError": false,
+          "toolCalls": [
+            "counterpart_contacts {}",
+            "counterpart_open_thread {\"contact\":\"devcontainer\",\"goal\":\"Agree a short contract for stockroom API pagination: larger page_size (up to 250) in exchange for a lower request rate, cursor",
+            "Grep {\"pattern\":\"next_cursor|cursor|page_size\",\"output_mode\":\"content\",\"head_limit\":40}",
+            "counterpart_propose_contract {\"thread\":\"yhHw7XuyNRgHOleDFAwGtw\",\"title\":\"stockroom list API: page_size up to 250 at a lower rate limit\",\"text\":\"Parties: the stockroom API owner and the shel"
+          ],
+          "toolErrors": [],
+          "finalText": "I opened a thread with devcontainer and proposed the contract. I did not wait for a reply, so nothing is agreed yet. A proposal binds nobody until both humans approve it.\n\n- **Thread:** `yhHw7XuyNRgHOleDFAwGtw`\n- **Proposal:** `btdizuaA07iUfX4psB03wg`\n\n**What the contract says:**\n- **Standard tier (default):** page_size up to 200 and 600 requests a minute.\n- **Large-page tier:** page_size up to 250, only while they send fewer than 300 requests a minute, measured over any rolling 60 seconds. If they hit 300 or more, page_size above 200 is refused and they go back to the standard tier.\n- **Over-limit page_size:** refused with `400 page_size_too_large`, not clamped.\n- **Cursors:** expire 15 minutes after they are issued, under both tiers. An expired cursor means restarting from the first page.\n- **Last page:** it has 0 to page_size items, and `next_cursor` is always present and `null`. An empty listing returns `200 {\"items\": [], \"next_cursor\": null}`. They must stop on a null cursor, not on a short page.\n\n**Please check these before approving:**\n- **Last page wording:** I took it from the current behaviour in `README.md:20` and `server.js:37`, so it describes what the API already does.\n- **Enforcement:** the contract states that over-limit traffic loses the large-page tier. `server.js` only enforces `MAX_PAGE = 200`. The 250 tier and the 300/minute rule would need code changes, which I did not make.\n- **Fallback:** I worded it as automatic reversion to the standard tier. Change it if you want something different, such as a 429.\n\nTo approve, run `cpart approve yhHw7XuyNRgHOleDFAwGtw btdizuaA07iUfX4psB03wg` in your terminal.",
+          "stderr": "",
+          "transcript": "02-negotiate-laptop-1.jsonl"
+        },
+        {
+          "id": "devcontainer-1",
+          "device": "devcontainer",
+          "startedAtS": 21,
+          "durationS": 12,
+          "exit": 0,
+          "counterpartServer": "connected",
+          "turns": 4,
+          "costUsd": 0.0303186,
+          "isError": false,
+          "toolCalls": [
+            "counterpart_read_thread {\"thread\":\"yhHw7XuyNRgHOleDFAwGtw\"}",
+            "counterpart_contracts {\"thread\":\"yhHw7XuyNRgHOleDFAwGtw\"}",
+            "counterpart_read_contract {\"thread\":\"yhHw7XuyNRgHOleDFAwGtw\",\"proposal\":\"btdizuaA07iU\"}"
+          ],
+          "toolErrors": [],
+          "finalText": "I left the proposal open and changed nothing. It already gives you what you need, so I made no counter-proposal and no decline.\n\n**What's on the table**\n\nProposal `btdizuaA07iU` from laptop is the only one, and it is open with no approvals. It covers the stockroom list API:\n- **Two tiers, and you use exactly one:**\n  - Standard: `page_size` 1–200 at 600 requests a minute.\n  - Large-page: `page_size` 1–250 at 300 requests a minute, meaning fewer than 300 in any rolling 60 seconds.\n- **Going over the rate:** If you send 300 or more requests in a minute while using `page_size` above 200, the large-page tier stops applying. Sizes above 200 are then refused, and you fall back to the standard tier.\n- **Oversized pages:** A `page_size` above the tier maximum returns 400 `page_size_too_large`. It is not clamped.\n- **Cursors:** They expire 15 minutes after they are issued. After an expiry you restart the listing from page 1.\n- **Last page:** `next_cursor` is always present and is `null` on the final page. An empty listing returns 200 with `{\"items\": [], \"next_cursor\": null}`. You must stop on `null` and must not infer the end from a short page.\n- **Everything else:** Other limits and behaviour stay as the stockroom README has them.\n\n**Why it works for you**\n- **Page size:** The large-page tier allows 250, which is above your minimum of 200 and is your preferred size.\n- **Rate:** Your 20 requests a minute is far below the 300 limit.\n- **Request count:** About 400 items at 250 per page is only 2 requests, so the 15-minute cursor expiry is very unlikely to matter.\n- **Nothing odd:** I found no unusual terms and no attachments.\n\n**What to check before you approve**\n- **Tier choice:** shelf-sync has to use the large-page tier explicitly. Check how the large tier is selected, since the text doesn't say. The default is standard, which caps at 200.\n- **Code:** Confirm the sync code stops on `next_cursor == null`, not on a short page. Also confirm it restarts from page 1 on an expired cursor and handles the 400 `page_size_too_large` response.\n- **Stockroom README:** The contract defers to it for \"other limits\", and I did not read it. Skim it for anything that conflicts.\n\nIf you're happy, run `cpart approve yhHw7XuyNRgHOleDFAwGtw btdizuaA07iU` yourself. I can't approve for you.",
+          "stderr": "",
+          "transcript": "02-negotiate-devcontainer-1.jsonl"
+        },
+        {
+          "id": "laptop-2",
+          "device": "laptop",
+          "startedAtS": 33,
+          "durationS": 9,
+          "exit": 0,
+          "counterpartServer": "connected",
+          "turns": 4,
+          "costUsd": 0.0258894,
+          "isError": false,
+          "toolCalls": [
+            "counterpart_read_thread {\"thread\":\"yhHw7XuyNRgHOleDFAwGtw\"}",
+            "counterpart_contracts {\"thread\":\"yhHw7XuyNRgHOleDFAwGtw\"}",
+            "counterpart_read_contract {\"thread\":\"yhHw7XuyNRgHOleDFAwGtw\",\"proposal\":\"btdizuaA07iU\"}"
+          ],
+          "toolErrors": [],
+          "finalText": "I left proposal `btdizuaA07iU` open and unchanged. It's your own proposal, and it already gives you what you need.\n\n- **Tiers:** the standard tier is page_size up to 200 at 600 requests a minute. The large-page tier is page_size up to 250 at fewer than 300 requests a minute, measured over a rolling 60 seconds. If shelf-sync sends 300 or more in a minute while using page sizes above 200, the large-page tier stops applying and they fall back to standard.\n- **Oversized pages:** a page_size above the tier maximum is refused with a 400 `page_size_too_large`, not clamped.\n- **Cursors:** they expire after 15 minutes under either tier, and an expired cursor means restarting the listing from page one.\n- **Last page:** `next_cursor` is always present and is null on the final page. An empty listing returns 200 with `{\"items\": [], \"next_cursor\": null}`. Shelf-sync must stop on a null `next_cursor`, not on a short page.\n- **Everything else:** other limits and behaviour stay as in the stockroom README.\n\nThe thread has no reply from devcontainer yet, so they haven't accepted, declined or countered. Nobody has approved the proposal either. If you're happy with the text, approve it by running `cpart approve yhHw7XuyNRgHOleDFAwGtw btdizuaA07iU` in your terminal. I can't do that for you, and I haven't told the other side that you will.",
+          "stderr": "",
+          "transcript": "02-negotiate-laptop-2.jsonl"
+        }
+      ],
+      "waits": [
+        {
+          "label": "the proposal on the devcontainer",
+          "device": "devcontainer",
+          "arrived": true,
+          "afterS": 0,
+          "recovered": false
+        }
+      ],
+      "reconnects": {
+        "laptop": {
+          "lost": 0,
+          "connected": 0,
+          "errors": []
+        },
+        "devcontainer": {
+          "lost": 0,
+          "connected": 0,
+          "errors": []
+        }
+      },
+      "notes": [],
+      "threads": [
+        "yhHw7XuyNRgHOleDFAwGtw"
+      ]
+    },
+    {
+      "name": "03-offline",
+      "title": "The laptop is offline when the question is sent and comes back two minutes later, at the same address",
+      "file": "scripts/devices/scenarios/03-offline.json",
+      "ok": true,
+      "error": null,
+      "startedAt": "2026-11-17T22:33:39.275Z",
+      "durationS": 148,
+      "timeToFirstAnswerS": 121.9,
+      "timeToAgreementS": null,
+      "interventions": [],
+      "restartedByHand": false,
+      "lost": {
+        "laptopToDevcontainer": 0,
+        "devcontainerToLaptop": 0,
+        "held": 0,
+        "notDelivered": []
+      },
+      "faults": [
+        {
+          "kind": "disconnect",
+          "device": "laptop",
+          "atS": 2
+        },
+        {
+          "kind": "connect",
+          "device": "laptop",
+          "atS": 122.1
+        }
+      ],
+      "checks": [
+        {
+          "name": "the answer names the 404 and its code",
+          "pass": true,
+          "detail": "1 message(s); first: For a SKU that does not exist, GET /v1/items/:sku returns HTTP 404 with this body (from README.md):\n\n{\"error\":{\"code\":\"item_not_found\",\"message\":\"no item with that SKU\"}}\n\nAll errors share the shape {\"error\":{\"code\":\"...\",\"message\":\"...\"}}. The codes are stable and the messages are not, so match on "
+        },
+        {
+          "name": "the asker's report to its human has the answer",
+          "pass": true,
+          "detail": "I have the answer from laptop's agent and I'm summarizing it now. I haven't edited any files.\n\n**What stockroom returns for a missing SKU** (per laptop's agent, which cited their README.md)\n- `GET /v1/items/:sku` returns HTTP 404 with `{\"error\":{\"code\":\"item_not_found\",\"message\":\"no item with that SKU\"}}`.\n- All errors use `{\"error\":{\"code\",\"message\"}}`. The codes are stable and the messages are n"
+        }
+      ],
+      "sessions": [
+        {
+          "id": "asker",
+          "device": "devcontainer",
+          "startedAtS": 2,
+          "durationS": 137,
+          "exit": 0,
+          "counterpartServer": "connected",
+          "turns": 8,
+          "costUsd": 0.0397437,
+          "isError": false,
+          "toolCalls": [
+            "counterpart_contacts {}",
+            "Grep {\"pattern\":\"stockroom\",\"-i\":true,\"output_mode\":\"content\",\"head_limit\":30}",
+            "Read {\"file_path\":\"/home/node/project/sync.js\"}",
+            "counterpart_open_thread {\"contact\":\"laptop\",\"goal\":\"We consume the stockroom API in our sync job. What does stockroom return when a SKU is requested that does not exist (HTTP status, b",
+            "counterpart_say {\"thread\":\"AIdQgpL6GNi2f1b91lTaOQ\",\"text\":\"Hi! Our sync job calls GET /v1/items (paged, cursor-based, x-api-key header). What does stockroom return for a SKU th",
+            "counterpart_wait_for_reply {\"thread\":\"AIdQgpL6GNi2f1b91lTaOQ\",\"after\":20,\"timeout_seconds\":120}",
+            "counterpart_wait_for_reply {\"thread\":\"AIdQgpL6GNi2f1b91lTaOQ\",\"after\":20,\"timeout_seconds\":120}"
+          ],
+          "toolErrors": [],
+          "finalText": "I have the answer from laptop's agent and I'm summarizing it now. I haven't edited any files.\n\n**What stockroom returns for a missing SKU** (per laptop's agent, which cited their README.md)\n- `GET /v1/items/:sku` returns HTTP 404 with `{\"error\":{\"code\":\"item_not_found\",\"message\":\"no item with that SKU\"}}`.\n- All errors use `{\"error\":{\"code\",\"message\"}}`. The codes are stable and the messages are not, so match on `code`.\n- A path that doesn't exist returns 404 with code `not_found`. Only `item_not_found` means \"no such SKU\".\n- `/v1/items` has no documented SKU filter. It always returns 200, and an empty result is `{\"items\": [], \"next_cursor\": null}`.\n- Other errors: 401 `unauthorized`, 400 `page_size_too_large` (page_size above 200), and 429 with a `Retry-After` header (seconds) above 600 requests a minute per key.\n\n**What sync.js should handle**\nsync.js never requests a single SKU. It only pages through `/v1/items`, so `item_not_found` can't occur today. It would matter only if you add per-SKU lookups. The bigger problem is that sync.js doesn't match this API in several places:\n1. **Page size (`sync.js:10`):** it sends `page_size=500`, and the API rejects anything above 200 with a 400. Use 200 or less.\n2. **Error responses (`sync.js:12-14`):** it never checks `res.ok`. On a 400, 401 or 429, `page.items` is undefined and `all.push(...undefined)` throws. It should check the status and read `error.code`. For 429 it should wait `Retry-After` seconds and retry.\n3. **End of pagination (`sync.js:16`):** the loop ends only when `cursor === undefined`, but the API sends `next_cursor: null` on the last page. The loop would never end, and the next request would send `cursor=null`. Use `while (cursor != null)` or `while (cursor)`.\n4. **Missing SKU, if lookups are added:** treat 404 with `item_not_found` as \"item absent\" (skip it, or mark it removed). Treat other 404s such as `not_found` as a bug.\n\nThese details come from laptop's agent and I haven't verified them. The server code and README aren't in this repo. Do you want me to make these changes in sync.js?",
+          "stderr": "",
+          "transcript": "03-offline-asker.jsonl"
+        }
+      ],
+      "waits": [
+        {
+          "label": "the laptop's answer on the devcontainer",
+          "device": "devcontainer",
+          "arrived": true,
+          "afterS": 8,
+          "recovered": false
+        }
+      ],
+      "reconnects": {
+        "laptop": {
+          "lost": 0,
+          "connected": 0,
+          "errors": []
+        },
+        "devcontainer": {
+          "lost": 0,
+          "connected": 0,
+          "errors": []
+        }
+      },
+      "notes": [],
+      "threads": [
+        "AIdQgpL6GNi2f1b91lTaOQ"
+      ]
+    },
+    {
+      "name": "04-sleep",
+      "title": "The laptop goes to sleep for 90 seconds just as the question reaches it, while its front desk is writing the answer",
+      "file": "scripts/devices/scenarios/04-sleep.json",
+      "ok": true,
+      "error": null,
+      "startedAt": "2026-11-17T22:36:08.638Z",
+      "durationS": 113,
+      "timeToFirstAnswerS": 95.4,
+      "timeToAgreementS": null,
+      "interventions": [],
+      "restartedByHand": false,
+      "lost": {
+        "laptopToDevcontainer": 0,
+        "devcontainerToLaptop": 0,
+        "held": 0,
+        "notDelivered": []
+      },
+      "faults": [
+        {
+          "kind": "pause",
+          "device": "laptop",
+          "atS": 6.5
+        },
+        {
+          "kind": "unpause",
+          "device": "laptop",
+          "atS": 96.6
+        }
+      ],
+      "checks": [
+        {
+          "name": "the answer names 600 a minute and the 429",
+          "pass": true,
+          "detail": "1 message(s); first: Limit: 600 requests per minute, per API key (from README.md).\n\nWhen you go over it: the API returns `429` with a `Retry-After` header giving seconds to wait. The README says to wait that long, and that retrying sooner extends the wait (from README.md). The error body follows the standard shape `{\"er"
+        },
+        {
+          "name": "the asker's report to its human has the answer",
+          "pass": true,
+          "detail": "- **Limit:** 600 requests/minute per API key, counted in fixed clock-minute windows (not sliding).\n- **Over it:** you get a `429` (`rate_limited`) with a `Retry-After` header giving the seconds left in the minute. Retrying sooner extends the wait by an undefined amount. Nothing mentioned about longer blocks or key suspension.\n\nI didn't edit any files."
+        }
+      ],
+      "sessions": [
+        {
+          "id": "asker",
+          "device": "devcontainer",
+          "startedAtS": 2,
+          "durationS": 103,
+          "exit": 0,
+          "counterpartServer": "connected",
+          "turns": 4,
+          "costUsd": 0.0196437,
+          "isError": false,
+          "toolCalls": [
+            "counterpart_open_thread {\"contact\":\"laptop\",\"goal\":\"Ask what the stockroom API's rate limit is and what happens when a client goes over it (we call it from sync.js).\"}",
+            "counterpart_say {\"thread\":\"NeV9wZmIyhnReHQiymimpg\",\"text\":\"Hi! We call the stockroom API from our sync.js. What is stockroom's rate limit, and what happens when a client goes o",
+            "counterpart_wait_for_reply {\"thread\":\"NeV9wZmIyhnReHQiymimpg\",\"after\":23,\"timeout_seconds\":120}"
+          ],
+          "toolErrors": [],
+          "finalText": "- **Limit:** 600 requests/minute per API key, counted in fixed clock-minute windows (not sliding).\n- **Over it:** you get a `429` (`rate_limited`) with a `Retry-After` header giving the seconds left in the minute. Retrying sooner extends the wait by an undefined amount. Nothing mentioned about longer blocks or key suspension.\n\nI didn't edit any files.",
+          "stderr": "",
+          "transcript": "04-sleep-asker.jsonl"
+        }
+      ],
+      "waits": [
+        {
+          "label": "the question on the laptop",
+          "device": "laptop",
+          "arrived": true,
+          "afterS": 3.2,
+          "recovered": false
+        },
+        {
+          "label": "the laptop's answer on the devcontainer",
+          "device": "devcontainer",
+          "arrived": true,
+          "afterS": 5.3,
+          "recovered": false
+        }
+      ],
+      "reconnects": {
+        "laptop": {
+          "lost": 0,
+          "connected": 0,
+          "errors": []
+        },
+        "devcontainer": {
+          "lost": 0,
+          "connected": 0,
+          "errors": []
+        }
+      },
+      "notes": [],
+      "threads": [
+        "NeV9wZmIyhnReHQiymimpg"
+      ]
+    },
+    {
+      "name": "05-network-drop",
+      "title": "The devcontainer's network drops while the laptop replies, and comes back a minute later at a new address",
+      "file": "scripts/devices/scenarios/05-network-drop.json",
+      "ok": false,
+      "error": "the laptop's answer on the devcontainer: nothing after 480s",
+      "startedAt": "2026-11-17T22:38:02.500Z",
+      "durationS": 565,
+      "timeToFirstAnswerS": null,
+      "timeToAgreementS": null,
+      "interventions": [
+        {
+          "by": "rig, for the human",
+          "what": "cpart down, then cpart up, on devcontainer",
+          "why": "the laptop's answer on the devcontainer had not arrived 300s after the wait began; devcontainer's cpart status said the daemon was running and connected",
+          "atS": 377.3
+        }
+      ],
+      "restartedByHand": true,
+      "lost": {
+        "laptopToDevcontainer": 0,
+        "devcontainerToLaptop": 0,
+        "held": 0,
+        "notDelivered": []
+      },
+      "faults": [
+        {
+          "kind": "disconnect",
+          "device": "devcontainer",
+          "atS": 9
+        },
+        {
+          "kind": "connect",
+          "device": "devcontainer",
+          "atS": 69.1
+        }
+      ],
+      "checks": [],
+      "sessions": [
+        {
+          "id": "asker",
+          "device": "devcontainer",
+          "startedAtS": 2,
+          "durationS": 497,
+          "exit": 0,
+          "counterpartServer": "connected",
+          "turns": 7,
+          "costUsd": 0.028146399999999995,
+          "isError": false,
+          "toolCalls": [
+            "counterpart_contacts {}",
+            "counterpart_open_thread {\"contact\":\"laptop\",\"goal\":\"We're writing sync.js, which needs to authenticate to the warehouse team's stockroom API. How should a client authenticate (mechanis",
+            "counterpart_wait_for_reply {\"thread\":\"uX2qSohDdyS_W6qScs36rg\",\"after\":25,\"timeout_seconds\":120}",
+            "counterpart_wait_for_reply {\"thread\":\"uX2qSohDdyS_W6qScs36rg\",\"after\":25,\"timeout_seconds\":120}",
+            "counterpart_wait_for_reply {\"thread\":\"uX2qSohDdyS_W6qScs36rg\",\"after\":25,\"timeout_seconds\":120}",
+            "counterpart_wait_for_reply {\"thread\":\"uX2qSohDdyS_W6qScs36rg\",\"after\":25,\"timeout_seconds\":120}"
+          ],
+          "toolErrors": [],
+          "finalText": "The laptop agent hasn't answered yet, so I can't tell you what to put in sync.js. I waited about 8 minutes across four checks and got nothing.\n\nI opened thread `uX2qSohDdyS_W6qScs36rg` with laptop and asked three things:\n- How a client authenticates: mechanism, header or param names, and key format.\n- What status code a bad key gets back.\n- What body a bad key gets back.\n\nThe relay stored the message, but laptop hasn't picked it up. Their agent may be offline, or their human may not have it running.\n\nI haven't edited any files and I haven't guessed at the auth scheme. Any header name or error shape I made up could be wrong.\n\nDo you want me to keep waiting, or would you rather check with the warehouse team directly? Once a reply arrives I'll turn it into the exact change for sync.js.",
+          "stderr": "",
+          "transcript": "05-network-drop-asker.jsonl"
+        }
+      ],
+      "waits": [
+        {
+          "label": "the question on the laptop",
+          "device": "laptop",
+          "arrived": true,
+          "afterS": 3.8,
+          "recovered": false
+        },
+        {
+          "label": "the laptop's answer on the devcontainer",
+          "device": "devcontainer",
+          "arrived": false,
+          "afterS": null,
+          "recovered": true
+        }
+      ],
+      "reconnects": {
+        "laptop": {
+          "lost": 0,
+          "connected": 0,
+          "errors": []
+        },
+        "devcontainer": {
+          "lost": 0,
+          "connected": 1,
+          "errors": []
+        }
+      },
+      "notes": [],
+      "threads": [
+        "uX2qSohDdyS_W6qScs36rg"
+      ]
+    },
+    {
+      "name": "06-relay-restart",
+      "title": "The relay restarts while the laptop's front desk is answering",
+      "file": "scripts/devices/scenarios/06-relay-restart.json",
+      "ok": true,
+      "error": null,
+      "startedAt": "2026-11-17T22:47:29.911Z",
+      "durationS": 277,
+      "timeToFirstAnswerS": 6.2,
+      "timeToAgreementS": null,
+      "interventions": [],
+      "restartedByHand": false,
+      "lost": {
+        "laptopToDevcontainer": 0,
+        "devcontainerToLaptop": 0,
+        "held": 0,
+        "notDelivered": []
+      },
+      "faults": [
+        {
+          "kind": "relay_restart",
+          "device": null,
+          "atS": 14.4
+        }
+      ],
+      "checks": [
+        {
+          "name": "the answer names 50 and 15 minutes",
+          "pass": true,
+          "detail": "1 message(s); first: 1) The default page_size is 50. Allowed values are 1 to 200, and anything above 200 is refused with a 400 `page_size_too_large`, not clamped (from README.md; server.js uses the same default of 50).\n\n2) A cursor expires after 15 minutes (from README.md). The cursor is the `next_cursor` from the previ"
+        },
+        {
+          "name": "the asker's report to its human has the answer",
+          "pass": true,
+          "detail": "- Default `page_size` is 50 (allowed 1–200; above 200 returns a 400 `page_size_too_large` rather than being clamped).\n- Cursors expire after 15 minutes per their README, but their server.js doesn't enforce it (the cursor is just a SKU), so that limit is documented, not verified.\n\nI didn't edit any files."
+        }
+      ],
+      "sessions": [
+        {
+          "id": "asker",
+          "device": "devcontainer",
+          "startedAtS": 4,
+          "durationS": 261,
+          "exit": 0,
+          "counterpartServer": "connected",
+          "turns": 7,
+          "costUsd": 0.028641100000000003,
+          "isError": false,
+          "toolCalls": [
+            "counterpart_contacts {}",
+            "counterpart_open_thread {\"contact\":\"laptop\",\"goal\":\"Our sync.js pages through your stockroom API. Two questions: what is the default page_size, and how long does a cursor stay valid?\"}",
+            "counterpart_wait_for_reply {\"thread\":\"7F-hZXlmn0inKWkhoBh2KQ\",\"after\":26,\"timeout_seconds\":120}",
+            "counterpart_wait_for_reply {\"thread\":\"7F-hZXlmn0inKWkhoBh2KQ\",\"after\":26,\"timeout_seconds\":120}",
+            "counterpart_say {\"thread\":\"7F-hZXlmn0inKWkhoBh2KQ\",\"text\":\"Hi, two questions about the stockroom API that our sync.js pages through: (1) What is the default page_size? (2) How ",
+            "counterpart_wait_for_reply {\"thread\":\"7F-hZXlmn0inKWkhoBh2KQ\",\"after\":27,\"timeout_seconds\":120}"
+          ],
+          "toolErrors": [],
+          "finalText": "- Default `page_size` is 50 (allowed 1–200; above 200 returns a 400 `page_size_too_large` rather than being clamped).\n- Cursors expire after 15 minutes per their README, but their server.js doesn't enforce it (the cursor is just a SKU), so that limit is documented, not verified.\n\nI didn't edit any files.",
+          "stderr": "",
+          "transcript": "06-relay-restart-asker.jsonl"
+        }
+      ],
+      "waits": [
+        {
+          "label": "the question on the laptop",
+          "device": "laptop",
+          "arrived": true,
+          "afterS": 7,
+          "recovered": false
+        },
+        {
+          "label": "the laptop's answer on the devcontainer",
+          "device": "devcontainer",
+          "arrived": true,
+          "afterS": 234.7,
+          "recovered": false
+        }
+      ],
+      "reconnects": {
+        "laptop": {
+          "lost": 1,
+          "connected": 1,
+          "errors": []
+        },
+        "devcontainer": {
+          "lost": 1,
+          "connected": 1,
+          "errors": []
+        }
+      },
+      "notes": [],
+      "threads": [
+        "7F-hZXlmn0inKWkhoBh2KQ"
+      ]
+    }
+  ],
+  "fatal": null
+}

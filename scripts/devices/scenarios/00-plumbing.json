@@ -1,0 +1,43 @@
+{
+  "name": "00-plumbing",
+  "title": "No model: messages by hand through sleep, a network drop and a relay restart",
+  "asker": "devcontainer",
+  "sessions": false,
+  "steps": [
+    { "do": "cpart", "device": "devcontainer", "args": ["open", "laptop", "plumbing check"] },
+    { "do": "cpart", "device": "devcontainer", "args": ["say", "laptop", "ping 1"] },
+    { "do": "wait_message", "device": "laptop", "text": "ping 1", "timeout": 30, "label": "ping 1 on the laptop" },
+    { "do": "cpart", "device": "laptop", "args": ["say", "devcontainer", "pong 1"] },
+    { "do": "wait_message", "device": "devcontainer", "text": "pong 1", "timeout": 30, "label": "pong 1 on the devcontainer" },
+
+    { "do": "fault", "kind": "pause", "device": "laptop" },
+    { "do": "cpart", "device": "devcontainer", "args": ["say", "laptop", "ping 2, sent while the laptop sleeps"] },
+    { "do": "sleep", "seconds": 45 },
+    { "do": "fault", "kind": "unpause", "device": "laptop" },
+    { "do": "wait_message", "device": "laptop", "text": "ping 2", "timeout": 120, "recover_after": 90, "label": "ping 2 on the laptop after it wakes" },
+
+    { "do": "fault", "kind": "disconnect", "device": "laptop" },
+    { "do": "cpart", "device": "devcontainer", "args": ["say", "laptop", "ping 2b, sent while the laptop is off the network for a moment"] },
+    { "do": "sleep", "seconds": 20 },
+    { "do": "fault", "kind": "connect", "device": "laptop", "same_address": true },
+    { "do": "wait_message", "device": "laptop", "text": "ping 2b", "timeout": 240, "recover_after": 180, "label": "ping 2b on the laptop, back at the same address" },
+
+    { "do": "fault", "kind": "disconnect", "device": "laptop" },
+    { "do": "cpart", "device": "devcontainer", "args": ["say", "laptop", "ping 3, sent while the laptop is off the network"] },
+    { "do": "sleep", "seconds": 30 },
+    { "do": "fault", "kind": "connect", "device": "laptop" },
+    { "do": "wait_message", "device": "laptop", "text": "ping 3", "timeout": 240, "recover_after": 180, "label": "ping 3 on the laptop after the network is back" },
+    { "do": "cpart", "device": "laptop", "args": ["say", "devcontainer", "pong 3"] },
+    { "do": "wait_message", "device": "devcontainer", "text": "pong 3", "timeout": 120, "recover_after": 90, "label": "pong 3 on the devcontainer" },
+
+    { "do": "fault", "kind": "relay_restart", "down_seconds": 5 },
+    { "do": "cpart", "device": "devcontainer", "args": ["say", "laptop", "ping 4, after the relay restarted"] },
+    { "do": "wait_message", "device": "laptop", "text": "ping 4", "timeout": 120, "recover_after": 90, "label": "ping 4 on the laptop after the relay restart" },
+
+    { "do": "fault", "kind": "disconnect", "device": "devcontainer" },
+    { "do": "cpart", "device": "laptop", "args": ["say", "devcontainer", "pong 4, sent while the devcontainer is off the network"] },
+    { "do": "sleep", "seconds": 30 },
+    { "do": "fault", "kind": "connect", "device": "devcontainer" },
+    { "do": "wait_message", "device": "devcontainer", "text": "pong 4", "timeout": 240, "recover_after": 180, "label": "pong 4 on the devcontainer after its network is back" }
+  ]
+}
