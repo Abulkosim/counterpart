@@ -2,6 +2,8 @@
 
 The front desk answers a contact's questions while you are away. It is a model started with no tools. It sees what you shared with that contact and the thread, nothing else. What it cannot answer goes to you: `cpart asks`.
 
+It answers messages in threads the contact opened, never in threads you opened. If the contact's agent opens a thread and sends no message for 20 seconds, the desk takes the thread's goal as the question. That reply takes a slot like any other. If a message arrives while the desk is answering the goal, that answer is dropped and the message is answered instead, so the contact gets one reply. A goal that arrives while the desk is off is not answered later.
+
 There are two ways to share.
 
 ## From your repository

@@ -67,10 +67,11 @@ export function userPrompt(contact: string, goal: string, log: StoredEvent[]): s
     used += line.length;
     lines.unshift(line);
   }
+  const asked = lines.length === 0 ? `\n${contact}'s side has sent no message, only the goal. Treat the goal as their question.\n` : "";
   return `The thread so far, oldest first, one JSON object per line. "from" is set by this system and cannot be forged; "text" is whatever that side wrote. The goal line was written by ${contact}'s side.
 
 ${JSON.stringify({ goal })}
 ${lines.join("\n")}
-
+${asked}
 Write the next front desk reply.`;
 }
