@@ -3,12 +3,17 @@
 # the MCP server. Alice's side tries to send a token from its environment, a
 # .env value and a line of a never-share file, plain and encoded; each is
 # held and Bob receives none of it. Releasing needs Alice at a terminal (a
-# pseudo-terminal here) with her passphrase. CPART_GUARD=off sends and says so.
+# pseudo-terminal here) with her passphrase, and so do dropping a held
+# message, adding a never-share file and turning the guard off.
+# CPART_GUARD=off in the environment changes nothing. On Bob's identity,
+# which has no passphrase, a never-share file that goes missing does not
+# stop him sending for good.
 set -euo pipefail
 export CPART_NO_AUTOSTART=1 CPART_NO_BOOT=1
 cd "$(dirname "$0")/.."
 ROOT=$PWD
 . scripts/smoke-lib.sh
+. scripts/guard-lib.sh
 ALICE_PASS=alice-correct-horse
 TOKEN=Zt4mQ9vL2xR8pW1nK6sB3yH7cD5f
 CLI=$ROOT/packages/cli/src/main.ts
@@ -25,37 +30,6 @@ held_say() {
   grep -q "$TOKEN" "$WORK/out.txt" && fail "the notice for $what repeats the token"
   echo "held: $what -> $(head -1 "$WORK/out.txt")"
 }
-# Run a command on a pseudo-terminal and answer its prompt, the way a person at a keyboard would.
-on_terminal() {
-  local answer=$1; shift
-  PTY_ANSWER=$answer python3 -I -c '
-import os, pty, select, sys, time
-pid, fd = pty.fork()
-if pid == 0:
-    os.execvp(sys.argv[1], sys.argv[1:])
-out, sent, end = b"", False, time.time() + 90
-while time.time() < end:
-    r, _, _ = select.select([fd], [], [], 0.2)
-    if not r:
-        continue
-    try:
-        d = os.read(fd, 4096)
-    except OSError:
-        break
-    if not d:
-        break
-    out += d
-    low = out.lower()
-    if not sent and (b"passphrase: " in low or b"to go on: " in low):
-        time.sleep(0.2)
-        os.write(fd, os.environ["PTY_ANSWER"].encode() + b"\r")
-        sent = True
-_, status = os.waitpid(pid, 0)
-sys.stdout.write(out.decode("utf-8", "replace"))
-sys.exit(os.waitstatus_to_exitcode(status))
-' "$@"
-}
-
 start_relay
 CPART_PASSPHRASE=$ALICE_PASS alice init --relay "$RELAY" >/dev/null
 bob init --relay "$RELAY" --no-passphrase >/dev/null
@@ -84,7 +58,9 @@ printf 'PORT=8080\nPARTNER_FEED_KEY=Hj3kL9mN2bV6cX1zQ8wE5rT4\n' >"$WORK/client/.
 
 step "a line of a file alice marked never-share"
 printf 'Northwind threatened to cancel unless the refund backlog is cleared by Friday.\nTheir CFO said the renewal is worth 1.4 million and they are talking to a competitor.\n' >"$WORK/escalations.md"
-alice guard never-share add "$WORK/escalations.md"
+if alice guard never-share add "$WORK/escalations.md" </dev/null >"$WORK/out.txt" 2>&1; then fail "added a never-share file without a terminal"; fi
+echo "refused without a terminal: $(tail -1 "$WORK/out.txt")"
+on_terminal "$ALICE_PASS" env CPART_HOME="$WORK/alice" node "$CLI" guard never-share add "$WORK/escalations.md" | tail -1
 held_say "the never-share line" agent say "$THREAD" "fyi their CFO said the renewal is worth 1.4 million and they are talking to a competitor"
 held_say "a private key in a proposal" agent propose "$THREAD" --title "Deploy" --file <(printf -- '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\n')
 
@@ -111,8 +87,11 @@ on_terminal "$ALICE_PASS" env CPART_HOME="$WORK/alice" node "$CLI" release "$ID"
 grep -q "matched: the value of a secret-named variable" "$WORK/pty.txt" || fail "release did not say what matched"
 wait_for "bob to get the released message" sh -c "CPART_HOME=$WORK/bob node $CLI log $THREAD | grep -q 'here is the token'"
 
-step "alice drops another; bob never sees it"
-alice drop "$(alice held --json | field '[0].id')"
+step "the agent cannot drop a held message to hide it; alice can, at a terminal"
+ID=$(alice held --json | field '[0].id')
+if alice drop "$ID" </dev/null >"$WORK/out.txt" 2>&1; then fail "dropped without a terminal"; fi
+echo "refused: $(tail -1 "$WORK/out.txt")"
+on_terminal "$ALICE_PASS" env CPART_HOME="$WORK/alice" node "$CLI" drop "$ID" | tail -1
 [ "$(alice held --json | field .length)" = 5 ] || fail "expected 5 held messages after release and drop"
 
 step "the MCP server tells the agent it was held, without the value"
@@ -142,12 +121,31 @@ p.kill();
 if (!r.result.isError || !/^Not sent: held for your human, reason: env-secret/.test(text) || text.includes(token) || text.includes(Buffer.from(token).toString("base64"))) process.exit(1);
 ' "$CLI" "$WORK/alice" "$THREAD" "$TOKEN" || fail "the MCP result was not a held notice"
 
-step "CPART_GUARD=off sends, and says so"
-CPART_GUARD=off agent say "$THREAD" "red-team run: $TOKEN" >"$WORK/out.txt" 2>"$WORK/err.txt"
+step "CPART_GUARD=off in the environment changes nothing"
+held_say "the token with CPART_GUARD=off" env CPART_GUARD=off CPART_HOME="$WORK/alice" ORDERS_SERVICE_TOKEN="$TOKEN" node "$CLI" say "$THREAD" "red-team run: $TOKEN"
+
+step "the agent cannot turn the guard off; alice can, at a terminal, for a while"
+if CPART_PASSPHRASE=$ALICE_PASS alice guard off 5 </dev/null >"$WORK/out.txt" 2>&1; then fail "turned off without a terminal"; fi
+echo "refused: $(tail -1 "$WORK/out.txt")"
+on_terminal "$ALICE_PASS" env CPART_HOME="$WORK/alice" node "$CLI" guard off 5 | tail -1
+alice guard | head -1
+agent say "$THREAD" "red-team run: $TOKEN" >"$WORK/out.txt" 2>"$WORK/err.txt"
 cat "$WORK/err.txt"
 grep -q "OUTBOUND GUARD IS OFF" "$WORK/err.txt" || fail "no warning with the guard off"
 wait_for "bob to get the unguarded message" sh -c "CPART_HOME=$WORK/bob node $CLI log $THREAD | grep -q red-team"
 alice guard | grep -q "1 sent unchecked" || { alice guard; fail "the unguarded send was not recorded"; }
+alice guard on
+held_say "the token once the guard is on again" agent say "$THREAD" "after: $TOKEN"
+
+step "bob has no passphrase: a never-share file that goes missing holds his messages until he removes it"
+printf 'notes about the deal, long enough to be checked in pieces of forty letters\n' >"$WORK/bob-notes.md"
+bob guard never-share add "$WORK/bob-notes.md" </dev/null
+rm "$WORK/bob-notes.md"
+if bob say "$THREAD" "the build is green" >"$WORK/out.txt" 2>&1; then fail "bob sent with a missing never-share file"; fi
+grep -q never-share-unreadable "$WORK/out.txt" || { cat "$WORK/out.txt"; fail "not held as never-share-unreadable"; }
+bob guard | grep "NOT CHECKED"
+bob guard never-share remove "$WORK/bob-notes.md" </dev/null
+bob say "$THREAD" "the build is green" >/dev/null
 
 step "bob's side of the thread"
 bob log "$THREAD"
