@@ -98,6 +98,9 @@ cat "$WORK/dave.again"
 grep -q "refused to log you in (wrong_relay_url)" "$WORK/dave.again"
 grep -q "Your identity is unchanged" "$WORK/dave.again"
 [ -e "$WORK/dave/keys.json" ] || fail "an identity that had worked was removed"
+cpart dave status | tee "$WORK/dave.status"
+grep -q "^  the relay at $WRONG refused to log you in (wrong_relay_url)" "$WORK/dave.status" || fail "status does not say the relay refused the login"
+if grep -q "Nothing is waiting" "$WORK/dave.status"; then fail "status says nothing is waiting while the relay refuses the login"; fi
 # The refusal stays in dave's database. With the relay stopped, it is old news.
 cpart dave down >/dev/null
 kill "$RELAY2_PID"; wait "$RELAY2_PID" 2>/dev/null || true; RELAY2_PID=
@@ -148,6 +151,25 @@ grep -q "^Paired with alice" "$WORK/bob.join"
 A=$(cpart alice contacts --json | node -pe 'JSON.parse(require("fs").readFileSync(0,"utf8"))[0].safetyCode')
 B=$(cpart bob contacts --json | node -pe 'JSON.parse(require("fs").readFileSync(0,"utf8"))[0].safetyCode')
 [ "$A" = "$B" ] || fail "safety codes differ: $A and $B"
+
+step "bob opens a thread and asks twice; alice has no front desk and no session that used Counterpart"
+cpart bob open alice "QMARK which page size?" --say "QMARK first question" >/dev/null
+cpart bob say alice "QMARK second question" >/dev/null
+wait_for "alice's status to show bob waiting" sh -c "CPART_HOME='$WORK/alice' node packages/cli/src/main.ts status | grep -q '^  bob wrote in thread [A-Za-z0-9_-]*: new thread, 2 messages'"
+cpart alice status | tee "$WORK/alice.waiting"
+sed -n '/^Waiting for you:/,/^$/p' "$WORK/alice.waiting" | grep -q "bob wrote in thread" || fail "bob's thread is not under Waiting for you"
+if grep -q QMARK "$WORK/alice.waiting"; then fail "bob's words reached the status"; fi
+# A Claude Code session starting on alice's machine, and another one's first prompt.
+echo '{"session_id":"mac-session-1","hook_event_name":"SessionStart","source":"startup"}' | cpart alice hook start | tee "$WORK/start.json"
+grep -q '"systemMessage":"Counterpart: bob wrote in 1 thread nobody on this side has read or answered. cpart status lists it."' "$WORK/start.json" || fail "a new session was not told"
+grep -q '"hookEventName":"SessionStart","additionalContext":"Counterpart: bob wrote in 1 thread' "$WORK/start.json"
+echo '{"session_id":"mac-session-1","hook_event_name":"UserPromptSubmit"}' | cpart alice hook prompt >"$WORK/prompt1.json"
+[ ! -s "$WORK/prompt1.json" ] || fail "the session was told twice: $(cat "$WORK/prompt1.json")"
+echo '{"session_id":"mac-session-2","hook_event_name":"UserPromptSubmit"}' | cpart alice hook prompt | tee "$WORK/prompt2.json"
+grep -q '"hookEventName":"UserPromptSubmit","additionalContext":"Counterpart: bob wrote in 1 thread' "$WORK/prompt2.json" || fail "a second session was not told"
+if grep -q QMARK "$WORK/start.json" "$WORK/prompt2.json"; then fail "bob's words reached a hook"; fi
+cpart bob status | tee "$WORK/bob.asked"
+if grep -q "wrote in thread" "$WORK/bob.asked"; then fail "the asker is told its own question is waiting"; fi
 
 step "bob talks to alice by name"
 cpart bob open alice "agree on pagination" >/dev/null

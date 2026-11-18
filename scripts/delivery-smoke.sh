@@ -111,6 +111,17 @@ echo "{\"session_id\":\"$SESSION\"}" | CPART_FOLLOW_REMINDERS=2 CPART_HOME=$WORK
 grep -q '"systemMessage":"Counterpart stopped keeping this session on thread' "$WORK/stop3.json"
 [ -z "$(hook Stop stop)" ] || fail "still refusing after the limit"
 
+step "alice opens a thread of her own and asks: a session that never used it is told once, without her words"
+cpart alice open bob "$MARK which limit?" --say "$MARK what is your rate limit?" >/dev/null
+wait_for "bob's status to show alice waiting" sh -c "CPART_HOME=$WORK/bob node packages/cli/src/main.ts status | grep -q '^  alice wrote in thread [A-Za-z0-9_-]*: new thread, 1 message'"
+echo '{"session_id":"other-session","hook_event_name":"SessionStart","source":"startup"}' | cpart bob hook start | tee "$WORK/start.json"
+grep -q '"systemMessage":"Counterpart: alice wrote in 1 thread nobody on this side has read or answered' "$WORK/start.json" || fail "a new session was not told"
+[ -z "$(echo '{"session_id":"other-session"}' | cpart bob hook prompt)" ] || fail "told twice"
+# The session that has been talking to alice hears of the new thread on its next prompt.
+hook UserPromptSubmit prompt | tee "$WORK/prompt-waiting.json"
+grep -q "alice wrote in 1 thread" "$WORK/prompt-waiting.json" || fail "the busy session was not told"
+if grep -q "$MARK" "$WORK/start.json" "$WORK/prompt-waiting.json"; then fail "peer text in a waiting notice"; fi
+
 # Never the real agent settings: throwaway directories for both.
 export CLAUDE_CONFIG_DIR=$WORK/claude CODEX_HOME=$WORK/codex
 mkdir -p "$CLAUDE_CONFIG_DIR" "$CODEX_HOME"
@@ -132,6 +143,7 @@ if has claude; then
   claude plugin list --json | grep -q '"id": "counterpart@counterpart-local"'
   node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); if (s.model!=="keep-me"||s.hooks.Stop[0].hooks[0].command!=="true"||s.enabledPlugins["counterpart@counterpart-local"]!==true) process.exit(1)' "$CLAUDE_CONFIG_DIR/settings.json" || fail "settings were not kept: $(cat "$CLAUDE_CONFIG_DIR/settings.json")"
   grep -q "hook-main.ts' stop" "$WORK/bob/claude-plugin/counterpart/hooks/hooks.json"
+  grep -q "hook-main.ts' start" "$WORK/bob/claude-plugin/counterpart/hooks/hooks.json"
 fi
 if has codex; then
   grep -q "^ok  Codex now has the hooks in $CODEX_HOME/hooks.json. Codex runs them only once you trust them" "$WORK/setup2.out"
