@@ -41,6 +41,7 @@ const DESCRIBE: Record<string, string> = {
   "generic-secret": "a value that looks like a secret",
   "env-secret": "the value of a secret-named variable in the sending program's environment",
   "dotenv-value": "a value from a .env file",
+  "config-value": "a value under a secret name in a config or credentials file",
   "never-share-file": "text from a file you marked never-share",
   "too-much-to-check": "more encoded text than the guard will decode, so part of it went unchecked",
   "never-share-unreadable": "a never-share file that cannot be read now (restore it, or remove it with cpart guard never-share remove)",
