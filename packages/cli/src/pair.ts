@@ -9,6 +9,8 @@ export interface Io {
   out(human: string, data: unknown): void;
   note(s: string): void;
   safe(s: string): string;
+  // Whether Claude Code or Codex has the tools for this identity.
+  agents(): boolean;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -29,7 +31,11 @@ async function watch(store: PairingStore, id: string, ms: number, stop: (v: Pair
   }
 }
 
-const NEXT = (name: string): string => `Now, in Claude Code or Codex, say something like:\n  ask ${name}'s agent what their API returns for an empty page`;
+// What to do once paired. The agent hint only where an agent can act on it.
+export const nextStep = (name: string, agents: boolean): string =>
+  agents
+    ? `Now, in Claude Code or Codex, say something like:\n  ask ${name}'s agent what their API returns for an empty page`
+    : `Talk from this terminal:\n  cpart open ${name} "<what it is about>" --say "<first message>"\nTo let Claude Code or Codex talk for you instead: cpart setup`;
 
 // Prints a code and, unless told not to, waits for the pairing to end.
 // Returns false when no code could be made; the caller then offers the long invite.
@@ -62,7 +68,7 @@ export async function inviteByCode(node: Counterpart, name: string, io: Io, opts
       if (v.state === "open" && v.claimed) io.note("Someone has entered the code. Checking it.");
       if (v.state === "confirmed") io.note(`${name} proved the code. Waiting for their contact request.`);
     });
-    if (end.state === "done") io.note(`\nPaired with ${name}. The code proved who is on each side, so there is no safety code to compare.\n\n${NEXT(name)}`);
+    if (end.state === "done") io.note(`\nPaired with ${name}. The code proved who is on each side, so there is no safety code to compare.\n\n${nextStep(name, io.agents())}`);
     else if (end.state === "failed") throw new Error(`${end.detail ?? "the pairing failed"}\nMake a new code: cpart invite ${name}`);
     else io.note("\nStill waiting. Your daemon finishes it in the background; cpart status shows how it went.");
     return true;
@@ -89,7 +95,7 @@ export async function joinByCode(home: string, input: string, name: string, io: 
     const end = await watch(store, id, 120_000, (v) => v.state === "done" || v.state === "failed");
     const c = node.contacts().find((x) => x.name === name);
     if (end.state === "done" && c) {
-      io.out(`\nPaired with ${name}. The code proved who is on each side, so there is no safety code to compare.\n\n${NEXT(name)}`, c);
+      io.out(`\nPaired with ${name}. The code proved who is on each side, so there is no safety code to compare.\n\n${nextStep(name, io.agents())}`, c);
     } else if (end.state === "failed") {
       throw new Error(end.detail?.startsWith(OLD_RELAY) ? end.detail : `${end.detail ?? "the pairing failed"} To try again, ask ${name} for a new code.`);
     } else if (end.state === "confirmed") {

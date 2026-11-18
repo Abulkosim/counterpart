@@ -19,7 +19,7 @@ import { openTunnel } from "./tunnel.ts";
 import { GUARD_USAGE, guardCommand } from "./guard-cli.ts";
 import { SHARE_USAGE, shareCommand, sharedSummary } from "./share.ts";
 import { hookLines, installHooks, removeHooks } from "./hooks-install.ts";
-import { inviteByCode, joinByCode, pairingLines } from "./pair.ts";
+import { inviteByCode, joinByCode, nextStep, pairingLines } from "./pair.ts";
 import { PairingEngine } from "@counterpart/daemon";
 import { looksLikeCode } from "@counterpart/protocol";
 import { RELAY_SUBCOMMANDS, RELAY_USAGE, logLink, reachable, relayCommand, relayNotices } from "./relays.ts";
@@ -273,6 +273,7 @@ function describeEvidence(v: EvidenceView, contact: string): string {
 }
 
 const note = (s: string): void => (flags.json ? console.error(s) : console.log(s));
+const agentsReady = (): boolean => agents(home).some((h) => h.registered === "here");
 
 // Which argument of this command names a thread, if any.
 function threadArg(): number | undefined {
@@ -605,7 +606,7 @@ async function main(): Promise<void> {
   }
   if (cmd === "join") {
     need(2, "join <code or invite> <what you call them>");
-    if (looksLikeCode(args[0]!)) return joinByCode(home, args[0]!, args[1]!, { out, note, safe }, (relay) => setup(relay, true));
+    if (looksLikeCode(args[0]!)) return joinByCode(home, args[0]!, args[1]!, { out, note, safe, agents: agentsReady }, (relay) => setup(relay, true));
     const inv = decodeInvite(args[0]!);
     const node = await setup(inv.relay, true);
     const known = node.contacts().find((c) => c.rootKey === inv.credential.rootKey);
@@ -618,7 +619,7 @@ async function main(): Promise<void> {
     const c = node.contact(known?.name ?? args[1]!);
     note(
       c.state === "active"
-        ? `\nPaired with ${c.name}. Safety code ${c.safetyCode}: ask ${c.name} to read theirs to you. If the two differ, someone is in the middle.\n\nNow, in Claude Code or Codex, say something like:\n  ask ${c.name}'s agent what their API returns for an empty page`
+        ? `\nPaired with ${c.name}. Safety code ${c.safetyCode}: ask ${c.name} to read theirs to you. If the two differ, someone is in the middle.\n\n${nextStep(c.name, agentsReady())}`
         : `\nYour request is on its way to ${c.name}. It completes when their daemon is next online: check with cpart status. Safety code ${c.safetyCode}.`,
     );
     if (flags.json) console.log(JSON.stringify(c));
@@ -919,7 +920,7 @@ async function main(): Promise<void> {
       const d = await ensureDaemon();
       // Scripts read `invite` from --json, so that stays the long form unless they ask for --code.
       const short = flags.json ? !!flags.code : !flags.long;
-      if (short && (await inviteByCode(node, args[0]!, { out, note, safe }, { daemon: d, wait: !flags["no-wait"] && !flags.json }))) return;
+      if (short && (await inviteByCode(node, args[0]!, { out, note, safe, agents: agentsReady }, { daemon: d, wait: !flags["no-wait"] && !flags.json }))) return;
       if (short) note(d ? "The relay did not give out a short code, so here is a long invite instead." : "A short code needs the daemon running, so here is a long invite instead.");
       const invite = node.createInvite(args[0]!);
       return out(

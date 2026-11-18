@@ -80,6 +80,8 @@ cpart alice invite bob --json --code >"$WORK/invite.json"
 FULL=$(js full <"$WORK/invite.json")
 cpart bob join "$FULL" alice --yes --no-agents --no-passphrase | tee "$WORK/bob.join"
 grep -q "^Paired with alice" "$WORK/bob.join"
+if grep -q "in Claude Code or Codex, say" "$WORK/bob.join"; then fail "join --no-agents still pointed at Claude Code or Codex"; fi
+grep -q "cpart open alice" "$WORK/bob.join" || fail "join --no-agents did not say how to talk from the terminal"
 
 step "a message waits in the relay while systemd restarts it"
 cpart alice down >/dev/null

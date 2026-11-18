@@ -1,5 +1,5 @@
 // What a new person meets in the CLI: per-command help, join without a
-// terminal, and the passphrase prompt.
+// terminal, the passphrase prompt, and the hint after pairing.
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -7,6 +7,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { commandHelp } from "../src/help.ts";
+import { nextStep } from "../src/pair.ts";
 import { MAIN } from "../src/service.ts";
 
 const dirs: string[] = [];
@@ -79,4 +80,12 @@ sys.stdout.write(out.decode("utf8", "replace"))
   delete env.CPART_PASSPHRASE;
   const shown = execFileSync("python3", ["-I", "-c", py, process.execPath, MAIN, "init", "--relay", "ws://127.0.0.1:9"], { encoding: "utf8", env });
   for (const w of ["approve a contract", "release or drop a held message", "share files", "turn the guard off", "renew this device", "Passphrase (8 characters or more)"]) assert.ok(shown.includes(w), `prompt lacks "${w}": ${shown}`);
+});
+
+test("after pairing, the agent hint shows only where an agent has the tools", () => {
+  assert.match(nextStep("bob", true), /in Claude Code or Codex, say something like/);
+  const none = nextStep("bob", false);
+  assert.ok(!none.includes("say something like"));
+  assert.match(none, /cpart open bob "<what it is about>" --say "<first message>"/);
+  assert.match(none, /cpart setup/);
 });
