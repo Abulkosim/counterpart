@@ -7,7 +7,7 @@ import {
   type ClientFrame, type PairClientFrame, type ServerFrame, LIMITS, RELAY_AUTH_DOMAIN, canonicalize, deviceId, isId, isObject, isStr,
   isPairFrame, parseWire, relayAuthMessage, verify, verifyCredential,
 } from "@counterpart/protocol";
-import { type NameplateOptions, nameplates } from "./nameplates.ts";
+import { type NameplateOptions, type PairOrigin, nameplates } from "./nameplates.ts";
 
 export interface RelayOptions {
   port?: number;
@@ -53,6 +53,7 @@ interface Session {
   nonce: string;
   tokens: number;
   refilled: number;
+  pair: PairOrigin; // who this is, for the nameplate limits
 }
 
 export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
@@ -136,8 +137,8 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
     ws.close(4003, "auth failed");
   };
 
-  wss.on("connection", (ws) => {
-    const s: Session = { device: null, outstanding: new Set(), nonce: randomBytes(24).toString("base64url"), tokens: rate * 2, refilled: now() };
+  wss.on("connection", (ws, req) => {
+    const s: Session = { device: null, outstanding: new Set(), nonce: randomBytes(24).toString("base64url"), tokens: rate * 2, refilled: now(), pair: { addr: req.socket.remoteAddress } };
     if (unauthenticated >= maxUnauthenticated) return ws.close(4013, "too many connections waiting to log in");
     unauthenticated++;
     let counted = true;
@@ -172,6 +173,7 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
           if (!verify(cred.signKey, RELAY_AUTH_DOMAIN, relayAuthMessage(s.nonce, frame.relay), frame.sig)) throw new Error("signature");
           if (allow.size > 0 && !allow.has(cred.rootKey)) throw new RelayError("not_invited");
           s.device = deviceId(cred);
+          s.pair.root = cred.rootKey;
         } catch (e) {
           log(`auth rejected: ${(e as Error).message}`);
           return refuse(ws, e instanceof RelayError ? e.code : "auth_failed");
@@ -236,7 +238,7 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
         }
         q.ack.run(s.device, frame.id);
         if (s.outstanding.delete(frame.id) && s.outstanding.size === 0) flush(s.device);
-      } else if (isPairFrame(frame.t)) plates.handle(s.device, frame as PairClientFrame);
+      } else if (isPairFrame(frame.t)) plates.handle(s.device, frame as PairClientFrame, s.pair);
       else ws.close(4002, "bad frame");
     });
 

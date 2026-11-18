@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import WebSocket from "ws";
 import { type DeviceSecrets, type PairServerFrame, RELAY_AUTH_DOMAIN, generateSigningKey, issueDevice, relayAuthMessage, sign } from "@counterpart/protocol";
 import { type Relay, type RelayOptions, startRelay } from "../src/index.ts";
+import { nameplates } from "../src/nameplates.ts";
 
 const open: { relays: Relay[]; sockets: WebSocket[] } = { relays: [], sockets: [] };
 after(async () => {
@@ -127,9 +128,9 @@ test("limits: opens and claims per device, messages per side, size, expiry", asy
   a.send({ t: "pair.send", nameplate: n1, body: "2" });
   a.send({ t: "pair.send", nameplate: n1, body: "3" });
   assert.equal((await a.next("pair.error")).code, "too_many_messages");
-  // A device that guesses numbers runs out of claims.
-  for (const n of [9001, 9002, 9003]) b.send({ t: "pair.claim", nameplate: n });
-  for (let i = 0; i < 3; i++) assert.equal((await b.next("pair.error")).code, "nameplate_unknown");
+  // A device that guesses numbers runs out of claims. A miss counts double.
+  for (const n of [9001, 9002]) b.send({ t: "pair.claim", nameplate: n });
+  for (let i = 0; i < 2; i++) assert.equal((await b.next("pair.error")).code, "nameplate_unknown");
   b.send({ t: "pair.claim", nameplate: n1 });
   assert.equal((await b.next("pair.error")).code, "rate_limited");
   // Expiry tells the owner and frees the slot.
@@ -140,6 +141,77 @@ test("limits: opens and claims per device, messages per side, size, expiry", asy
   assert.ok((await a.next("pair.opened")).nameplate);
   a.send({ t: "pair.open", ref: "5" });
   assert.equal((await a.next("pair.error")).code, "rate_limited", "three opens an hour");
+});
+
+test("limits count per root key: many free device credentials do not add claims or opens", async () => {
+  const r = await relay();
+  const honest = await login(r);
+  honest.send({ t: "pair.open", ref: "h" });
+  const target = (await honest.next("pair.opened")).nameplate as number;
+  // One root key, ten device credentials, each claiming ten numbers.
+  const root = generateSigningKey();
+  const codes: string[] = [];
+  for (let d = 0; d < 10; d++) {
+    const c = await login(r, await issueDevice(root));
+    for (let k = 0; k < 10; k++) {
+      c.send({ t: "pair.claim", nameplate: d * 10 + k + 1 });
+      codes.push(await Promise.race([c.next("pair.claimed").then(() => "claimed"), c.next("pair.error").then((f) => f.code as string)]));
+    }
+  }
+  // Ten claims an hour for the root key, and a miss counts double: at most
+  // five numbers were tried, not a hundred.
+  assert.ok(codes.filter((c) => c !== "rate_limited").length <= 5, codes.join(","));
+  // So the honest code is still free for the real joiner, unless it was among
+  // the first few numbers.
+  const joiner = await login(r);
+  joiner.send({ t: "pair.claim", nameplate: target });
+  const got = await Promise.race([joiner.next("pair.claimed").then(() => "claimed"), joiner.next("pair.error").then((f) => f.code as string)]);
+  if (target > 5) assert.equal(got, "claimed");
+  // Opens: three at once per root key, however many devices it has.
+  const opener = generateSigningKey();
+  const results: string[] = [];
+  for (let d = 0; d < 4; d++) {
+    const c = await login(r, await issueDevice(opener));
+    c.send({ t: "pair.open", ref: `o${d}` });
+    results.push(await Promise.race([c.next("pair.opened").then(() => "opened"), c.next("pair.error").then((f) => f.code as string)]));
+  }
+  assert.deepEqual(results, ["opened", "opened", "opened", "rate_limited"]);
+});
+
+test("limits count per source address, but not for loopback, which a tunnel gives everyone", async () => {
+  const frames: { device: string; frame: PairServerFrame }[] = [];
+  const plates = nameplates({ deliver: (device, frame) => frames.push({ device, frame }), claimsPerHour: 5, perAddressPerHour: 6 });
+  after(() => plates.close());
+  const last = (device: string): string => {
+    const f = frames.filter((x) => x.device === device).at(-1)!.frame as Record<string, unknown>;
+    return (f.code as string) ?? (f.t as string);
+  };
+  // Different devices and root keys from one outside address: three misses
+  // (each counts double) use up the address.
+  for (let i = 0; i < 3; i++) {
+    plates.handle(`d${i}`, { t: "pair.claim", nameplate: 9000 + i }, { root: `r${i}`, addr: "203.0.113.5" });
+    assert.equal(last(`d${i}`), "nameplate_unknown");
+  }
+  plates.handle("d9", { t: "pair.claim", nameplate: 9100 }, { root: "r9", addr: "203.0.113.5" });
+  assert.equal(last("d9"), "rate_limited");
+  plates.handle("d9", { t: "pair.claim", nameplate: 9100 }, { root: "r9", addr: "203.0.113.6" });
+  assert.equal(last("d9"), "nameplate_unknown", "another address is not limited");
+  for (let i = 0; i < 6; i++) {
+    plates.handle(`l${i}`, { t: "pair.claim", nameplate: 9200 + i }, { root: `lr${i}`, addr: "::ffff:127.0.0.1" });
+    assert.equal(last(`l${i}`), "nameplate_unknown", "loopback is not limited by address");
+  }
+});
+
+test("when numbers are being scanned, new codes get long numbers", async () => {
+  const frames: PairServerFrame[] = [];
+  const plates = nameplates({ deliver: (_d, frame) => frames.push(frame), scanLimit: 3, openAtOnce: 10 });
+  after(() => plates.close());
+  for (let i = 0; i < 3; i++) plates.handle(`scan${i}`, { t: "pair.claim", nameplate: 50 + i }, { root: `s${i}` });
+  for (let i = 0; i < 6; i++) plates.handle("inviter", { t: "pair.open", ref: `r${i}` }, { root: "ri" });
+  const numbers = frames.filter((f) => f.t === "pair.opened").map((f) => (f as { nameplate: number }).nameplate);
+  assert.equal(numbers.length, 6);
+  // Drawn from 1-9999: all six at or below 999 has odds of one in a million.
+  assert.ok(numbers.some((n) => n > 999), numbers.join(","));
 });
 
 test("bad frames get an error, not a crash", async () => {
