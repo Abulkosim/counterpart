@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs, promisify } from "node:util";
 import { type Attack, attacks, type Turn } from "./attacks.ts";
 import { detect, type Finding, homeCorpus, type Secret } from "./judge.ts";
+import { failedLabel, merge, mismatch, type Run, type Saved } from "./merge.ts";
 import { plant } from "./plant.ts";
 
 const run = promisify(execFile);
@@ -57,6 +58,15 @@ const brief = flags.brief!;
 if (!BRIEFS[brief]) throw new Error(`--brief ${brief}: use ${Object.keys(BRIEFS).join(" or ")}`);
 // Results of each kind go to their own file: guard-off.json, guard-on-trusting.json, guard-off-fake-leak.json ...
 const kind = `guard-${guard}${brief === "help" ? "" : `-${brief}`}${victimKind === "claude" ? "" : `-${victimKind}`}`;
+const outFile = flags.out ?? join(HERE, "results", `${kind}.json`);
+// With --only, the named attacks replace their rows in an earlier result file
+// of the same kind. Checked first, so a paid run is not wasted on a file it cannot join.
+const prev = only && existsSync(outFile) ? (JSON.parse(readFileSync(outFile, "utf8")) as Saved<TrialResult>) : null;
+const wrong = prev && mismatch(prev, { guard, victim: victimKind, brief, model: flags.model });
+if (wrong) {
+  process.stderr.write(`${outFile} holds results of another kind (${wrong}). Pass --out to write elsewhere.\n`);
+  process.exit(1);
+}
 const RUNS = join(HERE, "runs", `${stamp}-${kind}`);
 mkdirSync(RUNS, { recursive: true });
 
@@ -523,7 +533,7 @@ function relayCorpus(dir: string): string[] {
 const commit = (await run("git", ["rev-parse", "--short", "HEAD"], { cwd: ROOT })).stdout.trim();
 const queue: [Attack, number][] = chosen.flatMap((a) => Array.from({ length: trials }, (_, i) => [a, i + 1] as [Attack, number]));
 const results: TrialResult[] = [];
-let failed = 0;
+const failed = new Set<string>();
 async function worker(): Promise<void> {
   for (let next = queue.shift(); next; next = queue.shift()) {
     const [a, n] = next;
@@ -533,7 +543,7 @@ async function worker(): Promise<void> {
       const h = hits(r.reached).map((f) => `${f.name} (${f.level}, ${f.forms.join("/")})`);
       process.stderr.write(`${a.id} trial ${n}: ${r.leaked === "none" ? "no leak" : `LEAKED ${h.join("; ")}`} [${r.ended}, ${r.seconds}s, ${r.calls.length} tool calls]\n`);
     } catch (e) {
-      failed++;
+      failed.add(failedLabel(a.id, n));
       process.stderr.write(`${a.id} trial ${n}: ERROR ${(e as Error).stack}\n`);
     }
   }
@@ -548,23 +558,10 @@ try {
   /* not installed */
 }
 const at = new Date().toISOString().slice(0, 16).replace("T", " ");
-const outFile = flags.out ?? join(HERE, "results", `${kind}.json`);
-// With --only, the named attacks replace their rows in an earlier result file of the same kind.
-interface Run {
-  at: string;
-  commit: string;
-  attacks: string[] | "all";
-}
-let runs: Run[] = [{ at, commit, attacks: only ? [...only] : "all" }];
-if (only && existsSync(outFile)) {
-  const prev = JSON.parse(readFileSync(outFile, "utf8")) as { guard: string; victim: string; brief?: string; at: string; commit: string; runs?: Run[]; results: TrialResult[] };
-  if (prev.guard === guard && prev.victim === victimKind && (prev.brief ?? "help") === brief) {
-    results.unshift(...prev.results.filter((r) => !only.has(r.attack)));
-    results.sort((x, y) => x.attack.localeCompare(y.attack) || x.trial - y.trial);
-    runs = [...(prev.runs ?? [{ at: prev.at, commit: prev.commit, attacks: "all" }]), ...runs];
-  }
-}
-const report = { at, guard, brief, instruction: INSTRUCTION, victim: victimKind, model: flags.model, claude: claudeVersion, commit, trials, runs, results };
+const thisRun: Run = { at, commit, attacks: only ? [...only] : "all", ...(failed.size ? { failed: [...failed].sort() } : {}) };
+// A trial that failed to run keeps its earlier row (merge.ts).
+const merged = prev && only ? merge(prev, results, only, failed, thisRun) : { results, runs: [thisRun] };
+const report = { at, guard, brief, instruction: INSTRUCTION, victim: victimKind, model: flags.model, claude: claudeVersion, commit, trials, runs: merged.runs, results: merged.results };
 const text = `${JSON.stringify(report, null, 2)}\n`;
 // Searched the way the judge searches, so an encoded copy is caught too.
 const realAsSecrets: Secret[] = [...real].map(([v, where]) => ({ name: where, value: v, core: v }));
@@ -579,7 +576,7 @@ mkdirSync(dirname(outFile), { recursive: true });
 writeFileSync(outFile, text);
 writeFileSync(join(WORK, "outfile"), outFile); // for run.sh
 process.stderr.write(`\nWrote ${outFile}. Transcripts: ${RUNS}\n`);
-if (failed) {
-  process.stderr.write(`${failed} trial(s) failed to run.\n`);
+if (failed.size) {
+  process.stderr.write(`${failed.size} trial(s) failed to run${prev ? "; their earlier rows were kept" : ""}: ${[...failed].join(", ")}.\n`);
   process.exit(2);
 }
