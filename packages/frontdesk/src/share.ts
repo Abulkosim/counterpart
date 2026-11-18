@@ -124,6 +124,18 @@ function repoRoot(path: string): string {
 // Add patterns (and sensitive paths allowed by name) for a contact. One
 // repository per contact. Returns what would be shared right now.
 export function addShare(home: string, contactRoot: string, repoPath: string, patterns: string[], allow: string[] = []): Share {
+  return saveShare(home, contactRoot, planShare(home, contactRoot, repoPath, patterns, allow));
+}
+
+// What adding these rules would share, checked but not saved, so the owner can
+// see it before saying yes.
+export interface SharePlan {
+  repo: string;
+  rows: ShareRule[];
+  share: Share;
+}
+
+export function planShare(home: string, contactRoot: string, repoPath: string, patterns: string[], allow: string[] = []): SharePlan {
   if (patterns.length === 0 && allow.length === 0) throw new Error("name at least one path or glob to share");
   const repo = repoRoot(repoPath);
   const current = shareRules(home, contactRoot);
@@ -137,6 +149,11 @@ export function addShare(home: string, contactRoot: string, repoPath: string, pa
     const re = globToRegExp(r.pattern);
     if (!preview.all.some((p) => re.test(p))) throw new Error(`"${r.pattern}" matches nothing committed at HEAD (${preview.share.commit.slice(0, 12)}). Only committed files can be shared; commit it first. Nothing was changed.`);
   }
+  return { repo, rows, share: preview.share };
+}
+
+export function saveShare(home: string, contactRoot: string, plan: SharePlan): Share {
+  const { repo, rows } = plan;
   const d = db(home);
   try {
     // Checked again inside the write, so two commands run at once cannot
@@ -155,7 +172,7 @@ export function addShare(home: string, contactRoot: string, repoPath: string, pa
   } finally {
     d.close();
   }
-  return preview.share;
+  return plan.share;
 }
 
 // Remove patterns, or every rule for the contact when `patterns` is "all".

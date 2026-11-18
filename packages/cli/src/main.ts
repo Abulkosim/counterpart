@@ -804,7 +804,8 @@ async function main(): Promise<void> {
       return out(b.files.length ? `${c.name} can be told what is in:\n${list}` : `Nothing is shared with ${c.name}.`, { contact: c.name, hash: b.hash, files: b.files.map((f) => ({ name: f.name, sha256: f.sha256 })) });
     }
     case "share": {
-      const r = shareCommand(node, home, args, { ...(flags.repo ? { repo: flags.repo } : {}), ...(flags.allow ? { allow: flags.allow } : {}), all: !!flags.all, safe });
+      const gate = { tty: !!process.stdin.isTTY, yes: !!flags.yes, envPassphrase: process.env.CPART_PASSPHRASE !== undefined, print: (s: string) => console.error(s), line, secret };
+      const r = await shareCommand(node, home, args, { ...(flags.repo ? { repo: flags.repo } : {}), ...(flags.allow ? { allow: flags.allow } : {}), all: !!flags.all, safe, gate });
       return out(r.human, r.data);
     }
     case "desk": {
