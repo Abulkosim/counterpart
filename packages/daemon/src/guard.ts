@@ -15,7 +15,7 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, openSync, closeSync, readFileSync, readSync, readdirSync, realpathSync, statSync, fstatSync, constants } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { constants as zlib, gunzipSync, inflateSync } from "node:zlib";
 import { randomId, utf8, verify } from "@counterpart/protocol";
@@ -612,6 +612,7 @@ export const walkLimit = (): WalkLimit => ({ dirs: WALK_DIRS, cut: new Set() });
 // With `configs`, the same walk also collects config files there (see configValues).
 export function dotenvFiles(root: string, limit: WalkLimit = walkLimit(), configs?: string[]): string[] {
   const out: string[] = [];
+  const inDataDir = (dir: string): boolean => relative(root, dir).split(sep).some((p) => NOT_CONFIG_DIR.test(p));
   const walk = (dir: string, depth: number): void => {
     if (depth > WALK_DEPTH || limit.dirs <= 0) {
       limit.cut.add(root);
@@ -629,7 +630,7 @@ export function dotenvFiles(root: string, limit: WalkLimit = walkLimit(), config
       if (d.isDirectory()) {
         if (!SKIP_DIRS.has(d.name)) walk(join(dir, d.name), depth + 1);
       } else if (d.isFile() && (/^\.env(?:\..+)?$/.test(d.name) || /.\.env$/.test(d.name))) out.push(join(dir, d.name));
-      else if (configs && d.isFile() && CONFIG_FILE.test(d.name)) configs.push(join(dir, d.name));
+      else if (configs && d.isFile() && CONFIG_FILE.test(d.name) && !NOT_CONFIG_FILE.test(d.name) && !inDataDir(dir)) configs.push(join(dir, d.name));
     }
   };
   walk(root, 0);
@@ -655,6 +656,18 @@ const CONFIG_FILE = /\.(?:ya?ml|toml|json|ini|cfg|conf|properties|xml)$|^(?:cred
 const MAX_CONFIG = 256 * 1024;
 const MAX_CONFIG_VALUES = 200;
 
+// A config value counts only when it looks like a key: one token, no spaces
+// or template markers, ten or more characters, not words. Config and data
+// files are full of sentences and settings under names like "auth".
+const configSecret = (v: string): boolean =>
+  worthMatching(v, true) && v.length >= 10 && !/[\s<>{}$]/.test(v) && !words(v) && entropy(v) >= 3;
+// Letters joined by - _ or . in pieces short enough to be words: "orders-service".
+const words = (v: string): boolean => /^[a-z]+(?:[-_.][a-z]+)*$/i.test(v) && v.split(/[-_.]/).every((p) => p.length <= 12);
+
+// Directories whose files are data or tests, not the project's settings.
+const NOT_CONFIG_DIR = /^(?:tests?|__tests__|spec|specs|fixtures?|testdata|test-data|__fixtures__|__mocks__|mocks?|e2e|examples?|samples?|results?|snapshots?|__snapshots__|docs?)$/i;
+const NOT_CONFIG_FILE = /^(?:package(?:-lock)?\.json|tsconfig.*\.json|jsconfig\.json|composer\.lock|.*\.lock|pnpm-lock\.yaml|yarn\.lock|.*\.schema\.json|.*\.min\.json)$/i;
+
 export function configValues(file: string): Exact[] {
   const text = readSmall(file);
   if (text === null || text.length > MAX_CONFIG) return [];
@@ -670,7 +683,7 @@ export function configValues(file: string): Exact[] {
     const q = v[0];
     if ((q === '"' || q === "'") && v.indexOf(q, 1) > 0) v = v.slice(1, v.indexOf(q, 1));
     else v = v.replace(/\s+#.*$/, "");
-    if (!SECRET_NAME.test(name) || NOT_SECRET_NAME.test(name) || !worthMatching(v, true)) continue;
+    if (!SECRET_NAME.test(name) || NOT_SECRET_NAME.test(name) || !configSecret(v)) continue;
     out.push(...exact(v, "config-value", `config:${file}:${name}`));
     n++;
   }
@@ -792,11 +805,13 @@ const COVER = 10;
 type Grams = Map<string, { e: Exact; at: number }[]>;
 const GRAM_SIZES = [GRAM, LONG];
 const gramOk = (g: string): boolean => (g.length === GRAM ? /[a-z]/.test(g) && /[0-9]/.test(g) : /[a-z]/.test(g) && new Set(g).size >= LONG_DISTINCT);
+// Long grams only for values that are one token. In a value with spaces, a
+// run of twelve letters is most likely words, which ordinary text repeats.
 function grams(exact: Exact[]): Grams {
   const out: Grams = new Map();
   for (const e of exact) {
     if (e.compact.length < 16 || e.whole || entropy(e.compact) < 3) continue;
-    for (const n of GRAM_SIZES)
+    for (const n of /\s/.test(e.value) ? [GRAM] : GRAM_SIZES)
     for (let i = 0; i + n <= e.compact.length; i++) {
       const g = e.compact.slice(i, i + n);
       if (!gramOk(g)) continue;
