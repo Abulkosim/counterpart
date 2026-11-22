@@ -37,7 +37,6 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --test --test-concurrency=1 \"packages/*/test/*.test.ts\"",
-    "vectors": "node packages/protocol/scripts/make-vectors.ts",
     "verify": "pnpm typecheck && pnpm test",
     "build": "node scripts/build.ts",
     "prepack": "node scripts/build.ts",
