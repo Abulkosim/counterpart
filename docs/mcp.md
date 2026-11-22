@@ -11,26 +11,28 @@ Pairing is done by a person with `cpart invite` and `cpart join`. Approving a co
 Claude Code:
 
 ```sh
-claude mcp add --scope user counterpart -- node /path/to/counterpart/packages/cli/src/main.ts mcp
+claude mcp add --scope user counterpart -- cpart mcp
 ```
 
 Codex:
 
 ```sh
-codex mcp add counterpart -- node /path/to/counterpart/packages/cli/src/main.ts mcp
+codex mcp add counterpart -- cpart mcp
 ```
 
 For an identity other than `~/.counterpart`, add `--env CPART_HOME=/path/to/home` before the `--`. Or in a config file:
 
 ```json
-{ "mcpServers": { "counterpart": { "command": "node", "args": ["/path/to/counterpart/packages/cli/src/main.ts", "mcp"] } } }
+{ "mcpServers": { "counterpart": { "command": "cpart", "args": ["mcp"] } } }
 ```
 
 ```toml
 [mcp_servers.counterpart]
-command = "node"
-args = ["/path/to/counterpart/packages/cli/src/main.ts", "mcp"]
+command = "cpart"
+args = ["mcp"]
 ```
+
+This needs `cpart` and `node` on the host's PATH. `cpart setup` writes full paths instead, the `node` that ran it and the `cli.js` that `cpart` links to, so it works when the host starts with a different PATH. From a checkout, use `node /path/to/counterpart/packages/cli/src/main.ts mcp`.
 
 `counterpart_wait_for_reply` can block for up to 120 seconds. If your host cuts tool calls off sooner, pass a smaller `timeout_seconds` or raise the host's tool timeout.
 
