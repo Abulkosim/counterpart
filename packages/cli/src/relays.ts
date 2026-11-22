@@ -51,7 +51,7 @@ const inContainer = (): boolean => existsSync("/.dockerenv") || existsSync("/run
 // The same relay by the name the other side of a container boundary uses.
 // Inside a container, 127.0.0.1 is the container itself and the machine it runs
 // on is host.docker.internal. Outside, it is the other way round.
-export function otherName(relay: string): string | undefined {
+function otherName(relay: string): string | undefined {
   if (!isRelayUrl(relay)) return undefined;
   const u = new URL(relay);
   const loop = ["127.0.0.1", "localhost", "[::1]"].includes(u.hostname);

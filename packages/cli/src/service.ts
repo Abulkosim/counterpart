@@ -9,7 +9,7 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 
 export const MAIN = resolve(dirname(fileURLToPath(import.meta.url)), "main.ts");
-export const DEFAULT_HOME = join(homedir(), ".counterpart");
+const DEFAULT_HOME = join(homedir(), ".counterpart");
 
 export interface DaemonState {
   pid: number;
@@ -122,7 +122,7 @@ export function bootKind(): Boot | undefined {
   return undefined;
 }
 
-export function serviceInstalled(name: string): Boot | undefined {
+function serviceInstalled(name: string): Boot | undefined {
   if (existsSync(unitPath(name))) return "systemd";
   if (existsSync(plistPath(name))) return "launchd";
   return undefined;
@@ -175,7 +175,7 @@ ${s.meta ? `<!-- ${s.meta.replace(/--+/g, "-")} -->\n` : ""}<plist version="1.0"
 
 // A line break in any value would end its line in the unit file and start
 // another, which could add a command. Checked before anything is written.
-export function checkServiceSpec(s: ServiceSpec): void {
+function checkServiceSpec(s: ServiceSpec): void {
   const values = [s.name, s.description, s.log, s.meta ?? "", process.execPath, ...s.args, ...Object.keys(s.env), ...Object.values(s.env)];
   if (values.some((v) => /[\x00-\x1f\x7f]/.test(v))) throw new Error(`a path or setting for the ${s.description.toLowerCase()} holds a line break or other control character, so it cannot be written as a service. Nothing was installed.`);
 }
@@ -212,7 +212,7 @@ export function removeService(name: string): boolean {
   return was;
 }
 
-export const startService = (kind: Boot, name: string): boolean => (kind === "systemd" ? run("systemctl", ["--user", "start", name]) : run("launchctl", ["load", "-w", plistPath(name)]));
+const startService = (kind: Boot, name: string): boolean => (kind === "systemd" ? run("systemctl", ["--user", "start", name]) : run("launchctl", ["load", "-w", plistPath(name)]));
 
 // Every installed service whose name starts with prefix, with its meta line.
 export function listServices(prefix: string): { name: string; kind: Boot; meta: string | undefined }[] {

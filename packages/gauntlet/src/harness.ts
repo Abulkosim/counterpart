@@ -47,7 +47,7 @@ export function send(from: Sender, to: Counterpart | Pick<DeviceCredential, "sig
   return seal(e, secretsOf(from), credentialOf(to), expiresAt);
 }
 
-export async function rawSeal(plaintext: Uint8Array, encKey: string, aad: Uint8Array): Promise<{ enc: string; ct: string }> {
+async function rawSeal(plaintext: Uint8Array, encKey: string, aad: Uint8Array): Promise<{ enc: string; ct: string }> {
   const recipientPublicKey = await hpke.kem.deserializePublicKey(buf(unb64u(encKey)));
   const { enc, ct } = await hpke.seal({ recipientPublicKey, info: buf(INFO) }, buf(plaintext), buf(aad));
   return { enc: b64u(enc), ct: b64u(ct) };

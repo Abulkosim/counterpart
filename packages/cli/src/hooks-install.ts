@@ -9,13 +9,13 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const HOOK_MAIN = join(dirname(fileURLToPath(import.meta.resolve("@counterpart/mcp"))), "hook-main.ts");
+const HOOK_MAIN = join(dirname(fileURLToPath(import.meta.resolve("@counterpart/mcp"))), "hook-main.ts");
 const MARKET = "counterpart-local";
 const PLUGIN = "counterpart";
 const ID = `${PLUGIN}@${MARKET}`;
 const VERSION = "0.2.0";
 
-export const pluginRoot = (home: string): string => join(resolve(home), "claude-plugin");
+const pluginRoot = (home: string): string => join(resolve(home), "claude-plugin");
 const pluginDir = (home: string): string => join(pluginRoot(home), PLUGIN);
 
 // Two paths name the same folder, after links. One that does not exist is compared as written.
@@ -31,7 +31,7 @@ const samePath = (a: string, b: string): boolean => real(a) === real(b);
 // For a shell: Claude Code runs a hook's command line with sh.
 const sh = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
 
-export function hooksConfig(home: string): object {
+function hooksConfig(home: string): object {
   const cmd = (event: string): string => `CPART_HOME=${sh(resolve(home))} ${sh(process.execPath)} ${sh(HOOK_MAIN)} ${event}`;
   return {
     description: "Counterpart: tell this session when a contact's side adds something to a thread it used, or waits in one nobody here has read (never what), and keep it on a thread it follows until the contact replies.",
@@ -81,7 +81,7 @@ export interface HooksState {
 
 const claude = (args: string[]) => spawnSync("claude", args, { encoding: "utf8", timeout: 60_000 });
 
-export function claudeHooks(home: string): HooksState {
+function claudeHooks(home: string): HooksState {
   if (claude(["--version"]).status !== 0) return { found: false, state: "no" };
   const r = claude(["plugin", "list", "--json"]);
   if (r.status !== 0) return { found: true, state: "no" };
@@ -126,7 +126,7 @@ function marketInUse(): boolean {
   }
 }
 
-export function installClaudeHooks(home: string): HooksResult {
+function installClaudeHooks(home: string): HooksResult {
   const before = claudeHooks(home);
   if (!before.found || before.state === "elsewhere") return { ...before, changed: "none" };
   const version = writePlugin(home);
@@ -150,7 +150,7 @@ export function installClaudeHooks(home: string): HooksResult {
   return { ...claudeHooks(home), changed: "installed" };
 }
 
-export function removeClaudeHooks(home: string): HooksResult {
+function removeClaudeHooks(home: string): HooksResult {
   const before = claudeHooks(home);
   if (before.state !== "here") return { ...before, changed: "none" };
   const r = claude(["plugin", "uninstall", ID, "--scope", "user"]);
@@ -205,7 +205,7 @@ const codexFile = (): string => join(process.env.CODEX_HOME ?? join(homedir(), "
 type Group = { matcher?: string; hooks?: { command?: unknown }[] };
 type CodexHooks = { hooks?: Record<string, Group[]> } & Record<string, unknown>;
 
-export function codexHooksConfig(home: string): Record<string, Group[]> {
+function codexHooksConfig(home: string): Record<string, Group[]> {
   const all = hooksConfig(home) as { hooks: Record<string, Group[]> };
   return {
     UserPromptSubmit: all.hooks.UserPromptSubmit!,
@@ -262,7 +262,7 @@ function writeCodex(j: CodexHooks): void {
 
 const codexFound = (): boolean => spawnSync("codex", ["--version"], { stdio: "ignore", timeout: 30_000 }).status === 0;
 
-export function codexHooks(home: string): HooksState & { file: string } {
+function codexHooks(home: string): HooksState & { file: string } {
   if (!codexFound()) return { found: false, state: "no", file: codexFile() };
   try {
     const j = readCodex();
@@ -277,7 +277,7 @@ export function codexHooks(home: string): HooksState & { file: string } {
 
 // Adds our entries to hooks.json, replacing older ones for this home and
 // keeping everything else. A file that does not parse is left alone.
-export function installCodexHooks(home: string): HooksResult & { file: string } {
+function installCodexHooks(home: string): HooksResult & { file: string } {
   const before = codexHooks(home);
   if (!before.found) return { ...before, changed: "none" };
   if (before.state === "here" && before.version === "current") return { ...before, changed: "none" };
@@ -292,7 +292,7 @@ export function installCodexHooks(home: string): HooksResult & { file: string } 
   return { ...codexHooks(home), changed: before.state === "here" ? "updated" : "installed" };
 }
 
-export function removeCodexHooks(home: string): HooksResult & { file: string } {
+function removeCodexHooks(home: string): HooksResult & { file: string } {
   const before = codexHooks(home);
   if (!before.found) return { ...before, changed: "none" };
   try {

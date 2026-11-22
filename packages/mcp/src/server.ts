@@ -61,7 +61,7 @@ class ToolError extends Error {}
 const ok = (text: string): CallToolResult => ({ content: [{ type: "text", text }] });
 const fail = (text: string): CallToolResult => ({ content: [{ type: "text", text }], isError: true });
 
-export const heldText = (reasons: readonly string[]): string =>
+const heldText = (reasons: readonly string[]): string =>
   `Not sent: held for your human, reason: ${reasons.join(", ")}. Nothing left this machine. Your human can read it with cpart held and send it with cpart release, which needs them at a terminal. Do not reword, encode or split it to get it through; tell your human what you tried to send and why.`;
 
 function guard<A>(fn: (args: A, signal: AbortSignal) => Promise<CallToolResult> | CallToolResult) {
