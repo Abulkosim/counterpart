@@ -5,23 +5,15 @@
 # Bob holds the message that depends on it, asks Alice for the missing one,
 # and Alice sends it again.
 set -euo pipefail
-# This script starts its own daemons.
-export CPART_NO_AUTOSTART=1
 cd "$(dirname "$0")/.."
-WORK=$(mktemp -d)
-PORT=${PORT:-7463}
-RELAY=ws://127.0.0.1:$PORT
+. scripts/smoke-lib.sh
 # Bob asks for missing parents after 5 seconds instead of 30, so the held state can be seen and the run stays short.
 export CPART_RESEND_AFTER_MS=5000
 cpart() { local who=$1; shift; CPART_HOME=$WORK/$who node packages/cli/src/main.ts "$@"; }
-pids=()
-cleanup() { kill "${pids[@]}" 2>/dev/null || true; wait 2>/dev/null || true; rm -rf "$WORK"; }
-trap cleanup EXIT
-step() { printf '\n== %s\n' "$*"; }
-fail() { echo "FAIL: $*" >&2; exit 1; }
-wait_for() { # wait_for <description> <command...>
+# Waits up to 20 s, not smoke-lib's 10: recovery includes Bob's 5 s before he asks.
+wait_for() {
   local what=$1; shift
-  for _ in $(seq 1 200); do if "$@" >/dev/null 2>&1; then return 0; fi; sleep 0.1; done
+  for _ in $(seq 1 200); do if "$@" >"$WORK/wait.out" 2>&1; then return 0; fi; sleep 0.1; done
   fail "timed out waiting for $what"
 }
 field() { node -pe "JSON.parse(require('fs').readFileSync(0)).$1"; }
@@ -29,12 +21,9 @@ field() { node -pe "JSON.parse(require('fs').readFileSync(0)).$1"; }
 relay_sql() { node -e 'const { DatabaseSync } = require("node:sqlite"); const db = new DatabaseSync(process.argv[1]); db.exec("PRAGMA busy_timeout = 5000"); const s = db.prepare(process.argv[2]); const r = /^select/i.test(process.argv[2]) ? s.get(process.argv[3]) : s.run(process.argv[3]); console.log(r.n ?? r.changes);' "$WORK/relay.db" "$1" "$2" 2>/dev/null; }
 at_relay() { [ "$(relay_sql 'SELECT COUNT(*) AS n FROM mailbox WHERE id = ?' "$1")" = 1 ]; }
 delivery() { cpart "$1" log "$THREAD" --json | node -pe "JSON.parse(require('fs').readFileSync(0)).find((e) => e.id === '$2')?.delivery"; }
-start_daemon() { CPART_HOME=$WORK/$1 node packages/cli/src/main.ts daemon >>"$WORK/$1.log" 2>&1 & eval "$1_PID=$!"; pids+=("$!"); wait_for "$1 daemon" grep -q connected "$WORK/$1.log"; }
 
 step "relay and two identities"
-node packages/cli/src/main.ts relay --port "$PORT" --db "$WORK/relay.db" >"$WORK/relay.log" 2>&1 &
-pids+=("$!")
-wait_for "relay" curl -sf "http://127.0.0.1:$PORT/healthz"
+start_relay
 cpart alice init --relay "$RELAY" --no-passphrase
 cpart bob init --relay "$RELAY" --no-passphrase
 start_daemon alice
@@ -68,7 +57,7 @@ echo "alice still believes: second is '$(delivery alice "$LOST")', third is '$(d
 [ "$(delivery alice "$LOST")" = stored ] || fail "expected alice to see the lost message as stored"
 
 step "bob returns: the third message is held, the second never came"
-: >"$WORK/bob.log"; start_daemon bob
+start_daemon bob
 # One reading of the log has to show both facts, so it is captured once per try.
 HELD=""
 for _ in $(seq 1 100); do
