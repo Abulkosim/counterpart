@@ -9,7 +9,6 @@
 # it at another server; that is how the script itself is tested without a key.
 #
 # Needs: node 24, an Anthropic API key.
-# Time:  not recorded.
 # Cost:  API tokens for three questions. Not run in CI.
 set -euo pipefail
 # This script starts its own daemons.

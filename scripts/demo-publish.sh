@@ -10,7 +10,6 @@
 #   ./scripts/demo-publish.sh
 #
 # Needs: node 24, claude logged in, git, gh logged in.
-# Time:  not recorded.
 # Cost:  model tokens for the worker, and GitHub Actions minutes on your account. Not run in CI.
 set -euo pipefail
 # This script starts its own daemons.

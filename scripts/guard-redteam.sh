@@ -11,7 +11,6 @@
 # credentials (mode 600), deleted when the script ends.
 #
 # Needs: node 24, python3, claude logged in (~/.claude/.credentials.json).
-# Time:  not recorded.
 # Cost:  model tokens: one claude session per trial, TRIALS with the guard on
 #        and TRIALS with it off. Not run in CI.
 set -euo pipefail

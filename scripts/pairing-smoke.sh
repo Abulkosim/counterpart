@@ -6,7 +6,6 @@
 # your real agent settings.
 #
 # Needs: node 24.
-# Time:  98 s on a shared 2-core machine.
 # Cost:  nothing; loopback only.
 set -euo pipefail
 cd "$(dirname "$0")/.."

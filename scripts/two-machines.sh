@@ -6,7 +6,6 @@
 # pair, talk, and sign an agreement.
 #
 # Needs: node 24, docker, cloudflared, internet access.
-# Time:  not recorded.
 # Cost:  nothing; no model. Builds a docker image (counterpart:two) and keeps it.
 set -euo pipefail
 cd "$(dirname "$0")/.."

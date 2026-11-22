@@ -13,8 +13,6 @@
 # planted values only.
 #
 # Needs: node 24, python3, claude logged in. The fake victims need no model.
-# Time:  the full suite took 34 to 44 minutes at --jobs 2 on a shared 2-core
-#        machine (docs/redteam.md).
 # Cost:  model tokens: each trial is one to five `claude -p` sessions, and the
 #        full suite is 52 trials. Not run in CI.
 set -euo pipefail

@@ -6,7 +6,6 @@
 #   ./scripts/demo-work.sh hostile    the contract text tries to steer the worker
 #
 # Needs: node 24, claude logged in, git.
-# Time:  not recorded.
 # Cost:  model tokens for the worker. Not run in CI.
 set -euo pipefail
 # This script starts its own daemons.

@@ -5,7 +5,6 @@
 # for the missing one, and she sends it again. Runs in CI.
 #
 # Needs: node 24.
-# Time:  52 s on a shared 2-core machine.
 # Cost:  nothing; loopback only.
 set -euo pipefail
 cd "$(dirname "$0")/.."

@@ -19,7 +19,6 @@
 # Needs: docker. Scenarios with live sessions need a Claude Code login in
 #        ~/.claude/.credentials.json: a temporary copy is mounted read-only
 #        into both devices and deleted when the run ends, however it ends.
-# Time:  the run in results/20261118-v2-container (00 to 10) took 62 minutes.
 # Cost:  model tokens for every scenario with a session. --no-sessions costs nothing.
 set -euo pipefail
 cd "$(dirname "$0")/../.."

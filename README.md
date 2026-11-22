@@ -66,7 +66,7 @@ pnpm verify            # types and tests, including 144 attacks on the code
 ./scripts/smoke.sh     # a relay and two people as real processes
 ```
 
-The attacks and how each ended are in [docs/gauntlet.md](docs/gauntlet.md). Each script in `scripts/` says at the top what it checks, what it needs, how long it took and what it costs. A few use real models.
+The attacks and how each ended are in [docs/gauntlet.md](docs/gauntlet.md). Each script in `scripts/` says at the top what it checks, what it needs and what it costs. A few use real models.
 
 ## Limits
 

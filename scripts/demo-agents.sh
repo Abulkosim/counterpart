@@ -5,7 +5,6 @@
 #   ./scripts/demo-agents.sh ["question for bob's agent to get answered"]
 #
 # Needs: node 24, claude logged in.
-# Time:  not recorded.
 # Cost:  model tokens: one claude session and the front desk's replies. Not run in CI.
 set -euo pipefail
 # This script starts its own daemons.

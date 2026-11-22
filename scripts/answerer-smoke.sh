@@ -12,7 +12,6 @@
 # checks, not answer quality. scripts/answerer-eval/ runs real models.
 #
 # Needs: node 24, git.
-# Time:  156 s on a shared 2-core machine.
 # Cost:  nothing; no model is called.
 set -euo pipefail
 cd "$(dirname "$0")/.."
