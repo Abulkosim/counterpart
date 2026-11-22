@@ -8,13 +8,13 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSyn
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { VERSION } from "@counterpart/protocol";
 
 // In the npm bundle hook-main.js sits next to this code (scripts/build.ts).
 const HOOK_MAIN = import.meta.url.endsWith(".ts") ? join(dirname(fileURLToPath(import.meta.resolve("@counterpart/mcp"))), "hook-main.ts") : fileURLToPath(new URL("./hook-main.js", import.meta.url));
 const MARKET = "counterpart-local";
 const PLUGIN = "counterpart";
 const ID = `${PLUGIN}@${MARKET}`;
-const VERSION = "0.2.0";
 
 const pluginRoot = (home: string): string => join(resolve(home), "claude-plugin");
 const pluginDir = (home: string): string => join(pluginRoot(home), PLUGIN);

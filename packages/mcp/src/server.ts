@@ -4,7 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { type ContractView, type Counterpart, type StoredEvent, type ThreadSummary, isHeld } from "@counterpart/daemon";
-import { type EventBodies, CONTRACT_LIMITS, EVIDENCE_LIMITS, LIMITS, canonicalize } from "@counterpart/protocol";
+import { type EventBodies, CONTRACT_LIMITS, EVIDENCE_LIMITS, LIMITS, VERSION, canonicalize } from "@counterpart/protocol";
 import { registerFollowTools } from "./follow.ts";
 import { type NotifyOptions, CHANNEL_METHOD, NOTIFY_INSTRUCTIONS, Notifier } from "./notify.ts";
 import { CAPS, contractEnvelope, envelope, goalEnvelope, inlineEnvelope, iso, jsonEnvelope, newBoundary, oneLine } from "./render.ts";
@@ -197,7 +197,7 @@ export function createMcpServer(node: Counterpart, opts: McpOptions = {}): McpSe
   const deliveryWaitMs = opts.deliveryWaitMs ?? 2000;
   const pollMs = opts.pollMs ?? 200;
   const server = new McpServer(
-    { name: "counterpart", version: "0.2.0" },
+    { name: "counterpart", version: VERSION },
     opts.notify ? { instructions: `${INSTRUCTIONS}\n${NOTIFY_INSTRUCTIONS}`, capabilities: { experimental: { "claude/channel": {} } } } : { instructions: INSTRUCTIONS },
   );
   // The method is a Claude Code extension, so the SDK's types do not know it.

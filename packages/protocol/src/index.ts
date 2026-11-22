@@ -14,3 +14,4 @@ export * from "./pake.ts";
 export * from "./wordlist.ts";
 export * from "./pake-pairing.ts";
 export * from "./relays.ts";
+export * from "./version.ts";

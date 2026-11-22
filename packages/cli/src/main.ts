@@ -7,7 +7,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { type ContractView, type EvidenceView, Counterpart, RelayLink } from "@counterpart/daemon";
-import { type ContractPart, type Evidence, canonicalize, decodeInvite, isHttpsUrl, verifyAgreement } from "@counterpart/protocol";
+import { type ContractPart, type Evidence, VERSION, canonicalize, decodeInvite, isHttpsUrl, verifyAgreement } from "@counterpart/protocol";
 import { FrontDesk, addToBundle, anthropicApi, claudeCli, claudeCliSetup, cliPrivateValues, readBundle, removeFromBundle } from "@counterpart/frontdesk";
 import { deskCheck, onAnyway } from "./desk-check.ts";
 import { hookMain, startMcpServer } from "@counterpart/mcp";
@@ -133,14 +133,14 @@ ${SHARE_USAGE}
 ${GUARD_USAGE}
 
 Identity lives in $CPART_HOME (default ~/.counterpart). Add --json for machine output.
-Help for one command: cpart <command> --help`;
+Help for one command: cpart <command> --help. The version: cpart --version`;
 
 const { values: flags, positionals } = parseArgs({
   allowPositionals: true,
   options: {
     relay: { type: "string" }, port: { type: "string" }, host: { type: "string" }, db: { type: "string" },
     home: { type: "string" }, evidence: { type: "boolean" }, head: { type: "string" }, base: { type: "string" }, label: { type: "string" }, pr: { type: "string" }, run: { type: "string" }, status: { type: "string" }, bind: { type: "string", multiple: true }, work: { type: "string" }, branch: { type: "string" }, repo: { type: "string" }, paths: { type: "string" }, brief: { type: "string" }, allow: { type: "string", multiple: true }, title: { type: "string" }, file: { type: "string" }, part: { type: "string", multiple: true }, supersedes: { type: "string" },
-    out: { type: "string" }, yes: { type: "boolean" }, all: { type: "boolean" }, notify: { type: "boolean" }, "view-port": { type: "string" }, "no-passphrase": { type: "boolean" }, as: { type: "string" }, slots: { type: "string" }, daily: { type: "string" }, model: { type: "string" }, url: { type: "string", multiple: true }, wait: { type: "string" }, boot: { type: "boolean" }, "no-boot": { type: "boolean" }, "no-agents": { type: "boolean" }, "no-hooks": { type: "boolean" }, "no-check": { type: "boolean" }, tunnel: { type: "boolean" }, "no-wait": { type: "boolean" }, long: { type: "boolean" }, code: { type: "boolean" }, say: { type: "string" }, json: { type: "boolean" }, help: { type: "boolean", short: "h" },
+    out: { type: "string" }, yes: { type: "boolean" }, all: { type: "boolean" }, notify: { type: "boolean" }, "view-port": { type: "string" }, "no-passphrase": { type: "boolean" }, as: { type: "string" }, slots: { type: "string" }, daily: { type: "string" }, model: { type: "string" }, url: { type: "string", multiple: true }, wait: { type: "string" }, boot: { type: "boolean" }, "no-boot": { type: "boolean" }, "no-agents": { type: "boolean" }, "no-hooks": { type: "boolean" }, "no-check": { type: "boolean" }, tunnel: { type: "boolean" }, "no-wait": { type: "boolean" }, long: { type: "boolean" }, code: { type: "boolean" }, say: { type: "string" }, json: { type: "boolean" }, help: { type: "boolean", short: "h" }, version: { type: "boolean", short: "v" },
   },
 });
 const [cmd, ...args] = positionals;
@@ -527,6 +527,7 @@ async function status(node: Counterpart): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  if (flags.version) return console.log(VERSION);
   const helpFor = cmd === "help" ? args[0] : flags.help ? cmd : undefined;
   if (helpFor) return console.log(commandHelp(helpFor, USAGE) ?? `No command "${safe(helpFor)}".\n\n${USAGE}`);
   if (!cmd || flags.help || cmd === "help") return console.log(USAGE);

@@ -3,7 +3,7 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { commandHelp } from "../src/help.ts";
@@ -44,7 +44,12 @@ test("each main command has its own help, with the flags a new person needs", ()
   assert.equal(commandHelp("nosuch", usage()), undefined);
   assert.match(cli(["nosuch", "--help"]).out, /^No command "nosuch"\.\n\ncpart: let your agent/);
   // The full list names the flags too, and says how to get one command's help.
-  for (const f of ["--no-agents", "--no-passphrase", "--yes", "cpart relay --boot", "cpart <command> --help"]) assert.ok(usage().includes(f), `usage lacks ${f}`);
+  for (const f of ["--no-agents", "--no-passphrase", "--yes", "cpart relay --boot", "cpart <command> --help", "cpart --version"]) assert.ok(usage().includes(f), `usage lacks ${f}`);
+});
+
+test("--version and -v print the root package.json version and nothing else", () => {
+  const { version } = JSON.parse(readFileSync(join(import.meta.dirname, "../../../package.json"), "utf8")) as { version: string };
+  for (const flag of ["--version", "-v"]) assert.deepEqual(cli([flag]), { code: 0, out: `${version}\n` });
 });
 
 test("join without a terminal says why it stops and which flag goes on", () => {
