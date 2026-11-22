@@ -18,6 +18,8 @@ You both need a relay you can reach. To try it, one of you runs one with a publi
 cpart relay --tunnel
 ```
 
+To run one without cloudflared, or one that keeps its address, see [docs/relay.md](docs/relay.md).
+
 Sam sets up and invites Maya. `cpart setup` creates an identity, asks for a passphrase, starts a background daemon and adds Counterpart to Claude Code and Codex:
 
 ```sh
