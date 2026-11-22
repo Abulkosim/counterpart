@@ -2,8 +2,8 @@
 // Draws the demo video from the recorded tape: opens video.html, steps time
 // frame by frame, and pipes screenshots to ffmpeg.
 //
-//   node demo/render.mjs                 the whole video -> demo/out/counterpart-demo.mp4
-//   node demo/render.mjs --stills 3,20   PNG stills at those seconds, to look at
+//   TESTS=<n> node demo/render.mjs                 the whole video -> demo/out/counterpart-demo.mp4
+//   TESTS=<n> node demo/render.mjs --stills 3,20   PNG stills at those seconds, to look at
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -16,15 +16,21 @@ const OUT = join(HERE, "out");
 const FPS = 30;
 const tape = JSON.parse(readFileSync(join(OUT, "tape.json"), "utf8"));
 const meta = JSON.parse(tape.find((e) => e.scene === "meta").out);
+// The numbers on the last card come from docs/gauntlet.md and from TESTS, the
+// count `pnpm test` printed for the same commit. A number that cannot be read
+// stops the render rather than showing a guess.
 const gauntlet = readFileSync(join(HERE, "../docs/gauntlet.md"), "utf8");
 const total = /\|\s*\**All\**\s*\|\s*\**(\d+)\**\s*\|\s*\**(\d+)\**/i.exec(gauntlet);
+const model = /(\d+) of \d+ attacks never worked/.exec(gauntlet);
+if (!total || !model) throw new Error("docs/gauntlet.md no longer has the totals this reads");
+if (!/^\d+$/.test(process.env.TESTS ?? "")) throw new Error("set TESTS to the number of tests `pnpm test` passed, as TESTS=<n> node demo/render.mjs");
 const facts = {
   date: new Date(meta.at).toISOString().slice(0, 10),
   repo: "Abulkosim/counterpart",
-  tests: process.env.TESTS ?? "251",
-  attacks: total?.[1] ?? "99",
-  held: total?.[2] ?? "97",
-  model: /(\d+) of \d+ attacks never worked/.exec(gauntlet)?.[1] ?? "14",
+  tests: process.env.TESTS,
+  attacks: total[1],
+  held: total[2],
+  model: model[1],
 };
 
 const browser = await chromium.launch();
