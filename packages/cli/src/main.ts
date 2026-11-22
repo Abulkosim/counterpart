@@ -576,6 +576,8 @@ async function main(): Promise<void> {
       throw svc ? new Error(`${e.message}\nA relay service runs on port ${port} already (cpart status). To run it here instead: cpart relay --no-boot --port ${port}`) : e;
     });
     console.log(`database ${dbPath}`);
+    // A client is refused unless the address it dialled is one of the relay's names.
+    if (!tunnel && !given.length && ["0.0.0.0", "::", "[::]"].includes(host)) console.log(`\nIt listens on every interface, but lets in only the addresses above. For anyone who reaches it by another name, restart it with --url for each, like --url ws://<that name>:${port}`);
     if (tunnel) console.log(`\nAnyone can reach this relay at ${tunnel.url} until it stops. The address will be different next time.\nYou:   cpart setup --relay ${tunnel.url}\nThen:  cpart invite <their name>, and send them the line it prints\n`);
     const stop = (): void => {
       tunnel?.close();
