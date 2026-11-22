@@ -1,5 +1,6 @@
-// Measures the front desk answering from a repository share against the old
-// bundle path, with the same files and real models.
+// Measures the front desk answering from a repository share against the
+// bundle path, with the same files and real models. Results and what they
+// say are in docs/front-desk.md.
 //
 //   node scripts/answerer-eval/run.ts [--wide] [--model claude-sonnet-5-5] [--trials 1] [--jobs 4] [--only A01,S02] [--modes repo,bundle]
 //
@@ -13,6 +14,11 @@
 //
 // The claude CLI runs with a temporary CLAUDE_CONFIG_DIR holding a copy of
 // your login, deleted at the end. Results go to scripts/answerer-eval/results/.
+//
+// Needs: node 24, git, claude logged in.
+// Time:  not recorded.
+// Cost:  model tokens: one claude call per question, per mode, per trial. One
+//        trial with both modes is 62 calls.
 import { execFileSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";

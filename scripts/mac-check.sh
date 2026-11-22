@@ -4,7 +4,7 @@
 #
 #   ./scripts/mac-check.sh
 #
-# It takes about 10 minutes and prints a report to paste back. What it does:
+# It prints a report to paste back. What it does:
 #   1. reads the macOS, Docker and node versions, and runs a container
 #   2. starts a relay on 127.0.0.1 only, on a free port, with its database in a temp dir
 #   3. makes a Mac identity in a temp dir (cpart setup --no-agents --no-passphrase)
@@ -29,6 +29,10 @@
 # It also runs on Linux with docker (host.docker.internal is then added with
 # --add-host ...:host-gateway). Kept to what the bash 3.2 that ships with macOS has.
 # MAC_CHECK_KEEP=1 keeps the temp dir for reading the logs afterwards.
+#
+# Needs: node 24, Docker Desktop (or docker on Linux).
+# Time:  not yet run on a Mac, so not known there. Steps 7 and 8 wait for you.
+# Cost:  nothing; no model, no internet beyond pulling node:24-slim if missing.
 set -u
 cd "$(dirname "$0")/.." || exit 1
 REPO=$(pwd)

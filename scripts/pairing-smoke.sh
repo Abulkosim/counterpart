@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
-# Pairing with a short code, as real processes: a relay, daemons, the CLI.
-# Alice makes codes. Bob joins with no identity yet. Carol types a wrong word.
-# Dave tries the right code after that. Erin already has an identity and uses
-# the bare code. Frank joins while Alice's `cpart invite` waits in the foreground.
-# Agent registration is skipped (--no-agents); nothing touches your real settings.
+# Pairing with a short code. Alice makes codes. Bob joins with no identity
+# yet. Carol types a wrong word. Dave tries the right code after that. Erin
+# already has an identity and uses the bare code. Frank joins while Alice's
+# `cpart invite` waits in the foreground. Uses --no-agents, so nothing touches
+# your real agent settings.
+#
+# Needs: node 24.
+# Time:  98 s on a shared 2-core machine.
+# Cost:  nothing; loopback only.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/smoke-lib.sh

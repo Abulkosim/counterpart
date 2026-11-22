@@ -3,9 +3,8 @@
 # Claude Code sessions have only the Counterpart MCP tools. They take turns,
 # each turn a fresh session told the thread id. Then this script plays both
 # humans: it prints the latest open proposal, approves it on each side with
-# `cpart approve`, exports the agreement twice and verifies it.
-# Uses real models, so it costs tokens, takes minutes and is not run in CI.
-# What the agents do differs from run to run. Read the output.
+# `cpart approve`, exports the agreement twice and verifies it. What the agents
+# do differs from run to run. Read the output.
 #
 # If the two briefs leave no room, the agents should stall and say so, and the
 # script fails with "no open proposal". That is a correct ending.
@@ -13,6 +12,10 @@
 #   ./scripts/demo-negotiate.sh
 #   KEEP=1 ./scripts/demo-negotiate.sh    # keep the work directory and the session transcripts
 #   ALICE_BRIEF="..." BOB_BRIEF="..." ./scripts/demo-negotiate.sh
+#
+# Needs: node 24, claude logged in.
+# Time:  minutes; not recorded.
+# Cost:  model tokens: up to 2 x ROUNDS claude sessions (ROUNDS defaults to 3). Not run in CI.
 set -euo pipefail
 # This script starts its own daemons.
 export CPART_NO_AUTOSTART=1

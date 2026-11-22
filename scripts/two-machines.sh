@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# Two people on two machines, over the public internet.
-#   Alice and the relay run on this machine. The relay gets a public wss://
-#   address from a cloudflared quick tunnel.
-#   Bob runs in a container with its own disk. It is given the invite and
-#   nothing else, and reaches the relay only through the public address.
-# They pair, talk, and sign an agreement. Needs docker and cloudflared.
+# Two people on two machines, over the public internet. Alice and the relay
+# run here; the relay gets a public wss:// address from a cloudflared quick
+# tunnel. Bob runs in a container with its own disk, is given the invite and
+# nothing else, and reaches the relay only through the public address. They
+# pair, talk, and sign an agreement.
+#
+# Needs: node 24, docker, cloudflared, internet access.
+# Time:  not recorded.
+# Cost:  nothing; no model. Builds a docker image (counterpart:two) and keeps it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export CPART_NO_BOOT=1

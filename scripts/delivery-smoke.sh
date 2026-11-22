@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
-# Replies reaching a live Claude Code session, without a model: a relay and two
-# daemons as real processes, Bob's real `cpart mcp` server driven over stdio,
-# and each tool call handed to `cpart hook` the way Claude Code hands it to a
-# PostToolUse hook. Then the Stop, UserPromptSubmit and background watch hooks,
-# and, when `claude` is on the PATH, installing and removing the hooks in a
-# throwaway Claude Code config directory.
+# Replies reaching a live Claude Code session, without a model. Bob's real
+# `cpart mcp` server is driven over stdio, and each tool call is handed to
+# `cpart hook` the way Claude Code hands it to a PostToolUse hook. Then the
+# Stop, UserPromptSubmit and background watch hooks. When `claude` and `codex`
+# are on the PATH, it also installs and removes the hooks in throwaway config
+# directories.
+#
+# Needs: node 24. Optional: claude, codex.
+# Time:  94 s on a shared 2-core machine.
+# Cost:  nothing; no model is called.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/smoke-lib.sh

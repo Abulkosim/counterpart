@@ -1,19 +1,22 @@
 #!/usr/bin/env bash
-# Connections that die quietly, and relays that move. Real processes only, no
+# Connections that die quietly, and relays that move. Real processes, no
 # tunnel, no internet:
 #   - The relay runs in a container whose port is published on this machine's
 #     loopback, so Alice, here, reaches it as ws://127.0.0.1:PORT.
 #   - Bob runs in another container and reaches the same relay as
-#     ws://host.docker.internal:PORT, which is what a dev container on a Mac
-#     calls the Mac. (The relay is in a container rather than on this machine
-#     because this machine's firewall drops container-to-host traffic; the two
-#     names each side uses are the same as on a Mac.)
+#     ws://host.docker.internal:PORT, the name a dev container on a Mac uses
+#     for the Mac. The relay is in a container because this machine's firewall
+#     drops container-to-host traffic.
 #   - Dave runs here behind a TCP proxy that can black-hole traffic.
 #   - Carol runs here and pairs with an invite Bob made in his container.
 # Then it breaks things and counts: Wi-Fi drop (black hole), sleep (SIGSTOP
 # then SIGCONT), relay restart, Bob's container network unplugged, and a move
-# to a second relay with `cpart relay move`, after which the first one is gone.
-# Needs docker. Prints how long each recovery took and how many messages were lost.
+# to a second relay with `cpart relay move`, after which the first is gone.
+# Prints how long each recovery took and how many messages were lost.
+#
+# Needs: node 24, docker, the node:24-slim image.
+# Time:  not recorded.
+# Cost:  nothing; no model, no internet.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO=$(pwd)

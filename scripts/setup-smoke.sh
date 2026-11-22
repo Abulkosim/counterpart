@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
-# The short path, as two new people would take it: `cpart setup` on one side,
-# `cpart join` on the other, background daemons, then a message addressed by
-# contact name. Stand-ins for `claude` and `codex` record what setup asked of
-# them; nothing is written to your real agent settings.
+# The short path two new people take: `cpart setup` on one side, `cpart join`
+# on the other, background daemons, then a message addressed by contact name.
+# Stand-ins for `claude` and `codex` record what setup asked of them; nothing
+# is written to your real agent settings. Runs in CI.
+#
+# Needs: node 24.
+# Time:  161 s on a shared 2-core machine.
+# Cost:  nothing; loopback only.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/smoke-lib.sh

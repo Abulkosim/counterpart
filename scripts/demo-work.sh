@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # From agreement to patch. Two people sign a contract, then Alice's worker (a
-# model with no tools) proposes the change to her repo. Uses a real model, so
-# it costs tokens and is not run in CI.
+# model with no tools) proposes the change to her repository.
 #
 #   ./scripts/demo-work.sh            an honest contract
 #   ./scripts/demo-work.sh hostile    the contract text tries to steer the worker
+#
+# Needs: node 24, claude logged in, git.
+# Time:  not recorded.
+# Cost:  model tokens for the worker. Not run in CI.
 set -euo pipefail
 # This script starts its own daemons.
 export CPART_NO_AUTOSTART=1

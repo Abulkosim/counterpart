@@ -7,6 +7,9 @@
 //
 // --empty serves a fresh identity with nothing in it.
 // --live makes the contact post a new message every few seconds.
+//
+// For working on the viewer. Needs node 24 only. No model; the relay runs in
+// this process. Stop it with Ctrl-C; the temp folder is removed.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

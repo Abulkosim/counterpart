@@ -10,6 +10,7 @@
 //   model      written by claude-sonnet-5-5 when asked for ordinary agent-to-agent
 //              messages with no secrets (the prompt is in docs/guard.md); passed as files
 // Deterministic for the first two. Run it again only to change the corpus on purpose.
+// Needs node 24 only. It calls no model: the model batches are files you pass in.
 
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";

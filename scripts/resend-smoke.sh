@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# Loses a message for real and watches the thread recover. Relay and two
-# daemons are separate processes. While Bob is offline, one of Alice's
-# messages is deleted from the relay's database, as if it had expired there.
-# Bob holds the message that depends on it, asks Alice for the missing one,
-# and Alice sends it again.
+# Loses a message for real and watches the thread recover. While Bob is
+# offline, one of Alice's messages is deleted from the relay's database, as if
+# it had expired there. Bob holds the message that depends on it, asks Alice
+# for the missing one, and she sends it again. Runs in CI.
+#
+# Needs: node 24.
+# Time:  52 s on a shared 2-core machine.
+# Cost:  nothing; loopback only.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/smoke-lib.sh

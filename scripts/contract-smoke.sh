@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Two people reach a signed agreement using only the real CLI: propose, revise,
-# approve on both sides, export, verify, and check that tampering and a wrong
-# passphrase are refused. No models involved.
+# Two people reach a signed agreement with the real CLI: propose, revise,
+# approve on both sides, export, verify. Tampering and a wrong passphrase must
+# be refused. Runs in CI.
+#
+# Needs: node 24.
+# Time:  36 s on a shared 2-core machine.
+# Cost:  nothing; no model, loopback only.
 set -euo pipefail
-# This script starts its own daemons.
-export CPART_NO_AUTOSTART=1
 cd "$(dirname "$0")/.."
 . scripts/smoke-lib.sh
 ALICE_PASS=alice-correct-horse

@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Two people sign a contract, then one tells the other what their repository
-# holds. Real relay, two daemon processes, a local Git repository, the real
-# CLI. No models and no network beyond loopback.
+# holds. First the bound file matches the signed text and the receiver shows it
+# as checked. Then one byte changes on a new commit: the receiver shows the
+# mismatch and marks the first evidence stale. Runs in CI.
 #
-# First the bound file is the signed text and the receiver shows it as checked.
-# Then one byte changes on a new commit: the receiver shows the mismatch and
-# marks the first evidence stale.
+# Needs: node 24, git.
+# Time:  32 s on a shared 2-core machine.
+# Cost:  nothing; no model, loopback only.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/smoke-lib.sh
