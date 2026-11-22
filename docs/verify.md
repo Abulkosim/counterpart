@@ -1,6 +1,6 @@
 # The repo verifier
 
-`packages/verify/src/verify.mjs` is one file with no dependencies beyond Node. It answers one question about a checkout: does this tree carry what two people signed?
+`packages/verify/src/verify.mjs` answers one question about a checkout: does this tree carry what two people signed? It is one file with no dependencies beyond Node.
 
 ```sh
 node verify.mjs --tree <checkout to check> --trust <trust.json from the base branch> [--json]
@@ -45,7 +45,7 @@ It lives on the base branch at `.counterpart/trust.json` and is passed to the ve
 
 ## What the schema check means
 
-The verifier supports a fixed set of JSON Schema keywords: `type`, `properties`, `required`, `additionalProperties`, `items`, `enum`, `const`, `minimum`, `maximum`, `minLength`, `maxLength`, `minItems`, `maxItems`, `anyOf`, `allOf`, `oneOf`. A schema that uses anything else, including `$ref`, `pattern` and `format`, is refused, so a schema never means more than this code checks.
+The verifier supports a fixed set of JSON Schema keywords: `type`, `properties`, `required`, `additionalProperties`, `items`, `enum`, `const`, `minimum`, `maximum`, `minLength`, `maxLength`, `minItems`, `maxItems`, `anyOf`, `allOf`, `oneOf`. Annotations (`$schema`, `$id`, `title`, `description`, `examples`, `default`, `$comment`) are allowed and ignored. A schema that uses anything else, including `$ref`, `pattern` and `format`, is refused, so a schema never means more than this code checks.
 
 Agreements, schemas and fixtures are parsed strictly: duplicate keys, a byte order mark, and integers too large to compare exactly are errors. There are limits on file size, total bytes read and the amount of checking in one run.
 
@@ -59,6 +59,8 @@ It does not read the working tree, and it does not run the verifier's fixture ch
 
 `cpart evidence <thread>` shows evidence from both sides. The other side's is split in two. "Checked here" is what your machine recomputed from the contract you both signed: the part digests, the contract hash, and whether their verifier hash is the one your install ships. Everything else is their claim. A matching digest shows they named the right bytes, not that their repository holds them. When they send evidence for a new head, base, bindings or trust policy, the older one is marked stale. The format is in [protocol.md](protocol.md#evidence).
 
-## What it does not do
+## Limits
 
 It does not run tests, install packages or execute anything from the tree. It does not check that the keys belong to who you think: compare them with `cpart whoami` on each side before putting them in the trust file.
+
+It has run on GitHub once, in one private repository with the same owner on both sides, without branch protection or a pull request from a fork ([verification.md](verification.md), 2026-11-13).
