@@ -117,4 +117,5 @@ Each side pays for its own model use. Before the daemon starts any model work it
 - Grants: short-lived permissions a person issues to limit what a session acting for them can do. Until they exist, a coding session that reads the other side's text is limited only by its own permission prompts.
 - A hosted relay. You run your own ([relay.md](relay.md)).
 - The other side's evidence shown on your pull request, and a CI check that rejects stale evidence.
-- Anything run on macOS or Windows. See [verification.md](verification.md) for what has been run.
+
+Nothing has run on macOS or Windows. [verification.md](verification.md) lists what has run.
