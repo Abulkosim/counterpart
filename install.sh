@@ -3,7 +3,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/Abulkosim/counterpart/main/install.sh | sh
 # Run from a checkout (./install.sh), it puts that checkout on your PATH instead.
 set -eu
-PACKAGE=@abulkosim/counterpart
+PACKAGE=${CPART_PACKAGE:-@abulkosim/counterpart}  # or a tarball, to try one before it is published
 
 need_node() {
   echo "cpart needs Node 24 or newer$1. Get it from https://nodejs.org, or with nvm: nvm install 24" >&2
