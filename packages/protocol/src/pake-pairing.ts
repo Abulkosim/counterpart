@@ -19,7 +19,6 @@ import { type DeviceCredential, verifyCredential } from "./identity.ts";
 import { type CpaceSide, confirmTag, cpaceFinish, cpaceStart, lvCat, macKey, tagsEqual } from "./pake.ts";
 import { WORDS } from "./wordlist.ts";
 
-export const PAIR_VERSION = 1;
 export const NAMEPLATE_MAX = 9999;
 export const PAIR_BODY_MAX = 4096; // characters in one message
 const CI_LABEL = "counterpart/pair/v1";
@@ -113,7 +112,7 @@ export function parsePairMsg(body: unknown): PairMsg {
 
 // Channel identifier: the relay both sides use and the nameplate. Neither is
 // secret, and a relay that lies about either makes the keys differ.
-export const pairCi = (relay: string, nameplate: number): Uint8Array => lvCat(utf8(CI_LABEL), utf8(relay), utf8(String(nameplate)));
+const pairCi = (relay: string, nameplate: number): Uint8Array => lvCat(utf8(CI_LABEL), utf8(relay), utf8(String(nameplate)));
 const prs = (words: readonly string[]): Uint8Array => utf8(words.join("-"));
 
 type Role = "inviter" | "joiner";

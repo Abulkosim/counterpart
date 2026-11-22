@@ -139,8 +139,7 @@ test("a relay without nameplates: both sides give up after three tries, not in a
   const j = bob.store.requestJoin(parseCode("7-acid-acorn"), "alice", bob.node.relay);
   const b = await until("the joiner to give up", () => (bob.store.get(j)?.state === "failed" ? bob.store.get(j) : undefined), 15_000);
   assert.ok(b.detail!.startsWith(OLD_RELAY), b.detail!);
-  // Each side: the first connection and one per try. Before the fix this ran
-  // to hundreds of connections in a minute.
+  // Each side: the first connection and one per try, not a reconnect loop.
   await new Promise((res) => setTimeout(res, 1000));
   assert.ok(r.connections() - before <= 10, `${r.connections() - before} connections`);
   // No guess was spent, so the same code can be tried again.

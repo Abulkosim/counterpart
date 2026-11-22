@@ -44,7 +44,7 @@ export function renewDevice(root: KeyPair, d: DeviceSecrets, now = Date.now(), t
   return { ...d, credential: { ...body, sig: sign(root, DOMAIN, canonicalBytes(body)) } };
 }
 
-export function parseCredential(x: unknown): DeviceCredential {
+function parseCredential(x: unknown): DeviceCredential {
   if (!isObject(x) || Object.keys(x).length !== 7) throw new Error("credential: shape");
   const { v, rootKey, signKey, encKey, issuedAt, expiresAt, sig } = x;
   if (v !== 1 || !isKey(rootKey) || !isKey(signKey) || !isKey(encKey) || !isInt(issuedAt) || !isInt(expiresAt) || !isStr(sig, 86, 86))

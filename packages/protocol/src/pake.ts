@@ -100,7 +100,7 @@ export function scalarMultVfy(y: Uint8Array, x: Uint8Array): Uint8Array {
   return k.is0() ? IDENTITY : k.toBytes();
 }
 
-export const isIdentity = (k: Uint8Array): boolean => k.length === IDENTITY.length && timingSafeEqual(k, IDENTITY);
+const isIdentity = (k: Uint8Array): boolean => k.length === IDENTITY.length && timingSafeEqual(k, IDENTITY);
 
 // 7.2: ISK = H(lv_cat(DSI || "_ISK", sid, K) || transcript).
 export const iskIr = (sid: Uint8Array, k: Uint8Array, ya: Uint8Array, ada: Uint8Array, yb: Uint8Array, adb: Uint8Array): Uint8Array =>
