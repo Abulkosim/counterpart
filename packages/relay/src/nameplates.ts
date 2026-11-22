@@ -69,7 +69,8 @@ export function nameplates(opts: NameplateOptions): Nameplates {
   const log = opts.log ?? (() => {});
   const plates = new Map<number, Plate>();
   const resting = new Map<number, number>(); // number -> until
-  const opens = new Map<string, number[]>(); // device -> times
+  // Limit key (see `keys`) -> times of use in the last hour.
+  const opens = new Map<string, number[]>();
   const claims = new Map<string, number[]>();
   let misses: number[] = []; // claims of unknown numbers, relay-wide
   const deliver = opts.deliver;
@@ -78,11 +79,11 @@ export function nameplates(opts: NameplateOptions): Nameplates {
 
   // Times within the last hour, pruned. The map is bounded so many throwaway
   // devices cannot grow it without limit.
-  const recent = (m: Map<string, number[]>, device: string): number[] => {
+  const recent = (m: Map<string, number[]>, key: string): number[] => {
     const t = now();
-    const list = (m.get(device) ?? []).filter((x) => x > t - 3600_000);
-    m.delete(device);
-    m.set(device, list);
+    const list = (m.get(key) ?? []).filter((x) => x > t - 3600_000);
+    m.delete(key);
+    m.set(key, list);
     if (m.size > 50_000) m.delete(m.keys().next().value!);
     return list;
   };
