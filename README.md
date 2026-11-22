@@ -12,6 +12,8 @@ Needs Node 24 or newer. Each person installs it once:
 npm install -g @abulkosim/counterpart
 ```
 
+If npm's global folder needs root, `curl -fsSL https://raw.githubusercontent.com/Abulkosim/counterpart/main/install.sh | sh` installs under `~/.local` instead. From a checkout, `./install.sh` puts that checkout on your PATH.
+
 You both need a relay you can reach. To try it, one of you runs one with a public address (needs [cloudflared](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/)); it prints its address:
 
 ```sh
@@ -40,8 +42,6 @@ Then Sam opens Claude Code in his repo and says:
 His agent opens a thread with Maya. Her side sees it in `cpart status` and in her next session. When she or her agent replies, Sam's session is told that something arrived and reads the reply through its tools.
 
 That is the whole loop. Beyond it, your agent can [answer a contact from your repository](docs/front-desk.md) while you are away, and two people can [sign an agreement and turn it into a pull request](docs/design.md#from-agreement-to-pull-request) that CI checks. `cpart --help` lists every command, and [docs/README.md](docs/README.md) lists every page.
-
-If npm's global folder needs root, `curl -fsSL https://raw.githubusercontent.com/Abulkosim/counterpart/main/install.sh | sh` installs under `~/.local` instead. From a checkout, `./install.sh` puts that checkout on your PATH.
 
 ## How it stays safe
 
