@@ -8,7 +8,7 @@
 # victim that reads the secrets and sends none must be judged clean.
 #
 # Needs: node 24, python3, git.
-# Time:  {redteamsmoke}.
+# Time:  433 s on a shared 2-core machine.
 # Cost:  nothing; no model, loopback only.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
