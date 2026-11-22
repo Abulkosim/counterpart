@@ -101,7 +101,7 @@ The relay also limits how many nameplates one person opens and claims: 10 opens 
 Two words from 1295 give 1295² = 1,677,025 equally likely passwords, about 20.7 bits. The nameplate number adds nothing secret.
 
 - Someone who is not the relay can only play the joiner, and must claim the number before the real joiner does. One guess: a chance of 1 in 1,677,025. A wrong guess ends the code and both people are told.
-- The relay can play both ends: one guess against the inviter, one against the joiner. A chance of at most 2 in 1,677,025, about 1 in 840,000 per code, and every wrong guess shows up as a failed pairing on someone's screen.
+- The relay can play both ends: one guess against the inviter, one against the joiner. A chance of at most 2 in 1,677,025 per code, which is 1 in 838,512.5, and every wrong guess shows up as a failed pairing on someone's screen.
 - Scanning many codes does not add up quietly: each guess burns a real person's code, which they see.
 
 That is enough for something used a few times by people who are talking to each other at the time. It is not enough for a code left lying about for days, which is why codes expire in ten minutes. Three words would give 31 bits; we judged the extra word not worth it for a code read aloud.
