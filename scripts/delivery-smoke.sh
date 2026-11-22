@@ -7,7 +7,6 @@
 # directories.
 #
 # Needs: node 24. Optional: claude, codex.
-# Time:  94 s on a shared 2-core machine.
 # Cost:  nothing; no model is called.
 set -euo pipefail
 cd "$(dirname "$0")/.."

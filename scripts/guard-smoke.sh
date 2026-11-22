@@ -8,7 +8,6 @@
 # never-share file that goes missing does not stop him sending for good.
 #
 # Needs: node 24, python3 (for the pseudo-terminal).
-# Time:  43 s on a shared 2-core machine.
 # Cost:  nothing; loopback only.
 set -euo pipefail
 export CPART_NO_AUTOSTART=1 CPART_NO_BOOT=1

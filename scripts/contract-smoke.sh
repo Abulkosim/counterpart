@@ -4,7 +4,6 @@
 # be refused. Runs in CI.
 #
 # Needs: node 24.
-# Time:  36 s on a shared 2-core machine.
 # Cost:  nothing; no model, loopback only.
 set -euo pipefail
 cd "$(dirname "$0")/.."

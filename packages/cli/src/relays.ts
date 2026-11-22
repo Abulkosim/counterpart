@@ -6,13 +6,17 @@ import { isRelayUrl, relayKey } from "@counterpart/protocol";
 
 export const RELAY_SUBCOMMANDS = ["add", "remove", "move", "list"];
 
-export const RELAY_USAGE = `  cpart relay list                                                your relays, and which contacts know your current list
-  cpart relay add <url> [--as <url>]                              use another relay too. Contacts are told. --as: the address
-                                                                  others use for the same relay, when you reach it another way
-  cpart relay remove <url> [--yes]                                stop using a relay. Contacts are told. Asks for --yes if a
-                                                                  contact shares no other relay with you
-  cpart relay move <url> [--as <url>] [--wait 60]                 make another relay your home: add it, tell contacts, and drop
-                                                                  the old one once every contact has confirmed`;
+export const RELAY_USAGE = `  cpart relay list
+      your relays, and which contacts know your current list
+  cpart relay add <url> [--as <url>]
+      use another relay too. Contacts are told. --as: the address others use
+      for the same relay, when you reach it another way
+  cpart relay remove <url> [--yes]
+      stop using a relay. Contacts are told. Asks for --yes if a contact shares
+      no other relay with you
+  cpart relay move <url> [--as <url>] [--wait 60]
+      make another relay your home: add it, tell contacts, and drop the old one
+      once every contact has confirmed`;
 
 // Print what happens to each relay connection, one line each.
 export function logLink(link: RelayLink, connected: (up: boolean) => void, safe: (s: string) => string): void {

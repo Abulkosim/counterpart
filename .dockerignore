@@ -1,4 +1,4 @@
-# The image needs package.json, the lockfile and packages/ only.
+# The image needs package.json, the lockfile, packages/ and scripts/build.ts.
 **/node_modules
 .git
 .github
@@ -6,6 +6,7 @@
 demo
 docs
 scripts
+!scripts/build.ts
 *.db
 *.db-*
 .env

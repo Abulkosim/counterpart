@@ -169,7 +169,7 @@ What they do not do:
 - **Wake a `claude -p` run.** The Stop hook works there: the run does not end while a followed thread has no reply. The background wake runs only when Claude Code says the session is an interactive terminal one (`CLAUDE_CODE_ENTRYPOINT=cli`), because under `-p` Claude Code 2.1.326 waited for that hook instead of running it in the background. So IDE extensions and the desktop app get no wake either; that was not tried.
 - **Windows.** The hook commands are written for `sh`.
 
-`cpart hook start|prompt|tool|stop|watch` is what the hooks run; it reads the hook JSON on stdin. The plugin calls `packages/mcp/src/hook-main.ts` directly, which does the same without loading the rest of the CLI.
+`cpart hook start|prompt|tool|stop|watch` is what the hooks run; it reads the hook JSON on stdin. The plugin calls the hook entry point directly, which does the same without loading the rest of the CLI: `hook-main.js` beside `cpart`'s own `cli.js` when installed from npm, `packages/mcp/src/hook-main.ts` in a checkout.
 
 ### Codex
 
@@ -184,8 +184,10 @@ Codex has no way to wake an idle session that we found. An idle Codex session he
 `cpart mcp --notify` (or `CPART_NOTIFY=1`) also pushes a notice into a live Claude Code session through Claude Code's channels, a research preview. Most people want the hooks above instead: they need no flag. A server not on Anthropic's list has to be loaded with a development flag, in an interactive session, and Claude Code asks you to confirm it each time:
 
 ```json
-{ "mcpServers": { "counterpart": { "command": "node", "args": ["/path/to/counterpart/packages/cli/src/main.ts", "mcp", "--notify"] } } }
+{ "mcpServers": { "counterpart": { "command": "cpart", "args": ["mcp", "--notify"] } } }
 ```
+
+From a checkout, the command is `node` and the args start with `/path/to/counterpart/packages/cli/src/main.ts`.
 
 ```sh
 claude --dangerously-load-development-channels server:counterpart

@@ -101,14 +101,14 @@ The relay also limits how many nameplates one person opens and claims: 10 opens 
 Two words from 1295 give 1295² = 1,677,025 equally likely passwords, about 20.7 bits. The nameplate number adds nothing secret.
 
 - Someone who is not the relay can only play the joiner, and must claim the number before the real joiner does. One guess: a chance of 1 in 1,677,025. A wrong guess ends the code and both people are told.
-- The relay can play both ends: one guess against the inviter, one against the joiner. A chance of at most 2 in 1,677,025, about 1 in 840,000 per code, and every wrong guess shows up as a failed pairing on someone's screen.
+- The relay can play both ends: one guess against the inviter, one against the joiner. A chance of at most 2 in 1,677,025 per code, which is 1 in 838,512.5, and every wrong guess shows up as a failed pairing on someone's screen.
 - Scanning many codes does not add up quietly: each guess burns a real person's code, which they see.
 
 That is enough for something used a few times by people who are talking to each other at the time. It is not enough for a code left lying about for days, which is why codes expire in ten minutes. Three words would give 31 bits; we judged the extra word not worth it for a code read aloud.
 
 ## Limits
 
-- **The relay's name is part of the key.** The relay's name goes into CI, so both sides must mean the same relay. A relay that answers to several addresses counts as one: the key uses the name the relay gives itself, so a Mac on `ws://127.0.0.1:7447` and a dev container on `ws://host.docker.internal:7447` pair through the same relay ([connectivity.md](connectivity.md)).
+- **The relay's name is part of the key.** The relay's name goes into CI, so both sides must mean the same relay. A relay that answers to several addresses counts as one: the key uses the name the relay gives itself, so a host on `ws://127.0.0.1:7447` and a container on `ws://host.docker.internal:7447` pair through the same relay. That has run with Linux containers only, not on a Mac ([connectivity.md](connectivity.md)).
 - **Nameplates live in the relay's memory.** A relay restart ends every pairing in progress. Make a new code.
 - **A daemon restart in the middle of a run ends it.** The secrets of a run are kept in memory only; after a restart the daemon marks it failed, says why, and on reconnecting tells the other side and closes the nameplate, so nobody waits for a run that cannot finish. A dropped relay connection does not end a run: after reconnecting, the daemon sends its last pairing messages again, and the relay treats a repeat as one message.
 - **The words sit in `pairing.db`** in your home (mode 600, in a 700 directory) while a pairing is live, so the CLI can show the code and the daemon can run it. When it ends the row is cleared, SQLite zeroes the freed space (`secure_delete`), and the daemon empties the write-ahead log (`pairing.db-wal`) into the database, so the words are not left in either file. A copy can still sit in free blocks of the disk itself, as with any deleted file. The home also keeps, for 30 days, a SHA-256 of each code it answered, so it never answers one twice; a used code is dead, so that hash is worth nothing.

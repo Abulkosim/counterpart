@@ -31,8 +31,8 @@
 # MAC_CHECK_KEEP=1 keeps the temp dir for reading the logs afterwards.
 #
 # Needs: node 24, Docker Desktop (or docker on Linux).
-# Time:  not yet run on a Mac, so not known there. Steps 7 and 8 wait for you.
 # Cost:  nothing; no model, no internet beyond pulling node:24-slim if missing.
+# Steps 7 and 8 wait for you.
 set -u
 cd "$(dirname "$0")/.." || exit 1
 REPO=$(pwd)

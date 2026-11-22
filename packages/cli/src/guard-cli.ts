@@ -23,15 +23,26 @@ export const GUARD_USAGE = `Outbound guard: everything you or your agent send is
 that carries a key, a token, a value from your environment or .env files, or
 text from a file you marked never-share is held, not sent.
 
-  cpart held [--all]                                              messages held and not sent. --all adds released, dropped and unguarded
-  cpart release <id>                                              show it in full and send it. Needs you at a terminal, with your passphrase
-  cpart drop <id>                                                 delete it. Nothing is sent. Needs you at a terminal
-  cpart guard                                                     what is checked
-  cpart guard repo add|remove <path>                              also check the .env files in this repository
-  cpart guard never-share add|remove <file>                       hold any message that quotes this file
-  cpart guard off <minutes>                                       send without checking for a while (at most 8 hours)
-  cpart guard on                                                  check again
-  Removing a repository, never-share files and guard off need you at a terminal, like release.`;
+  cpart held [--all]
+      messages held and not sent. --all adds released, dropped and unguarded
+  cpart release <id>
+      show it in full and send it. Needs you at a terminal, with your
+      passphrase
+  cpart drop <id>
+      delete it. Nothing is sent. Needs you at a terminal
+  cpart guard
+      what is checked
+  cpart guard repo add|remove <path>
+      also check the .env files in this repository
+  cpart guard never-share add|remove <file>
+      hold any message that quotes this file
+  cpart guard off <minutes>
+      send without checking for a while (at most 8 hours)
+  cpart guard on
+      check again
+
+Removing a repository, never-share files and guard off need you at a
+terminal, like release.`;
 
 const DESCRIBE: Record<string, string> = {
   "private-key": "a private key",

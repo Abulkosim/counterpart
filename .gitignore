@@ -18,4 +18,3 @@ scripts/devices/results/*/logs/
 
 # Agent worktrees
 .claude/worktrees/
-dist

@@ -4,7 +4,7 @@ An identity can use several relays and move between them without pairing again. 
 
 ## A Mac and a dev container on the same Mac
 
-No tunnel and no internet. Run one relay on the Mac as a service, so it comes back after a restart ([relay.md](relay.md#on-your-own-machine)):
+No tunnel and no internet. This is what should work on a Mac; it has run with Linux containers only ([below](#checking-it-on-your-mac)). Run one relay on the Mac as a service, so it comes back after a restart ([relay.md](relay.md#on-your-own-machine)):
 
 ```sh
 cpart relay --boot
@@ -40,7 +40,7 @@ Inside a container, `ws://127.0.0.1:7447` is the container itself. `join` sees n
 
 It starts a relay on 127.0.0.1 only, makes an identity on the Mac with `cpart setup` and one in a `node:24-slim` container with `cpart join`. If the container cannot reach the relay through `host.docker.internal`, it restarts the relay on `0.0.0.0` and tries again. Then it times messages both ways and restarts the relay to count what is lost. Two steps ask first: installing the launchd agent and killing its daemon to see launchd start it again, and putting the Mac to sleep for a minute.
 
-It leaves nothing behind. Both identities and the relay database live in a temp directory that is removed at the end. It uses `--no-agents`, points `CLAUDE_CONFIG_DIR` and `CODEX_HOME` at empty temp directories, and never touches `~/.counterpart`. The launchd step writes a plist in `~/Library/LaunchAgents` and removes it; launchd keeps a note that the label was enabled and then disabled.
+It is written to leave nothing behind. Both identities and the relay database live in a temp directory that is removed at the end. It uses `--no-agents`, points `CLAUDE_CONFIG_DIR` and `CODEX_HOME` at empty temp directories, and never touches `~/.counterpart`. The launchd step should write a plist in `~/Library/LaunchAgents` and remove it, and launchd should keep a note that the label was enabled and then disabled. That step has never run.
 
 Steps 1 to 6 have run on Linux with Docker Engine, where the firewall above kept `host.docker.internal` from reaching the relay; the script then ran the container on the host's network and said so in its report. Nothing has run on a Mac.
 

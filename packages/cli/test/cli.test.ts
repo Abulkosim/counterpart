@@ -3,7 +3,7 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { commandHelp } from "../src/help.ts";
@@ -39,12 +39,22 @@ test("each main command has its own help, with the flags a new person needs", ()
   for (const c of ["invite", "up", "down", "status"]) assert.ok(cli([c, "--help"]).out.startsWith(`cpart ${c}`), `${c} --help`);
   // The rest are cut out of the full usage.
   assert.match(cli(["say", "--help"]).out, /^ {2}cpart say <thread> <text>\n\nAll commands: cpart help\n$/);
-  assert.match(commandHelp("approve", usage()) ?? "", /cpart approve <thread> <id> +sign it/);
+  assert.match(commandHelp("approve", usage()) ?? "", /cpart approve <thread> <id>\n +sign it/);
   assert.match(commandHelp("release", usage()) ?? "", /^Outbound guard/);
   assert.equal(commandHelp("nosuch", usage()), undefined);
   assert.match(cli(["nosuch", "--help"]).out, /^No command "nosuch"\.\n\ncpart: let your agent/);
   // The full list names the flags too, and says how to get one command's help.
-  for (const f of ["--no-agents", "--no-passphrase", "--yes", "cpart relay --boot", "cpart <command> --help"]) assert.ok(usage().includes(f), `usage lacks ${f}`);
+  for (const f of ["--no-agents", "--no-passphrase", "--yes", "cpart relay --boot", "cpart <command> --help", "cpart --version"]) assert.ok(usage().includes(f), `usage lacks ${f}`);
+});
+
+test("help fits a terminal 80 columns wide", () => {
+  const texts = [usage(), ...["setup", "join", "invite", "relay", "up", "down", "status", "guard", "share"].map((c) => cli([c, "--help"]).out)];
+  for (const text of texts) for (const line of text.split("\n")) assert.ok(line.length < 80, `${line.length} columns: ${line}`);
+});
+
+test("--version and -v print the root package.json version and nothing else", () => {
+  const { version } = JSON.parse(readFileSync(join(import.meta.dirname, "../../../package.json"), "utf8")) as { version: string };
+  for (const flag of ["--version", "-v"]) assert.deepEqual(cli([flag]), { code: 0, out: `${version}\n` });
 });
 
 test("join without a terminal says why it stops and which flag goes on", () => {
@@ -83,9 +93,14 @@ sys.stdout.write(out.decode("utf8", "replace"))
 });
 
 test("after pairing, the agent hint shows only where an agent has the tools", () => {
-  assert.match(nextStep("bob", true), /in Claude Code or Codex, say something like/);
-  const none = nextStep("bob", false);
-  assert.ok(!none.includes("say something like"));
-  assert.match(none, /cpart open bob "<what it is about>" --say "<first message>"/);
-  assert.match(none, /cpart setup/);
+  assert.match(nextStep("bob", "ready"), /in Claude Code or Codex, say something like/);
+  for (const state of ["missing", "off"] as const) {
+    const none = nextStep("bob", state);
+    assert.ok(!none.includes("say something like"));
+    assert.match(none, /cpart open bob "<what it is about>" --say "<first message>"/);
+    assert.match(none, /cpart setup/);
+    for (const line of none.split("\n")) assert.ok(line.length < 80, `too wide: ${line}`);
+  }
+  // Right after setup or join, a missing agent is not a step the person skipped.
+  assert.match(nextStep("bob", "missing"), /not found on PATH\. Once one is installed,/);
 });

@@ -4,11 +4,13 @@ import { type Share, type ShareRule, planShare, readBundle, readShare, removeSha
 // cpart share: let the front desk read files from your repository for one
 // contact. The logic is in @counterpart/frontdesk; this is the command line.
 
-export const SHARE_USAGE = `  cpart share <contact> --repo <path> <path or "glob">... [--allow <sensitive path>]...
-                                                                  let the front desk read these committed files. Paths are relative
-                                                                  to the repository root. Quote globs: "src/**/*.ts". You confirm
-                                                                  in a terminal, with your passphrase if you have one
-  cpart share list [contact]                                      what the front desk can read for each contact now, and what it skips
+export const SHARE_USAGE = `  cpart share <contact> --repo <path> <path or "glob">...
+        [--allow <sensitive path>]...
+      let the front desk read these committed files. Paths are relative to the
+      repository root. Quote globs: "src/**/*.ts". You confirm in a terminal,
+      with your passphrase if you have one
+  cpart share list [contact]
+      what the front desk can read for each contact now, and what it skips
   cpart share remove <contact> <path or glob>... | --all`;
 
 const SHOW = 40;

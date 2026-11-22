@@ -9,9 +9,12 @@ export interface Io {
   out(human: string, data: unknown): void;
   note(s: string): void;
   safe(s: string): string;
-  // Whether Claude Code or Codex has the tools for this identity.
-  agents(): boolean;
+  // Whether Claude Code or Codex has the tools for this identity ("ready"),
+  // neither is on PATH ("missing"), or one is but was left alone ("off").
+  agents(): Agents;
 }
+
+export type Agents = "ready" | "missing" | "off";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const clock = (ms: number): string => new Date(ms).toTimeString().slice(0, 5);
@@ -32,10 +35,14 @@ async function watch(store: PairingStore, id: string, ms: number, stop: (v: Pair
 }
 
 // What to do once paired. The agent hint only where an agent can act on it.
-export const nextStep = (name: string, agents: boolean): string =>
-  agents
+export const nextStep = (name: string, agents: Agents): string =>
+  agents === "ready"
     ? `Now, in Claude Code or Codex, say something like:\n  ask ${name}'s agent what their API returns for an empty page`
-    : `Talk from this terminal:\n  cpart open ${name} "<what it is about>" --say "<first message>"\nTo let Claude Code or Codex talk for you instead: cpart setup`;
+    : `Talk from this terminal:\n  cpart open ${name} "<what it is about>" --say "<first message>"\n${
+        agents === "missing"
+          ? "Claude Code and Codex were not found on PATH. Once one is installed,\ncpart setup adds Counterpart to it, and it can talk for you."
+          : "Claude Code or Codex is installed but has no Counterpart tools for this\nidentity. cpart setup without --no-agents adds them."
+      }`;
 
 // Prints a code and, unless told not to, waits for the pairing to end.
 // Returns false when no code could be made; the caller then offers the long invite.

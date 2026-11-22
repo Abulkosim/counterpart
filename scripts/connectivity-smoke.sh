@@ -15,7 +15,6 @@
 # Prints how long each recovery took and how many messages were lost.
 #
 # Needs: node 24, docker, the node:24-slim image.
-# Time:  not recorded.
 # Cost:  nothing; no model, no internet.
 set -euo pipefail
 cd "$(dirname "$0")/.."

@@ -14,7 +14,6 @@
 #   ALICE_BRIEF="..." BOB_BRIEF="..." ./scripts/demo-negotiate.sh
 #
 # Needs: node 24, claude logged in.
-# Time:  minutes; not recorded.
 # Cost:  model tokens: up to 2 x ROUNDS claude sessions (ROUNDS defaults to 3). Not run in CI.
 set -euo pipefail
 # This script starts its own daemons.

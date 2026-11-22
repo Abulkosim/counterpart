@@ -7,7 +7,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { type ContractView, type EvidenceView, Counterpart, RelayLink } from "@counterpart/daemon";
-import { type ContractPart, type Evidence, canonicalize, decodeInvite, isHttpsUrl, verifyAgreement } from "@counterpart/protocol";
+import { type ContractPart, type Evidence, VERSION, canonicalize, decodeInvite, isHttpsUrl, verifyAgreement } from "@counterpart/protocol";
 import { FrontDesk, addToBundle, anthropicApi, claudeCli, claudeCliSetup, cliPrivateValues, readBundle, removeFromBundle } from "@counterpart/frontdesk";
 import { deskCheck, onAnyway } from "./desk-check.ts";
 import { hookMain, startMcpServer } from "@counterpart/mcp";
@@ -20,7 +20,7 @@ import { openTunnel } from "./tunnel.ts";
 import { GUARD_USAGE, guardCommand } from "./guard-cli.ts";
 import { SHARE_USAGE, shareCommand, sharedSummary } from "./share.ts";
 import { hookLines, installHooks, removeHooks } from "./hooks-install.ts";
-import { inviteByCode, joinByCode, nextStep, pairingLines } from "./pair.ts";
+import { type Agents, inviteByCode, joinByCode, nextStep, pairingLines } from "./pair.ts";
 import { STATUS_WINDOW, refusedLine, unansweredLines } from "./waiting.ts";
 import { PairingEngine } from "@counterpart/daemon";
 import { looksLikeCode } from "@counterpart/protocol";
@@ -33,114 +33,155 @@ const USAGE = `cpart: let your agent talk to someone else's agent
 Start here. One of these is all the setup there is:
 
   cpart setup --relay <wss://host> [--no-agents] [--no-hooks] [--no-passphrase]
-                                                                  create your identity, keep the daemon running, add Counterpart to
-                                                                  Claude Code and Codex. Safe to run again. --no-agents leaves
-                                                                  Claude Code and Codex alone; --no-hooks leaves out only the hooks
-                                                                  that tell a session when a reply arrives
+      create your identity, keep the daemon running, add Counterpart to Claude
+      Code and Codex. Safe to run again. --no-agents leaves Claude Code and
+      Codex alone; --no-hooks leaves out only the hooks that tell a session
+      when a reply arrives
   cpart join <code> <name> [--yes] [--no-agents] [--no-passphrase]
-                                                                  the same, with the code someone sent you (7-cider-otter@host).
-                                                                  <name> is what you call them. A long cpart-invite: works too.
-                                                                  --yes uses a relay on your own machine or network without asking
-  cpart invite <name> [--no-wait] [--long]                        make a short code to send, then wait for them. <name> is what you
-                                                                  call them. --long makes the long invite instead. With --json
-                                                                  the long invite is printed unless you add --code
-  cpart status                                                    is everything running, and what is waiting for you
-  cpart up [--boot] | cpart down                                  start or stop the background daemon. --boot also starts it at login
+      the same, with the code someone sent you (7-cider-otter@host). <name> is
+      what you call them. A long cpart-invite: works too. --yes uses a relay on
+      your own machine or network without asking
+  cpart invite <name> [--no-wait] [--long]
+      make a short code to send, then wait for them. <name> is what you call
+      them. --long makes the long invite instead. With --json the long invite
+      is printed unless you add --code
+  cpart status
+      is everything running, and what is waiting for you
+  cpart up [--boot] | cpart down
+      start or stop the background daemon. --boot also starts it at login
 
 Wherever a command takes <thread>, a contact's name means your latest thread
 with them, and the first characters of a thread id are enough.
 
 The pieces, if you want to run them yourself:
 
-  cpart relay [--port 7447] [--host 127.0.0.1] [--db <file>] [--url wss://public.name]... [--tunnel]
-                                                                  run a relay in this terminal. --url once for each address it answers to.
-                                                                  --tunnel gives it a public address through
-                                                                  cloudflared, for trying it with someone; the address changes on restart.
-                                                                  The database is ~/.counterpart-relay/relay-<port>.db unless --db
-  cpart relay --boot [--port 7447] [...] | cpart relay --no-boot  run the relay in the background, from login on, or stop doing that
+  cpart relay [--port 7447] [--host 127.0.0.1] [--db <file>]
+        [--url wss://public.name]... [--tunnel]
+      run a relay in this terminal. --url once for each address it answers to.
+      --tunnel gives it a public address through cloudflared, for trying it
+      with someone; the address changes on restart. The database is
+      ~/.counterpart-relay/relay-<port>.db unless --db
+  cpart relay --boot [--port 7447] [...] | cpart relay --no-boot
+      run the relay in the background, from login on, or stop doing that
 ${RELAY_USAGE}
-  cpart init --relay <ws://host:port> [--no-passphrase]           create your identity
-  cpart renew                                                     renew this device's credential (needs the passphrase)
+  cpart init --relay <ws://host:port> [--no-passphrase]
+      create your identity
+  cpart renew
+      renew this device's credential (needs the passphrase)
   cpart whoami
-  cpart daemon                                                    stay connected, deliver and receive, in this terminal
-  cpart accept <invite> <name>                                    accept someone's invite
+  cpart daemon
+      stay connected, deliver and receive, in this terminal
+  cpart accept <invite> <name>
+      accept someone's invite
   cpart contacts
-  cpart open <contact> <goal> [--say <text>]                      start a thread. The goal is a short title; --say sends the
-                                                                  first message with it
+  cpart open <contact> <goal> [--say <text>]
+      start a thread. The goal is a short title; --say sends the first message
+      with it
   cpart say <thread> <text>
   cpart threads
-  cpart log <thread>                                              your own lines show (queued) or (at relay) until their daemon confirms
-  cpart rejects                                                   messages that were refused, and why
-  cpart mcp [--notify] [--view-port 7450]                         MCP server on stdio, for Claude Code and Codex. --notify tells a
-                                                                  live Claude Code session when something arrives, never what
-  cpart view [--port 7450]                                        read your threads in a browser, on this machine only
-  cpart hook install | remove                                     add or take out the Claude Code and Codex hooks. setup adds them
-  cpart hook start|prompt|tool|stop|watch                         what those hooks run. Reads Claude Code's hook JSON on stdin
+  cpart log <thread>
+      your own lines show (queued) or (at relay) until their daemon confirms
+  cpart rejects
+      messages that were refused, and why
+  cpart mcp [--notify] [--view-port 7450]
+      MCP server on stdio, for Claude Code and Codex. --notify tells a live
+      Claude Code session when something arrives, never what
+  cpart view [--port 7450]
+      read your threads in a browser, on this machine only
+  cpart hook install | remove
+      add or take out the Claude Code and Codex hooks. setup adds them
+  cpart hook start|prompt|tool|stop|watch
+      what those hooks run. Reads Claude Code's hook JSON on stdin
 
 Contracts: the exact text two people agree to. Anyone on your side, including
 your agent, can propose. Only you can approve, with your passphrase.
 
-  cpart propose <thread> --title <t> --file <contract.md> [--part kind:file]... [--supersedes <id>]
-  cpart contracts <thread>                                        proposals in a thread, with their ids
-  cpart contract <thread> <id>                                    show the full text and attachments
-  cpart approve <thread> <id>                                     sign it. This cannot be undone
+  cpart propose <thread> --title <t> --file <contract.md> [--part kind:file]...
+        [--supersedes <id>]
+  cpart contracts <thread>
+      proposals in a thread, with their ids
+  cpart contract <thread> <id>
+      show the full text and attachments
+  cpart approve <thread> <id>
+      sign it. This cannot be undone
   cpart decline <thread> <id> [reason]
-  cpart withdraw <thread> <id>                                    stop asking for approval of your proposal
-  cpart agreement export <thread> <id> [--out file]               the contract and both signatures
+  cpart withdraw <thread> <id>
+      stop asking for approval of your proposal
+  cpart agreement export <thread> <id> [--out file]
+      the contract and both signatures
   cpart agreement verify <file>
 
 Work: after an agreement, a model with no tools proposes the change to your
 repo. It sees only committed files you name. Code checks every edit. Nothing
 it writes is run, and nothing is written until you apply it.
 
-  cpart work <thread> <id> --repo <path> --paths <a,b,dir> --brief <what to do> [--allow <sensitive path>]...
-  cpart work show <work-id>                                       the patch, what was refused, what to look at first
-  cpart work apply <work-id> <work-hash> [--repo <path>]          write the reviewed files. Commits nothing
+  cpart work <thread> <id> --repo <path> --paths <a,b,dir> --brief <what to do>
+        [--allow <sensitive path>]...
+  cpart work show <work-id>
+      the patch, what was refused, what to look at first
+  cpart work apply <work-id> <work-hash> [--repo <path>]
+      write the reviewed files. Commits nothing
 
 Publish: tie a repository to an agreement and open the pull request.
 
-  cpart repo init <thread> <id> --repo <path> --bind <part>=<path>[,<valid fixtures dir>,<invalid fixtures dir>]...
-                                                                  writes the trust file, the verifier and its workflow. Commit them to your main branch
-  cpart pr <thread> <id> --work <work-id> [--repo <path>] [--branch <name>] [--evidence [--label <owner/name>]]
-                                                                  commits the applied work and the agreement on a branch, pushes, opens a pull request.
-                                                                  --evidence then tells the other side what was published
+  cpart repo init <thread> <id> --repo <path> --bind
+        <part>=<path>[,<valid fixtures dir>,<invalid fixtures dir>]...
+      writes the trust file, the verifier and its workflow. Commit them to your
+      main branch
+  cpart pr <thread> <id> --work <work-id> [--repo <path>] [--branch <name>]
+        [--evidence [--label <owner/name>]]
+      commits the applied work and the agreement on a branch, pushes, opens a
+      pull request. --evidence then tells the other side what was published
 
-Evidence: tell the other side what your repository holds for an agreed proposal.
-The values are read from committed Git objects by code. What the other side
-sends you is their claim; only what your machine could recompute is marked checked.
+Evidence: tell the other side what your repository holds for an agreed
+proposal. The values are read from committed Git objects by code. What the
+other side sends you is their claim; only what your machine could recompute
+is marked checked.
 
-  cpart evidence send <thread> <id> --repo <path> [--head <ref>] [--base <ref>] [--label <owner/name>] [--pr <https url>] [--run <https url> --status success|failure]
-  cpart evidence <thread> [id]                                    evidence from both sides: what was checked here, and what is only claimed
+  cpart evidence send <thread> <id> --repo <path> [--head <ref>] [--base <ref>]
+        [--label <owner/name>] [--pr <https url>]
+        [--run <https url> --status success|failure]
+  cpart evidence <thread> [id]
+      evidence from both sides: what was checked here, and what is only claimed
 
 Front desk: a model with no tools that answers a contact while you are away,
 using only the files you shared with that contact: committed files from your
 repository, or copies you put in their bundle.
 
 ${SHARE_USAGE}
-  cpart bundle add <contact> <file...>                            share copies of these files with a contact
+  cpart bundle add <contact> <file...>
+      share copies of these files with a contact
   cpart bundle list <contact>
   cpart bundle remove <contact> <name>
-  cpart desk on <contact> [--as <your name>] [--slots 6] [--daily 30] [--no-check]
-                                                                  first has the daemon check that the model runs; --no-check skips that
+  cpart desk on <contact> [--as <your name>] [--slots 6] [--daily 30]
+        [--no-check]
+      first has the daemon check that the model runs; --no-check skips that
   cpart desk off <contact>
   cpart desk status
-  cpart desk check                                                have the daemon make one tiny model call, and say what is wrong if it fails
-  cpart desk refill <thread>                                      allow more replies in a thread
-  cpart asks [--all]                                              questions the front desk passed to you that are still open
-  cpart asks answer <id> [text]                                   mark one answered. With text, send it to the contact as your own message
-  cpart asks dismiss <id>                                         close one without answering
+  cpart desk check
+      have the daemon make one tiny model call, and say what is wrong if it
+      fails
+  cpart desk refill <thread>
+      allow more replies in a thread
+  cpart asks [--all]
+      questions the front desk passed to you that are still open
+  cpart asks answer <id> [text]
+      mark one answered. With text, send it to the contact as your own message
+  cpart asks dismiss <id>
+      close one without answering
 
 ${GUARD_USAGE}
 
-Identity lives in $CPART_HOME (default ~/.counterpart). Add --json for machine output.
-Help for one command: cpart <command> --help`;
+Identity lives in $CPART_HOME (default ~/.counterpart).
+Add --json for machine output. Help for one command: cpart <command> --help
+The version: cpart --version`;
 
 const { values: flags, positionals } = parseArgs({
   allowPositionals: true,
   options: {
     relay: { type: "string" }, port: { type: "string" }, host: { type: "string" }, db: { type: "string" },
     home: { type: "string" }, evidence: { type: "boolean" }, head: { type: "string" }, base: { type: "string" }, label: { type: "string" }, pr: { type: "string" }, run: { type: "string" }, status: { type: "string" }, bind: { type: "string", multiple: true }, work: { type: "string" }, branch: { type: "string" }, repo: { type: "string" }, paths: { type: "string" }, brief: { type: "string" }, allow: { type: "string", multiple: true }, title: { type: "string" }, file: { type: "string" }, part: { type: "string", multiple: true }, supersedes: { type: "string" },
-    out: { type: "string" }, yes: { type: "boolean" }, all: { type: "boolean" }, notify: { type: "boolean" }, "view-port": { type: "string" }, "no-passphrase": { type: "boolean" }, as: { type: "string" }, slots: { type: "string" }, daily: { type: "string" }, model: { type: "string" }, url: { type: "string", multiple: true }, wait: { type: "string" }, boot: { type: "boolean" }, "no-boot": { type: "boolean" }, "no-agents": { type: "boolean" }, "no-hooks": { type: "boolean" }, "no-check": { type: "boolean" }, tunnel: { type: "boolean" }, "no-wait": { type: "boolean" }, long: { type: "boolean" }, code: { type: "boolean" }, say: { type: "string" }, json: { type: "boolean" }, help: { type: "boolean", short: "h" },
+    out: { type: "string" }, yes: { type: "boolean" }, all: { type: "boolean" }, notify: { type: "boolean" }, "view-port": { type: "string" }, "no-passphrase": { type: "boolean" }, as: { type: "string" }, slots: { type: "string" }, daily: { type: "string" }, model: { type: "string" }, url: { type: "string", multiple: true }, wait: { type: "string" }, boot: { type: "boolean" }, "no-boot": { type: "boolean" }, "no-agents": { type: "boolean" }, "no-hooks": { type: "boolean" }, "no-check": { type: "boolean" }, tunnel: { type: "boolean" }, "no-wait": { type: "boolean" }, long: { type: "boolean" }, code: { type: "boolean" }, say: { type: "string" }, json: { type: "boolean" }, help: { type: "boolean", short: "h" }, version: { type: "boolean", short: "v" },
   },
 });
 const [cmd, ...args] = positionals;
@@ -277,7 +318,10 @@ function describeEvidence(v: EvidenceView, contact: string): string {
 }
 
 const note = (s: string): void => (flags.json ? console.error(s) : console.log(s));
-const agentsReady = (): boolean => agents(home).some((h) => h.registered === "here");
+const agentsReady = (): Agents => {
+  const hosts = agents(home);
+  return hosts.some((h) => h.registered === "here") ? "ready" : hosts.some((h) => h.found) ? "off" : "missing";
+};
 
 // Which argument of this command names a thread, if any.
 function threadArg(): number | undefined {
@@ -300,6 +344,26 @@ function resolveThread(node: Counterpart, ref: string): string {
   const starts = ref.length >= 4 ? all.filter((t) => t.id.startsWith(ref)) : [];
   if (starts.length > 1) throw new Error(`"${ref}" is the start of ${starts.length} thread ids; give more characters`);
   return starts[0]?.id ?? ref;
+}
+
+// Where a message just written got to. The daemon sends it, so with a daemon
+// running, watch for a moment before saying.
+async function sentLine(node: Counterpart, eventId: string, threadId: string, contact: string): Promise<string> {
+  const ref = threadId.slice(0, 8);
+  const daemon = running(home) !== undefined;
+  const end = Date.now() + 2000;
+  let state = node.delivery(eventId);
+  while (daemon && state === "queued" && Date.now() < end) {
+    await new Promise((r) => setTimeout(r, 100));
+    state = node.delivery(eventId);
+  }
+  if (state === "received") return `Sent to ${contact} in thread ${ref}. Their daemon has it.`;
+  if (state === "stored") return `Sent to the relay for ${contact}, in thread ${ref}.`;
+  if (state === "failed") return `The relay refused your message in thread ${ref}. It was not delivered.`;
+  if (state === "expired") return `Your message in thread ${ref} expired before it could be sent.`;
+  return daemon
+    ? `Not at the relay yet, in thread ${ref}. Your daemon sends it when it\nreaches the relay.`
+    : `Saved here, in thread ${ref}. Your daemon is not running, so nothing\nis sent until you start it: cpart up`;
 }
 
 // Start the background daemon if nothing holds this home. Scripts that run
@@ -527,6 +591,7 @@ async function status(node: Counterpart): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  if (flags.version) return console.log(VERSION);
   const helpFor = cmd === "help" ? args[0] : flags.help ? cmd : undefined;
   if (helpFor) return console.log(commandHelp(helpFor, USAGE) ?? `No command "${safe(helpFor)}".\n\n${USAGE}`);
   if (!cmd || flags.help || cmd === "help") return console.log(USAGE);
@@ -965,12 +1030,13 @@ async function main(): Promise<void> {
       const id = await node.openThread(args[0]!, args.slice(1).join(" "));
       if (flags.say === undefined) return out(`Opened thread ${id}`, { threadId: id });
       const e = await node.say(id, flags.say);
-      return out(`Opened thread ${id}\nQueued ${e.id}`, { threadId: id, eventId: e.id });
+      return out(`Opened thread ${id}\n${flags.json ? "" : await sentLine(node, e.id, id, args[0]!)}`, { threadId: id, eventId: e.id });
     }
     case "say": {
       need(2, "say <thread> <text>");
       const e = await node.say(args[0]!, args.slice(1).join(" "));
-      return out(`Queued ${e.id}`, e);
+      const contact = node.threads().find((t) => t.id === args[0])?.contact ?? "them";
+      return out(flags.json ? "" : await sentLine(node, e.id, args[0]!, contact), e);
     }
     case "threads": {
       const list = node.threads();

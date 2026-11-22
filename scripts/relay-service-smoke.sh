@@ -7,7 +7,6 @@
 # run here. Nothing touches ~/.counterpart or your agents.
 #
 # Needs: node 24, a systemd user session (systemctl --user).
-# Time:  35 s on a shared 2-core machine.
 # Cost:  nothing; loopback only.
 set -euo pipefail
 cd "$(dirname "$0")/.."
