@@ -19,7 +19,7 @@ cpart setup --relay ws://127.0.0.1:7447
 cpart invite container
 ```
 
-In the container, the line `cpart invite` printed:
+In the container, run the line `cpart invite` printed, with your name for the Mac and `--yes` at the end:
 
 ```sh
 cpart join 7-cider-otter@ws://127.0.0.1:7447 mac --yes
