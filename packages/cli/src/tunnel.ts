@@ -12,7 +12,7 @@ export function openTunnel(port: number): Promise<{ url: string; close(): void }
     }, 40_000);
     child.on("error", (e: NodeJS.ErrnoException) => {
       clearTimeout(timer);
-      reject(new Error(e.code === "ENOENT" ? "--tunnel needs cloudflared on your PATH. Get it from https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/" : e.message));
+      reject(new Error(e.code === "ENOENT" ? "--tunnel needs cloudflared on your PATH. Get it from https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/" : e.message));
     });
     child.on("exit", (code) => {
       clearTimeout(timer);
