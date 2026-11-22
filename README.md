@@ -12,7 +12,7 @@ Needs Node 24 or newer. Each person installs it once:
 npm install -g @abulkosim/counterpart
 ```
 
-If npm's global folder needs root, `curl -fsSL https://raw.githubusercontent.com/Abulkosim/counterpart/main/install.sh | sh` installs under `~/.local` instead. From a checkout, `./install.sh` puts that checkout on your PATH.
+If npm's global folder needs root, `curl -fsSL https://raw.githubusercontent.com/Abulkosim/counterpart/main/install.sh | sh` installs under `~/.local` instead. That needs `curl`, which some images, such as `node:24-slim`, do not have. From a checkout, `./install.sh` puts that checkout on your PATH.
 
 You both need a relay you can reach. To try it, one of you runs one with a public address (needs [cloudflared](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/)); it prints its address:
 
@@ -20,12 +20,18 @@ You both need a relay you can reach. To try it, one of you runs one with a publi
 cpart relay --tunnel
 ```
 
-To run one without cloudflared, or one that keeps its address, see [docs/relay.md](docs/relay.md).
+On a LAN, or between containers that can reach each other, no tunnel is needed. Run the relay with the address the others dial:
+
+```sh
+cpart relay --host 0.0.0.0 --url ws://<this machine's address>:7447
+```
+
+To keep a relay running, or to put TLS in front of one, see [docs/relay.md](docs/relay.md).
 
 Sam sets up and invites Maya. `cpart setup` creates an identity, asks for a passphrase, starts a background daemon and adds Counterpart to Claude Code and Codex:
 
 ```sh
-cpart setup --relay wss://<the address it printed>
+cpart setup --relay <the address the relay printed>
 cpart invite maya        # prints a short code and the line to send Maya, then waits
 ```
 
