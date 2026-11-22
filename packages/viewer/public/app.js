@@ -893,7 +893,7 @@ function paintNav(r) {
 
 function paintStatus() {
   const text =
-    state.problem === "offline" ? "The viewer has stopped. Start it again to see new messages."
+    state.problem === "offline" ? "The viewer has stopped. Run cpart view again and open the new link it prints."
     : state.problem === "key" ? ""
     : `Read only. Served from ${location.host} on this machine.`;
   if (statusLine.textContent !== text) statusLine.textContent = text;
@@ -933,7 +933,7 @@ function paint() {
     build = () => [empty("This tab has no key", "Open the full link that cpart printed. The key in it lets this page read your transcripts.")];
   } else if (!state.overview) {
     key = `wait:${state.problem}`;
-    build = () => (state.problem ? [empty("The viewer is not answering", "Start it again and open the link it prints.")] : []);
+    build = () => (state.problem ? [empty("The viewer is not answering", "Run cpart view again and open the new link it prints.")] : []);
   } else if (r.path) {
     const detail = DETAIL[r.view];
     const data = state.data.get(r.path);
