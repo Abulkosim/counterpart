@@ -1,6 +1,6 @@
 # Prior art
 
-Surveyed 2026-11-12 from READMEs, docs and code. Stars are as of that date.
+What existed when Counterpart started, and what we took from it. Surveyed 2026-11-12 from READMEs, docs and code; stars are as of that date.
 
 | Project | What it does | Trust model | Worth taking |
 | --- | --- | --- | --- |
@@ -19,7 +19,7 @@ Surveyed 2026-11-12 from READMEs, docs and code. Stars are as of that date.
 
 **Codex app-server.** `turn/start` on an idle thread, `turn/steer` during an active turn. The daemon has to own the app-server process and track turn state. There is no documented way to attach to a terminal session that is already running.
 
-Both confirm the plan: run our own workers first, and treat live sessions as a place to show notifications.
+Neither gives a reliable way into a session that is already running. So Counterpart runs its own tool-less models for the front desk and the worker, and reaches a live session through hooks, which need no flag ([mcp.md](mcp.md#replies-in-a-live-session-hooks)), with channels as an option.
 
 ## The gap
 
