@@ -79,7 +79,6 @@ function guard<A>(fn: (args: A, signal: AbortSignal) => Promise<CallToolResult> 
   };
 }
 
-
 type Shown =
   | { e: StoredEvent; kind: "message" | "thread-goal"; text: string }
   | { e: StoredEvent; kind: "contract"; proposal: string; title?: string; supersedes?: string };
@@ -239,7 +238,7 @@ export function createMcpServer(node: Counterpart, opts: McpOptions = {}): McpSe
       : state === "stored"
         ? `Delivery: the relay has stored it for ${contact}.`
         : state === "queued"
-          ? `Delivery: still queued on this machine after ${deliveryWaitMs / 1000}s. The Counterpart daemon is probably not running, so nothing has left this machine. It will be sent once the human runs: cpart daemon`
+          ? `Delivery: still queued on this machine after ${deliveryWaitMs / 1000}s. The Counterpart daemon is probably not running, so nothing has left this machine. It is sent once the human starts it with: cpart up`
           : state === "failed"
             ? "Delivery: the relay refused it. It was not delivered."
             : state === "expired"
