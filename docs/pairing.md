@@ -1,6 +1,6 @@
 # Pairing with a short code
 
-Two people pair once, so their daemons trust each other's keys. This is how it works with a short code like `7-cider-otter`, and why the code is enough on its own.
+Two people pair once, so their daemons trust each other's keys. A short code like `7-cider-otter`, read aloud or sent in a chat, is enough on its own: there is no safety code to compare. This page says how to use it, how it works, and why the relay cannot cheat.
 
 ## Using it
 
@@ -24,7 +24,7 @@ Waiting for you:
   paired with maya by code at 14:24
 ```
 
-There is no safety code to compare. The code is a shared secret, and a cryptographic protocol (below) checks that both sides used the same one, so the keys each side ends up with are the keys of whoever typed the code.
+The code is a shared secret, and a cryptographic protocol (below) checks that both sides used the same one, so the keys each side ends up with are the keys of whoever typed the code.
 
 What a person sees when it goes wrong:
 
@@ -33,7 +33,7 @@ What a person sees when it goes wrong:
 - Someone else used the number first: `Someone else already used this code. Nothing was paired. Ask for a new one.` On your side the code shows as a wrong guess, unless they happened to guess the words.
 - Too late: `The code expired before the pairing finished.` Codes last ten minutes.
 
-The long invite still works: `cpart invite maya --long` prints a `cpart-invite:` string, and `cpart join <that string> sam` uses it. With `--json`, `cpart invite` prints the long invite unless you add `--code`, so existing scripts keep working.
+The long invite is the other way: `cpart invite maya --long` prints a `cpart-invite:` string, and `cpart join <that string> sam` uses it. Then compare the safety code (`cpart contacts`) out of band. With `--json`, `cpart invite` prints the long invite unless you add `--code`.
 
 ## What the code is
 
@@ -113,7 +113,7 @@ That is enough for something used a few times by people who are talking to each 
 - **A daemon restart in the middle of a run ends it.** The secrets of a run are kept in memory only; after a restart the daemon marks it failed, says why, and on reconnecting tells the other side and closes the nameplate, so nobody waits for a run that cannot finish. A dropped relay connection does not end a run: after reconnecting, the daemon sends its last pairing messages again, and the relay treats a repeat as one message.
 - **The words sit in `pairing.db`** in your home (mode 600, in a 700 directory) while a pairing is live, so the CLI can show the code and the daemon can run it. When it ends the row is cleared, SQLite zeroes the freed space (`secure_delete`), and the daemon empties the write-ahead log (`pairing.db-wal`) into the database, so the words are not left in either file. A copy can still sit in free blocks of the disk itself, as with any deleted file. The home also keeps, for 30 days, a SHA-256 of each code it answered, so it never answers one twice; a used code is dead, so that hash is worth nothing.
 - **A short code needs a daemon.** If none is running and none can be started, `cpart invite` says so and prints the long invite.
-- **An old relay** that does not know nameplates closes the connection on the first `pair.*` frame. The daemon keeps count across reconnects and gives up after three tries. `cpart invite` then prints the long invite instead; `cpart join` says to ask for one.
+- **A relay older than v0.3.0** does not know nameplates. It closes the connection on the first `pair.*` frame. The daemon keeps count across reconnects and gives up after three tries. `cpart invite` then prints the long invite instead; `cpart join` says to ask for one.
 - The `fail` message, `pair.closed` and relay errors are unauthenticated. They can end a pairing, never complete one. That includes a `fail` that reaches the inviter after both sides proved the code: it means the joiner could not add the contact, so the inviter drops the invite it made for that key and stops waiting.
 
 ## Checks

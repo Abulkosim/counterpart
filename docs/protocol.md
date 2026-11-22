@@ -1,12 +1,12 @@
 # Protocol v1
 
-Experimental. This will change.
+The exact formats and the rules a daemon and a relay enforce. Experimental: this will change, and the combination of primitives has had no outside review ([SECURITY.md](../SECURITY.md)).
 
 ## Encoding
 
 Keys, signatures and ciphertext are unpadded base64url. Anything signed is canonical JSON: RFC 8785 restricted to safe integers and well-formed strings. A receiver rejects input that is not already canonical.
 
-A signature is Ed25519 over `"counterpart/" + domain + "\n" + message`. Domains: `device-credential/v1`, `event/v1`, `relay-auth/v1`, `approval/v1`.
+A signature is Ed25519 over `"counterpart/" + domain + "\n" + message`. Domains: `device-credential/v1`, `event/v1`, `relay-auth/v1`, `approval/v1`. A fifth, `guard-off/v1`, is used only on the owner's machine, to sign the end time of `cpart guard off` ([guard.md](guard.md#turning-it-off)).
 
 ## Identity
 
@@ -36,7 +36,6 @@ Event { id, threadId, author, authorSeq, parents[], lane, type, body, createdAt 
 | `thread.resend` | control | `{ ids }`, 1 to 16 event ids. Asks the other side to send those events again |
 | `thread.received` | control | `{ ids }`, 1 to 64 event ids. Says the sender's daemon applied those events |
 | `talk.posted` | talk | `{ text, via? }`. `via` is `human`, `agent` or `frontdesk`: the sender's own claim about who wrote it |
-
 | `contract.proposed` | act | `{ contract, supersedes? }` |
 | `contract.accepted` | act | `{ approval }` |
 | `contract.declined` | act | `{ proposalId, reason? }` |
@@ -57,9 +56,9 @@ The contract hash is `base64url(sha256(canonical(contract)))` and covers the att
 
 An approval is the approver's **root key** signature (domain `approval/v1`) over its other fields. `threadGenesis` is the hash of the thread's first event and `proposalId` is the event that proposed the contract, so an approval cannot be moved to another thread, proposal or contract. `approvedAt` is the signer's clock and proves nothing about time.
 
-Rules a daemon enforces:
-
 A proposal is named by the id of the event that made it. The same text proposed twice is two proposals, and approving one is not approving the other.
+
+Rules a daemon enforces:
 
 - A proposal's parties are exactly the thread's two people. Each side may make at most 20 proposals in a thread. `supersedes` must name a proposal the thread has seen.
 - An acceptance carries a valid approval whose approver is the sender's root key, bound to this thread and to a proposal of that contract in it. The event lists that proposal among its parents. One approval per person per proposal.
@@ -172,7 +171,15 @@ client -> { t: "ping", n }                         only if ready listed "ping"
 relay  -> { t: "pong", n }
 ```
 
-`relay` is the URL the client dialled. The relay accepts a login only for one of the addresses it was configured with, compared after lower-casing the host and dropping a default port and a lone trailing slash, so another relay cannot forward a challenge to its clients and log in as them. A relay can have several addresses (repeated `--url`); with none given, a relay on loopback answers to `ws://127.0.0.1:PORT`, `ws://localhost:PORT`, `ws://[::1]:PORT` and `ws://host.docker.internal:PORT`. A client pings a quiet connection: with a `ping` frame if the relay listed the feature, otherwise with a WebSocket ping, because older relays close the connection on a frame they do not know. `id` is a random string the relay keeps with its database, also given in `/healthz`. It is the same under every address, so a client that reaches one relay by two names can keep one connection; the client trusts it only together with the relay closing the other connection for a newer login (code 4009). See [connectivity.md](connectivity.md). The relay stores a message until the recipient acknowledges it or it expires (seven days at most). Delivery is at least once. Sending the same message again is accepted; reusing an id for different bytes returns `conflict`. The relay sends a limited window of deliveries and sends more as they are acknowledged. Other codes: `mailbox_full`, `expired`, `ttl_too_long`, `too_large`, `bad_wire`.
+`relay` is the URL the client dialled. The relay accepts a login only for one of the addresses it was configured with, compared after lower-casing the host and dropping a default port and a lone trailing slash, so another relay cannot forward a challenge to its clients and log in as them. A relay can have several addresses (repeated `--url`); with none given, a relay on loopback answers to `ws://127.0.0.1:PORT`, `ws://localhost:PORT`, `ws://[::1]:PORT` and `ws://host.docker.internal:PORT`.
+
+A client pings a quiet connection: with a `ping` frame if the relay listed the feature, otherwise with a WebSocket ping, because a relay without the feature closes the connection on a frame it does not know.
+
+`id` is a random string the relay keeps with its database, also given in `/healthz`. It is the same under every address, so a client that reaches one relay by two names can keep one connection. The client trusts it only together with the relay closing the other connection for a newer login (code 4009). See [connectivity.md](connectivity.md).
+
+The relay stores a message until the recipient acknowledges it or it expires (seven days at most). Delivery is at least once. Sending the same message again is accepted; reusing an id for different bytes returns `conflict`. The relay sends a limited window of deliveries and sends more as they are acknowledged. Other codes: `mailbox_full`, `expired`, `ttl_too_long`, `too_large`, `bad_wire`.
+
+Short-code pairing adds `pair.*` frames for nameplates. They are listed in `packages/protocol/src/relay-frames.ts` and described in [pairing.md](pairing.md#how-it-works).
 
 A client acknowledges only after it has durably recorded its decision about the message. A message that fails locally three times is acknowledged as refused so it cannot block the ones behind it.
 
