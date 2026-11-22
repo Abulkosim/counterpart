@@ -8,7 +8,7 @@ export const SHARE_USAGE = `  cpart share <contact> --repo <path> <path or "glob
                                                                   let the front desk read these committed files. Paths are relative
                                                                   to the repository root. Quote globs: "src/**/*.ts". You confirm
                                                                   in a terminal, with your passphrase if you have one
-  cpart share list [contact]                                      what each contact's front desk can read now, and what it skips
+  cpart share list [contact]                                      what the front desk can read for each contact now, and what it skips
   cpart share remove <contact> <path or glob>... | --all`;
 
 const SHOW = 40;
@@ -25,7 +25,7 @@ interface Opts {
 function describe(contact: string, s: Share, patterns: string[], safe: (s: string) => string, show: number = SHOW): string {
   const kb = (n: number): string => (n < 1024 ? `${n} bytes` : `${Math.round(n / 1024)} KB`);
   const lines = [
-    `${contact}'s front desk can read ${s.files.length} file${s.files.length === 1 ? "" : "s"} (${kb(s.bytes)}) from ${safe(s.repo)} at ${s.commit.slice(0, 12)}, the current HEAD.`,
+    `Your front desk for ${contact} can read ${s.files.length} file${s.files.length === 1 ? "" : "s"} (${kb(s.bytes)}) from ${safe(s.repo)} at ${s.commit.slice(0, 12)}, the current HEAD.`,
     `  shared: ${patterns.map((p) => safe(p)).join("  ")}`,
     ...s.files.slice(0, show).map((f) => `  ${safe(f.path)}`),
     ...(s.files.length > show ? [`  ... and ${s.files.length - show} more (--json lists them all)`] : []),
@@ -64,7 +64,7 @@ export async function shareCommand(node: Counterpart, home: string, args: string
     if (!o.all && args.length < 3) throw new Error("name the paths or globs to stop sharing, or pass --all");
     const n = removeShare(home, c.rootKey, o.all ? "all" : args.slice(2));
     const left = readShare(home, c.rootKey);
-    return { human: `Removed ${n} rule${n === 1 ? "" : "s"}. ${left ? `${c.name}'s front desk can still read ${left.files.length} file(s). See: cpart share list ${c.name}` : `Nothing from a repository is shared with ${c.name} now.`}`, data: { removed: n, left: left ? json(c.name, left) : null } };
+    return { human: `Removed ${n} rule${n === 1 ? "" : "s"}. ${left ? `Your front desk for ${c.name} can still read ${left.files.length} file(s). See: cpart share list ${c.name}` : `Nothing from a repository is shared with ${c.name} now.`}`, data: { removed: n, left: left ? json(c.name, left) : null } };
   }
   if (!args[0]) throw new Error(`usage:\n${SHARE_USAGE}`);
   const c = node.contact(args[0]);

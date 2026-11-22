@@ -461,10 +461,10 @@ async function setup(relay: string | undefined, fromInvite = false): Promise<Cou
       note(
         h.registered === "here" ? `ok  ${h.name} ${h.added ? "now has" : "already has"} the counterpart tools${h.added ? ". Sessions started from now on see them" : ""}`
         : h.registered === "elsewhere" ? `--  ${h.name} already has a server named counterpart for another identity or install. It was left alone, so its sessions do not speak for this one. To switch: ${h.bin} mcp remove counterpart, then cpart setup`
-        : `--  ${h.name}: could not add the tools (${safe(h.error ?? "unknown error")}). By hand: see docs/mcp.md`,
+        : `--  ${h.name}: could not add the tools (${safe(h.error ?? "unknown error")}). By hand: see https://github.com/Abulkosim/counterpart/blob/main/docs/mcp.md`,
       );
     }
-    if (!hosts.some((h) => h.found)) note("--  neither claude nor codex is on your PATH. Add the MCP server by hand: see docs/mcp.md");
+    if (!hosts.some((h) => h.found)) note("--  neither claude nor codex is on your PATH. Add the MCP server by hand: see https://github.com/Abulkosim/counterpart/blob/main/docs/mcp.md");
     if (!flags["no-hooks"]) for (const l of hookLines(installHooks(home), safe)) note(l);
   }
   return node;
@@ -576,6 +576,8 @@ async function main(): Promise<void> {
       throw svc ? new Error(`${e.message}\nA relay service runs on port ${port} already (cpart status). To run it here instead: cpart relay --no-boot --port ${port}`) : e;
     });
     console.log(`database ${dbPath}`);
+    // A client is refused unless the address it dialled is one of the relay's names.
+    if (!tunnel && !given.length && ["0.0.0.0", "::", "[::]"].includes(host)) console.log(`\nIt listens on every interface, but lets in only the addresses above. For anyone who reaches it by another name, restart it with --url for each, like --url ws://<that name>:${port}`);
     if (tunnel) console.log(`\nAnyone can reach this relay at ${tunnel.url} until it stops. The address will be different next time.\nYou:   cpart setup --relay ${tunnel.url}\nThen:  cpart invite <their name>, and send them the line it prints\n`);
     const stop = (): void => {
       tunnel?.close();
@@ -944,7 +946,7 @@ async function main(): Promise<void> {
       if (short) note(d ? "The relay did not give out a short code, so here is a long invite instead." : "A short code needs the daemon running, so here is a long invite instead.");
       const invite = node.createInvite(args[0]!);
       return out(
-        `Send this to ${args[0]}. It works once and expires in 24 hours. They run it, with the name they call you:\n\n  cpart join ${invite} <your name>\n${d ? "" : "\nYour daemon is not running, so their request will wait. Start it with: cpart up\n"}`,
+        `Send this to ${args[0]}. It works once and expires in 24 hours. They run it, with the name they call you:\n\n  cpart join ${invite} <what you call me>\n${d ? "" : "\nYour daemon is not running, so their request will wait. Start it with: cpart up\n"}`,
         { invite },
       );
     }

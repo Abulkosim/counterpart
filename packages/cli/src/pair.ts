@@ -50,7 +50,7 @@ export async function inviteByCode(node: Counterpart, name: string, io: Io, opts
     if (got.state === "requested" || (got.state === "failed" && got.detail?.startsWith(OLD_RELAY))) return false;
     if (got.state === "failed" || !got.code) throw new Error(got.detail ?? "no code was made");
     const full = codeWithRelay(got.nameplate!, got.code.split("-").slice(1), node.relayName);
-    const line = `cpart join ${full} <your name>`;
+    const line = `cpart join ${full} <what you call me>`;
     io.out(
       [
         `Code for ${name}: ${got.code}`,

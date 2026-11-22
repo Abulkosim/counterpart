@@ -12,7 +12,7 @@ cpart invite maya
 Code for maya: 7-cider-otter
 It works once, until 14:32. Send maya this line; they run it with the name they call you:
 
-  cpart join 7-cider-otter@relay.example.com <your name>
+  cpart join 7-cider-otter@relay.example.com <what you call me>
 ```
 
 Maya runs that line with the name she calls you. If she has no identity yet, `cpart join` creates one on that relay first, the same way `cpart setup` does. If she already uses the same relay, the bare code is enough: `cpart join 7-cider-otter sam`.
