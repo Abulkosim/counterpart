@@ -41,27 +41,61 @@ function takeLock(home: string): DatabaseSync | undefined {
   }
 }
 
-// The daemon that holds this home, if one is running.
-export function running(home: string): DaemonState | undefined {
-  if (!existsSync(lockFile(home))) return undefined;
-  const free = takeLock(home);
-  if (free) {
-    free.close();
-    return undefined;
+const pause = (ms: number): void => void Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+const alive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM";
   }
+};
+
+function readState(home: string): DaemonState | undefined {
   try {
     const s = JSON.parse(readFileSync(stateFile(home), "utf8")) as DaemonState;
-    if (Number.isInteger(s.pid)) return s;
+    if (Number.isInteger(s.pid) && s.pid > 0) return s;
   } catch {
-    // The holder has the lock and has not written its state yet.
+    // none yet, or none left
   }
-  return { pid: 0, startedAt: Date.now(), connected: false, relay: "" };
+  return undefined;
 }
 
-// Called by `cpart daemon` itself.
+// The daemon that holds this home, if one is running. Looking takes the lock
+// for a moment, so another process looking at the same time also holds it.
+// A holder counts as a daemon once its process is alive and has written its
+// state; until then, look again for a short while.
+export function running(home: string): DaemonState | undefined {
+  if (!existsSync(lockFile(home))) return undefined;
+  let s: DaemonState | undefined;
+  for (let i = 0; i < 20; i++) {
+    const free = takeLock(home);
+    if (free) {
+      free.close();
+      return undefined;
+    }
+    s = readState(home);
+    if (s && alive(s.pid)) return s;
+    pause(10);
+  }
+  // Held all along by something that has not said what it is.
+  return s ?? { pid: 0, startedAt: Date.now(), connected: false, relay: "" };
+}
+
+// Called by `cpart daemon` itself. A lock held by someone looking is let go
+// within moments, so only a holder that keeps it for 3 seconds is a daemon.
 export function claim(home: string, relay: string): { set(connected: boolean): void; release(): void } {
-  const lock = takeLock(home);
-  if (!lock) throw new Error(`a daemon is already running for ${home}${running(home)?.pid ? ` (pid ${running(home)!.pid})` : ""}. Stop it with: cpart down`);
+  const end = Date.now() + 3000;
+  let lock = takeLock(home);
+  while (!lock && Date.now() < end) {
+    pause(25);
+    lock = takeLock(home);
+  }
+  if (!lock) {
+    const other = running(home);
+    throw new Error(`a daemon is already running for ${home}${other?.pid ? ` (pid ${other.pid})` : ""}. Stop it with: cpart down`);
+  }
   const state: DaemonState = { pid: process.pid, startedAt: Date.now(), connected: false, relay };
   // Written whole or not at all, so a reader never sees half a file.
   const write = (): void => {
@@ -288,13 +322,17 @@ export async function up(home: string, opts: { boot?: boolean } = {}): Promise<U
       spawn(process.execPath, [MAIN, "daemon"], { detached: true, stdio: ["ignore", log, log], env: { ...process.env, CPART_HOME: resolve(home) } }).unref();
     }
   }
-  await waitFor(8000, () => running(home));
-  const state = await waitFor(5000, () => {
+  // Whichever daemon holds the home counts, ours or one another start raced in.
+  const daemon = (): DaemonState | undefined => {
     const s = running(home);
+    return s?.pid ? s : undefined;
+  };
+  await waitFor(8000, daemon);
+  const state = await waitFor(5000, () => {
+    const s = daemon();
     return s?.connected ? s : undefined;
   });
-  const now = state ?? running(home);
-  return { state: now?.pid ? now : undefined, started: !before, boot };
+  return { state: state ?? daemon(), started: !before, boot };
 }
 
 export async function down(home: string, opts: { keepBoot?: boolean } = {}): Promise<boolean> {
