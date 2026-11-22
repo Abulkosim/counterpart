@@ -81,9 +81,10 @@ export const GOAL_WAIT_MS = 20_000;
 export const goalAsks = (goal: string): boolean => /[?\uff1f\u061f]/.test(goal);
 
 // Answers a contact's questions while the owner is away, from the approved
-// bundle or the files the owner shared from a repository, nothing else. It replies in threads the contact opened, never in ones the
-// owner opened, so two front desks cannot talk to each other in a loop. Every
-// reply first takes a slot from a budget only the owner can refill.
+// bundle or the files the owner shared from a repository, nothing else. It
+// replies in threads the contact opened, never in ones the owner opened, so
+// two front desks cannot talk to each other in a loop. Every reply first takes
+// a slot from a budget only the owner can refill.
 export class FrontDesk {
   private node: Counterpart;
   private model: Model;
