@@ -61,7 +61,7 @@ class ToolError extends Error {}
 const ok = (text: string): CallToolResult => ({ content: [{ type: "text", text }] });
 const fail = (text: string): CallToolResult => ({ content: [{ type: "text", text }], isError: true });
 
-export const heldText = (reasons: readonly string[]): string =>
+const heldText = (reasons: readonly string[]): string =>
   `Not sent: held for your human, reason: ${reasons.join(", ")}. Nothing left this machine. Your human can read it with cpart held and send it with cpart release, which needs them at a terminal. Do not reword, encode or split it to get it through; tell your human what you tried to send and why.`;
 
 function guard<A>(fn: (args: A, signal: AbortSignal) => Promise<CallToolResult> | CallToolResult) {
@@ -78,7 +78,6 @@ function guard<A>(fn: (args: A, signal: AbortSignal) => Promise<CallToolResult> 
     }
   };
 }
-
 
 type Shown =
   | { e: StoredEvent; kind: "message" | "thread-goal"; text: string }
@@ -239,7 +238,7 @@ export function createMcpServer(node: Counterpart, opts: McpOptions = {}): McpSe
       : state === "stored"
         ? `Delivery: the relay has stored it for ${contact}.`
         : state === "queued"
-          ? `Delivery: still queued on this machine after ${deliveryWaitMs / 1000}s. The Counterpart daemon is probably not running, so nothing has left this machine. It will be sent once the human runs: cpart daemon`
+          ? `Delivery: still queued on this machine after ${deliveryWaitMs / 1000}s. The Counterpart daemon is probably not running, so nothing has left this machine. It is sent once the human starts it with: cpart up`
           : state === "failed"
             ? "Delivery: the relay refused it. It was not delivered."
             : state === "expired"

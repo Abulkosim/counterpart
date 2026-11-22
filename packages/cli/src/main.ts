@@ -310,8 +310,6 @@ async function ensureDaemon(): Promise<boolean> {
   return (await up(home)).state !== undefined;
 }
 
-// Everything between a fresh machine and an agent that can talk. Each step
-// is skipped when already done, so running it again is harmless.
 function portFree(port: number, host: string, busy = "Nothing was made public. Pick another with --port"): Promise<void> {
   return new Promise((ok, no) => {
     const s = createServer();
@@ -403,6 +401,8 @@ function rmdirIfEmpty(dir: string): void {
 // the keys, the databases with their journals, the daemon's files.
 const OWN_FILE = /^(keys\.json|daemon\.(json|lock|log)|(state|pairing|frontdesk|hooks)\.db)(-wal|-shm|-journal|\.tmp)?$/;
 
+// Everything between a fresh machine and an agent that can talk. Each step
+// is skipped when already done, so running it again is harmless.
 async function setup(relay: string | undefined, fromInvite = false): Promise<Counterpart> {
   let node: Counterpart;
   // What was in the home before this run, so a new identity the relay refuses can be taken away again.
@@ -589,7 +589,7 @@ async function main(): Promise<void> {
     if (!flags.relay) throw new Error("usage: cpart init --relay <ws://host:port>");
     const passphrase = flags["no-passphrase"] ? undefined : await newPassphrase();
     const node = await Counterpart.init(home, { relay: flags.relay, ...(passphrase !== undefined ? { passphrase } : {}) });
-    return out(`Created identity ${node.me.human} in ${home}${passphrase === undefined ? "\nNo passphrase: this identity can talk but cannot approve contracts. To sign agreements, create an identity with a passphrase." : ""}`, node.me);
+    return out(`Created identity ${node.me.human} in ${home}${passphrase === undefined ? "\nNo passphrase: it can talk, but cannot approve contracts, release held messages or turn the guard off." : ""}`, node.me);
   }
   if (cmd === "agreement" && args[0] === "verify") {
     if (!args[1]) throw new Error("usage: cpart agreement verify <file>");
@@ -709,15 +709,15 @@ async function main(): Promise<void> {
       );
     }
     case "contract": {
-      need(2, "contract <thread> <hash>");
+      need(2, "contract <thread> <id>");
       const t = node.threads().find((x) => x.id === args[0]);
       const c = findContract(node, args[0]!, args[1]!);
       return out(describe(c, t?.contact ?? "them"), c);
     }
     case "approve": {
-      need(2, "approve <thread> <hash>");
+      need(2, "approve <thread> <id>");
       const t = node.threads().find((x) => x.id === args[0]);
-      if (!t) throw new Error(`no thread ${args[0]}`);
+      if (!t) throw new Error(`no thread ${args[0]}. See: cpart threads`);
       const c = findContract(node, t.id, args[1]!);
       if (c.approvedByMe) throw new Error("you have already approved this proposal");
       const peer = node.contact(t.contact);
@@ -744,13 +744,13 @@ async function main(): Promise<void> {
       return out(`Approved proposal ${c.proposalId}\nContract hash ${c.hash}`, { proposalId: c.proposalId, hash: c.hash });
     }
     case "decline": {
-      need(2, "decline <thread> <hash> [reason]");
+      need(2, "decline <thread> <id> [reason]");
       const c = findContract(node, args[0]!, args[1]!);
       await node.decline(args[0]!, c.proposalId, args.slice(2).join(" ") || undefined);
       return out(`Declined ${c.proposalId}`, { proposalId: c.proposalId });
     }
     case "withdraw": {
-      need(2, "withdraw <thread> <hash>");
+      need(2, "withdraw <thread> <id>");
       const c = findContract(node, args[0]!, args[1]!);
       await node.withdraw(args[0]!, c.proposalId);
       return out(`Withdrew ${c.proposalId}. Approvals already given still stand.`, { proposalId: c.proposalId });
@@ -828,7 +828,7 @@ async function main(): Promise<void> {
       }
       need(1, "evidence <thread> [id] | evidence send <thread> <id> --repo <path>");
       const t = node.threads().find((x) => x.id === args[0]);
-      if (!t) throw new Error(`no thread ${args[0]}`);
+      if (!t) throw new Error(`no thread ${args[0]}. See: cpart threads`);
       const only = args[1] ? findContract(node, t.id, args[1]).proposalId : undefined;
       const list = node.evidence(t.id, only);
       if (!list.length) return out(only ? "No evidence for this proposal." : "No evidence in this thread.", list);
@@ -873,7 +873,7 @@ async function main(): Promise<void> {
       need(2, "work <thread> <id> --repo <path> --paths <a,b> --brief <text>");
       if (!flags.repo || !flags.paths || !flags.brief) throw new Error("usage: cpart work <thread> <id> --repo <path> --paths <a,b,dir> --brief <what to do>");
       const t = node.threads().find((x) => x.id === args[0]);
-      if (!t) throw new Error(`no thread ${args[0]}`);
+      if (!t) throw new Error(`no thread ${args[0]}. See: cpart threads`);
       const c = findContract(node, t.id, args[1]!);
       if (c.status !== "agreed") throw new Error("work starts from an agreement. Both people must approve this proposal first.");
       const key = process.env.ANTHROPIC_API_KEY;
@@ -889,8 +889,8 @@ async function main(): Promise<void> {
       return out(`${summary(saved)}\n\nRead the patch before anything else: cpart work show ${id}`, saved);
     }
     case "agreement": {
-      if (args[0] !== "export") throw new Error("usage: cpart agreement export <thread> <hash> [--out file] | cpart agreement verify <file>");
-      need(3, "agreement export <thread> <hash>");
+      if (args[0] !== "export") throw new Error("usage: cpart agreement export <thread> <id> [--out file] | cpart agreement verify <file>");
+      need(3, "agreement export <thread> <id>");
       const c = findContract(node, args[1]!, args[2]!);
       const a = node.agreement(args[1]!, c.proposalId);
       // Keys in canonical order, so both sides write byte-identical files.
@@ -972,12 +972,12 @@ async function main(): Promise<void> {
     }
     case "threads": {
       const list = node.threads();
-      return out(list.length ? list.map((t) => `${t.id}  ${t.contact.padEnd(16)} ${String(t.events).padStart(3)} events  ${time(t.lastAt)}  ${safe(t.goal)}`).join("\n") : "No threads yet.", list);
+      return out(list.length ? list.map((t) => `${t.id}  ${t.contact.padEnd(16)} ${String(t.events).padStart(3)} events  ${time(t.lastAt)}  ${safe(t.goal)}`).join("\n") : "No threads yet. Start one: cpart open <contact> <goal>", list);
     }
     case "log": {
       need(1, "log <thread>");
       const t = node.threads().find((x) => x.id === args[0]);
-      if (!t) throw new Error(`no thread ${args[0]}`);
+      if (!t) throw new Error(`no thread ${args[0]}. See: cpart threads`);
       const events = node.log(t.id);
       const lines = events.map((e) => {
         const via = (e.body as { via?: string }).via;
@@ -1027,7 +1027,7 @@ async function main(): Promise<void> {
         const list = desk.desks();
         const h = desk.health();
         const failing = h && list.some((d) => d.enabled) ? `\n\nThe model has failed since ${time(h.since)}: ${safe(h.detail)}\nSee why: cpart desk check` : "";
-        return out(list.length ? list.map(show).join("\n") + failing : "No contacts yet.", list);
+        return out(list.length ? list.map(show).join("\n") + failing : "No contacts yet. Pair with: cpart invite <name>", list);
       }
       if (args[0] === "refill") {
         need(2, "desk refill <thread>");

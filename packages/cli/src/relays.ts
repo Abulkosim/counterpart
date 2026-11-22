@@ -51,7 +51,7 @@ const inContainer = (): boolean => existsSync("/.dockerenv") || existsSync("/run
 // The same relay by the name the other side of a container boundary uses.
 // Inside a container, 127.0.0.1 is the container itself and the machine it runs
 // on is host.docker.internal. Outside, it is the other way round.
-export function otherName(relay: string): string | undefined {
+function otherName(relay: string): string | undefined {
   if (!isRelayUrl(relay)) return undefined;
   const u = new URL(relay);
   const loop = ["127.0.0.1", "localhost", "[::1]"].includes(u.hostname);
@@ -115,7 +115,7 @@ export async function relayCommand(node: Counterpart, args: string[], io: Io): P
         return `  ${r.home ? "home   " : r.leaving ? "leaving" : "       "}  ${safe(r.url)}${r.as ? `  (others call it ${safe(r.as)})` : ""}  ${state}`;
       }),
       "",
-      node.contacts().length ? "Contacts:" : "No contacts yet.",
+      node.contacts().length ? "Contacts:" : "No contacts yet. Pair with: cpart invite <name>",
       ...node.contacts().map((c) => {
         const t = book.their(c.rootKey, c.relay);
         const shared = book.route(t.relays).preferred.length > 0;

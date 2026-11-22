@@ -31,7 +31,7 @@ export type ModelSetup =
   | { kind: "api"; baseUrl: string };
 
 // The first executable file named `bin` on `path`, as spawn would find it.
-export function findOnPath(bin: string, path = process.env.PATH ?? ""): string | null {
+function findOnPath(bin: string, path = process.env.PATH ?? ""): string | null {
   const candidates = isAbsolute(bin) || bin.includes("/") ? [bin] : path.split(delimiter).filter(Boolean).map((d) => join(d, bin));
   for (const c of candidates) {
     try {

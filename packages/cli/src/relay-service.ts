@@ -14,7 +14,7 @@ import { type Boot, type ServiceSpec, MAIN, bootKind, installService, listServic
 export const DEFAULT_RELAY_HOME = join(homedir(), ".counterpart-relay");
 export const DEFAULT_PORT = 7447;
 
-export const relayHome = (): string => resolve(process.env.CPART_RELAY_HOME || DEFAULT_RELAY_HOME);
+const relayHome = (): string => resolve(process.env.CPART_RELAY_HOME || DEFAULT_RELAY_HOME);
 
 // One file per port: two relays on one machine must not share a database,
 // because the relay's id lives in it and clients use the id to tell relays apart.
@@ -96,7 +96,7 @@ async function answers(s: RelayService, ms: number): Promise<boolean> {
 const metaOf = (s: RelayService): string => `${PREFIX} ${Buffer.from(JSON.stringify({ home: s.home, port: s.port, host: s.host, db: s.db, urls: s.urls })).toString("base64")}`;
 
 // What the system is told to run for one relay.
-export const relaySpec = (s: RelayService): ServiceSpec => ({
+const relaySpec = (s: RelayService): ServiceSpec => ({
   name: s.name,
   description: `Counterpart relay on port ${s.port}`,
   args: [MAIN, "relay", "--port", String(s.port), "--host", s.host, "--db", s.db, ...s.urls.flatMap((u) => ["--url", u])],

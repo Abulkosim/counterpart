@@ -13,7 +13,7 @@ interface Pending {
   timer: NodeJS.Timeout;
 }
 
-export const PREPARE_TIMEOUT_MS = 90_000;
+const PREPARE_TIMEOUT_MS = 90_000;
 
 export class Preparer {
   private worker: Worker | null = null;

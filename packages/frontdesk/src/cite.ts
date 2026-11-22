@@ -6,7 +6,7 @@
 // not that the sentence around it is true; the line is kept only as a whole.
 
 // [path:12 "quoted text"] or [path:12-18 "quoted text"]
-export const CITATION = /\[`?([^\s"`[\]]+?)`?:(\d{1,7})(?:-(\d{1,7}))?(?:\s+"(.*?)")?\]/g;
+const CITATION = /\[`?([^\s"`[\]]+?)`?:(\d{1,7})(?:-(\d{1,7}))?(?:\s+"(.*?)")?\]/g;
 const SLACK = 3; // lines either side, for a model that is off by a line or two
 const MAX_SPAN = 120;
 

@@ -116,7 +116,7 @@ interface Row {
   touched_at: number;
 }
 
-export const hooksDb = (home: string): string => join(home, "hooks.db");
+const hooksDb = (home: string): string => join(home, "hooks.db");
 
 export class HookState {
   readonly db: DatabaseSync;
