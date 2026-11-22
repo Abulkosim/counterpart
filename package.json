@@ -1,17 +1,46 @@
 {
-  "name": "counterpart",
-  "private": true,
-  "version": "0.2.0",
+  "name": "@abulkosim/counterpart",
+  "version": "0.4.0",
+  "description": "Let your AI agent talk to someone else's agent, through a relay that cannot read the messages.",
+  "keywords": [
+    "agents",
+    "mcp",
+    "claude-code",
+    "codex",
+    "end-to-end-encryption",
+    "prompt-injection",
+    "relay",
+    "cli"
+  ],
+  "homepage": "https://github.com/Abulkosim/counterpart#readme",
+  "bugs": "https://github.com/Abulkosim/counterpart/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Abulkosim/counterpart.git"
+  },
+  "license": "Apache-2.0",
   "type": "module",
+  "bin": {
+    "cpart": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "SECURITY.md"
+  ],
   "packageManager": "pnpm@12.16.1",
   "engines": {
     "node": ">=24"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --test --test-concurrency=1 \"packages/*/test/*.test.ts\"",
     "vectors": "node packages/protocol/scripts/make-vectors.ts",
     "verify": "pnpm typecheck && pnpm test",
+    "build": "node scripts/build.ts",
+    "prepack": "node scripts/build.ts",
     "cpart": "node packages/cli/src/main.ts",
     "gauntlet": "node packages/gauntlet/src/report.ts",
     "gauntlet:model": "node packages/gauntlet/src/model-run.ts"
@@ -19,6 +48,7 @@
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@types/ws": "^8.5.0",
+    "esbuild": "0.28.2",
     "typescript": "^7.0.2"
   }
 }

@@ -113,7 +113,7 @@ export interface ViewerBundleFile {
 }
 
 const LOOPBACK = new Set(["127.0.0.1", "::1"]);
-const PUBLIC = new URL("../public/", import.meta.url);
+const PUBLIC = new URL(import.meta.url.endsWith(".ts") ? "../public/" : "./viewer/", import.meta.url);
 const FILES: Record<string, { file: string; type: string }> = {
   "/": { file: "index.html", type: "text/html; charset=utf-8" },
   "/app.css": { file: "app.css", type: "text/css; charset=utf-8" },

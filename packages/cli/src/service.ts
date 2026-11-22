@@ -4,11 +4,12 @@ import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 
-export const MAIN = resolve(dirname(fileURLToPath(import.meta.url)), "main.ts");
+// The CLI entry: main.ts in a checkout, cli.js in the npm bundle (scripts/build.ts).
+export const MAIN = fileURLToPath(new URL(import.meta.url.endsWith(".ts") ? "./main.ts" : "./cli.js", import.meta.url));
 export const DEFAULT_HOME = join(homedir(), ".counterpart");
 
 export interface DaemonState {

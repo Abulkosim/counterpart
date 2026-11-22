@@ -42,7 +42,7 @@ export class Preparer {
 
   private start(): Worker {
     if (this.worker) return this.worker;
-    const w = new Worker(new URL("./prepare-worker.ts", import.meta.url));
+    const w = new Worker(new URL(import.meta.url.endsWith(".ts") ? "./prepare-worker.ts" : "./prepare-worker.js", import.meta.url));
     w.on("message", (m: { id: number; value?: Material | null; error?: string }) => {
       const p = this.pending.get(m.id);
       if (!p) return;

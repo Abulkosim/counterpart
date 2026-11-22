@@ -4,6 +4,17 @@
 # These scripts start their own daemons.
 export CPART_NO_AUTOSTART=1
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/cpart-smoke.XXXXXX")
+# CPART_BIN=/path/to/cpart runs the smoke against an installed cpart, such as
+# one from npm, instead of this checkout. The scripts run the checkout as
+# `node [<repo>/]packages/cli/src/main.ts`, also inside `sh -c`, so a `node`
+# first on PATH sends that to $CPART_BIN and everything else to the real node.
+if [ -n "${CPART_BIN:-}" ]; then
+  mkdir "$WORK/shim"
+  printf '#!/bin/sh\ncase "$1" in *packages/cli/src/main.ts) shift; exec %s "$@" ;; esac\nexec %s "$@"\n' \
+    "'$(command -v "$CPART_BIN")'" "'$(command -v node)'" >"$WORK/shim/node"
+  chmod +x "$WORK/shim/node"
+  export PATH="$WORK/shim:$PATH"
+fi
 # A fixed port can still be held by another run. Take a free one unless told otherwise.
 PORT=${PORT:-$(node -e 'const s=require("net").createServer().listen(0,"127.0.0.1",()=>{console.log(s.address().port);s.close()})')}
 RELAY=ws://127.0.0.1:$PORT

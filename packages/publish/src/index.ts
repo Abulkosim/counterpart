@@ -13,7 +13,8 @@ import { type WorkResult, git, lsTree, readBlob } from "@counterpart/worker";
 // repository to an agreement (the trust file, the agreement, the verifier and
 // its workflow) are written by this code and by nothing else.
 
-const VERIFIER = join(dirname(fileURLToPath(import.meta.url)), "../../verify/src/verify.mjs");
+// The same file as the daemon's VERIFIER_FILE, in the checkout or in the npm bundle.
+const VERIFIER = fileURLToPath(new URL(import.meta.url.endsWith(".ts") ? "../../verify/src/verify.mjs" : "./verify.mjs", import.meta.url));
 const sha = (b: string | Buffer): string => createHash("sha256").update(b).digest("hex");
 
 export interface Binding {

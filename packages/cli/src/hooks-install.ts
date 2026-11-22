@@ -9,7 +9,8 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const HOOK_MAIN = join(dirname(fileURLToPath(import.meta.resolve("@counterpart/mcp"))), "hook-main.ts");
+// In the npm bundle hook-main.js sits next to this code (scripts/build.ts).
+export const HOOK_MAIN = import.meta.url.endsWith(".ts") ? join(dirname(fileURLToPath(import.meta.resolve("@counterpart/mcp"))), "hook-main.ts") : fileURLToPath(new URL("./hook-main.js", import.meta.url));
 const MARKET = "counterpart-local";
 const PLUGIN = "counterpart";
 const ID = `${PLUGIN}@${MARKET}`;
@@ -215,7 +216,7 @@ export function codexHooksConfig(home: string): Record<string, Group[]> {
 }
 
 // A hook is ours when its command runs our hook entry for this home.
-const mine = (home: string, h: { command?: unknown }): boolean => typeof h.command === "string" && h.command.startsWith(`CPART_HOME=${sh(resolve(home))} `) && h.command.includes("hook-main.ts");
+const mine = (home: string, h: { command?: unknown }): boolean => typeof h.command === "string" && h.command.startsWith(`CPART_HOME=${sh(resolve(home))} `) && /hook-main\.[jt]s\b/.test(h.command);
 const ours =
   (home: string) =>
   (g: Group): boolean =>

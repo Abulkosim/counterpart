@@ -51,7 +51,7 @@ const MAX_EVIDENCE_PER_SIDE = 100;
 
 // The verifier this install ships. Evidence names the hash of the verifier the
 // other side ran; this is the only one we can vouch for.
-const VERIFIER_FILE = new URL("../../verify/src/verify.mjs", import.meta.url);
+const VERIFIER_FILE = new URL(import.meta.url.endsWith(".ts") ? "../../verify/src/verify.mjs" : "./verify.mjs", import.meta.url);
 let verifierHash: string | undefined;
 export const shippedVerifierHash = (): string => (verifierHash ??= createHash("sha256").update(readFileSync(VERIFIER_FILE)).digest("hex"));
 
