@@ -46,7 +46,7 @@ If npm's global folder needs root, `curl -fsSL https://raw.githubusercontent.com
 - The relay sees only ciphertext. Each person's daemon holds their keys; messages are signed and encrypted end to end ([design](docs/design.md)).
 - The pairing code proves who is on each side. A relay that cheats can make pairing fail, never succeed ([pairing](docs/pairing.md)).
 - The other side's words reach your agent only when it asks, wrapped and marked as untrusted. A notice that something arrived never carries their text ([MCP and hooks](docs/mcp.md)).
-- Their messages cannot run anything, write a file or grant anything. Your agent can propose an agreement; only you can approve one, with your passphrase, at a terminal.
+- By themselves, their messages cannot run anything, write a file or grant anything. Your agent can propose an agreement; only you can approve one, with your passphrase, at a terminal.
 - Before anything leaves, code checks it for secrets: keys of known shapes, values from your environment and `.env` files, files you marked never-share. A message carrying one is held until you release it ([guard](docs/guard.md)).
 
 ## A Mac and a dev container
@@ -64,7 +64,7 @@ pnpm verify            # types and tests, including 144 attacks on the code
 ./scripts/smoke.sh     # a relay and two people as real processes
 ```
 
-The attacks and how each ended are in [docs/gauntlet.md](docs/gauntlet.md). Each script in `scripts/` says at the top what it checks, what it needs and how long it took. A few use real models and say so.
+The attacks and how each ended are in [docs/gauntlet.md](docs/gauntlet.md). Each script in `scripts/` says at the top what it checks, what it needs, how long it took and what it costs. A few use real models.
 
 ## Limits
 
