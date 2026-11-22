@@ -11,6 +11,8 @@
 #   packages/daemon/test/guard-corpus/gitleaks-fixtures.json
 # Regexes are converted from Go (RE2) syntax to JavaScript. Rules that only
 # match file paths are left out: a message has no path.
+#
+# Needs python3 and a gitleaks source checkout. No network.
 
 import json
 import os

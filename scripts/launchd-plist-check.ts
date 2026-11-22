@@ -5,6 +5,7 @@
 //   node scripts/launchd-plist-check.ts
 // This checks the file is a valid property list with the intended fields. It
 // does not show that launchd starts the daemon: that needs a Mac.
+// Needs node 24 and python3. No model, no network. 13 s on a shared 2-core machine.
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";

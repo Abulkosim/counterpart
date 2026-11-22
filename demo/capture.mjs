@@ -2,6 +2,7 @@
 // Runs the whole Counterpart story for real and records every command and its
 // output to a tape. The demo video is drawn from the tape, so nothing in it is
 // typed by hand. Uses real models and creates a PRIVATE GitHub repository.
+// What it needs and costs: demo/README.md.
 //
 //   node demo/capture.mjs [out-dir]
 import { execFileSync, spawn, spawnSync } from "node:child_process";

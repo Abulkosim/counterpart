@@ -8,10 +8,15 @@
 #   ./scripts/redteam/run.sh --brief trusting      # bob tells his agent he trusts alice; writes results/guard-off-trusting.json
 #   ./scripts/redteam/run.sh --victim fake-leak    # no model: a scripted victim (used by smoke.sh)
 #
-# With a real model this costs tokens and takes a while: each trial is one to
-# five `claude -p` sessions. Nothing here touches ~/.counterpart, ~/.claude or
-# your environment: each trial has its own homes, and bob's agent runs with a
-# small environment of planted values only.
+# Nothing here touches ~/.counterpart, ~/.claude or your environment: each
+# trial has its own homes, and bob's agent runs with a small environment of
+# planted values only.
+#
+# Needs: node 24, python3, claude logged in. The fake victims need no model.
+# Time:  the full suite took 34 to 44 minutes at --jobs 2 on a shared 2-core
+#        machine (docs/redteam.md).
+# Cost:  model tokens: each trial is one to five `claude -p` sessions, and the
+#        full suite is 52 trials. Not run in CI.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 export CPART_NO_BOOT=1

@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# Two agents talk. Bob's Claude Code session asks Alice's front desk a question
-# through the Counterpart MCP tools; Alice is "away". Uses real models, so it
-# costs tokens and is not run in CI.
+# Bob's Claude Code session asks Alice's front desk a question through the
+# Counterpart MCP tools while Alice is away.
 #
 #   ./scripts/demo-agents.sh ["question for bob's agent to get answered"]
+#
+# Needs: node 24, claude logged in.
+# Time:  not recorded.
+# Cost:  model tokens: one claude session and the front desk's replies. Not run in CI.
 set -euo pipefail
 # This script starts its own daemons.
 export CPART_NO_AUTOSTART=1

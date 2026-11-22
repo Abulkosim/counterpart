@@ -1,7 +1,11 @@
-node_modules
+# The image needs package.json, the lockfile and packages/ only.
 **/node_modules
 .git
+.github
 .claude
 demo
+docs
+scripts
 *.db
 *.db-*
+.env

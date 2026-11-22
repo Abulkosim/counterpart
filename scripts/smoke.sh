@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# Runs the real CLI as two people against a real relay process, including a
-# recipient that is offline and a relay that restarts. Prints what each side sees.
+# Two people and a relay as real processes, through the real CLI: pairing,
+# messages both ways, a recipient that is offline, a relay that restarts.
+# Prints what each side sees. Runs in CI.
+#
+# Needs: node 24.
+# Time:  64 s on a shared 2-core machine.
+# Cost:  nothing; loopback only.
 set -euo pipefail
-# This script starts its own daemons.
-export CPART_NO_AUTOSTART=1
 cd "$(dirname "$0")/.."
 . scripts/smoke-lib.sh
 cpart() { local who=$1; shift; CPART_HOME=$WORK/$who node packages/cli/src/main.ts "$@"; }
