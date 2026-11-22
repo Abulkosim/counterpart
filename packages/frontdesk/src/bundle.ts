@@ -16,7 +16,7 @@ export interface Bundle {
   hash: string; // identifies exactly what was shared
 }
 
-export const BUNDLE_LIMITS = { files: 64, bytes: 400 * 1024, fileBytes: 200 * 1024 } as const;
+const BUNDLE_LIMITS = { files: 64, bytes: 400 * 1024, fileBytes: 200 * 1024 } as const;
 
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
 const sha = (b: Uint8Array | string): string => createHash("sha256").update(b).digest("hex");

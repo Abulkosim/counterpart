@@ -2,12 +2,16 @@
 # From agreement to a verified pull request, on GitHub. Two people sign a
 # contract; Alice's worker proposes the change; she publishes it; a workflow on
 # her main branch checks the pull request carries what was signed. Then one
-# byte of the schema is changed and the check fails.
+# byte of the schema changes and the check fails.
 #
 # This creates a PRIVATE repository under your GitHub account and leaves it
-# there so you can look at it. It uses a real model. Not for CI.
+# there so you can look at it. Delete it when you are done.
 #
 #   ./scripts/demo-publish.sh
+#
+# Needs: node 24, claude logged in, git, gh logged in.
+# Time:  not recorded.
+# Cost:  model tokens for the worker, and GitHub Actions minutes on your account. Not run in CI.
 set -euo pipefail
 # This script starts its own daemons.
 export CPART_NO_AUTOSTART=1

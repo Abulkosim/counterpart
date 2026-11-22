@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# A relay run as a service, the way someone keeps one on their own machine:
-# `cpart relay --boot` writes a systemd user unit, two people pair through it
-# (one of them with --no-agents), a message waits in the relay while the relay
-# is killed and started again by systemd, and `cpart relay --no-boot` removes it.
-# Also: the default database is in the relay home, not in the directory the
-# relay was started from. Needs a systemd user session (systemctl --user); a
-# Mac's launchd is not run here. Nothing touches ~/.counterpart or your agents.
+# A relay run as a service: `cpart relay --boot` writes a systemd user unit,
+# two people pair through it, a message waits in the relay while systemd kills
+# and restarts it, and `cpart relay --no-boot` removes the unit. Also checks
+# the default database lives in the relay home, not in the directory the relay
+# was started from. Prints SKIP without a systemd user session. launchd is not
+# run here. Nothing touches ~/.counterpart or your agents.
+#
+# Needs: node 24, a systemd user session (systemctl --user).
+# Time:  35 s on a shared 2-core machine.
+# Cost:  nothing; loopback only.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/smoke-lib.sh

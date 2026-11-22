@@ -1,18 +1,15 @@
 #!/usr/bin/env bash
 # Two people sign a contract, then one tells the other what their repository
-# holds. Real relay, two daemon processes, a local Git repository, the real
-# CLI. No models and no network beyond loopback.
+# holds. First the bound file matches the signed text and the receiver shows it
+# as checked. Then one byte changes on a new commit: the receiver shows the
+# mismatch and marks the first evidence stale. Runs in CI.
 #
-# First the bound file is the signed text and the receiver shows it as checked.
-# Then one byte changes on a new commit: the receiver shows the mismatch and
-# marks the first evidence stale.
+# Needs: node 24, git.
+# Time:  32 s on a shared 2-core machine.
+# Cost:  nothing; no model, loopback only.
 set -euo pipefail
-# This script starts its own daemons.
-export CPART_NO_AUTOSTART=1
 cd "$(dirname "$0")/.."
-WORK=$(mktemp -d)
-PORT=${PORT:-7468}
-RELAY=ws://127.0.0.1:$PORT
+. scripts/smoke-lib.sh
 ALICE_PASS=alice-correct-horse
 BOB_PASS=bob-battery-staple
 
@@ -21,16 +18,6 @@ alice() { cpart alice "$ALICE_PASS" "$@"; }
 bob() { cpart bob "$BOB_PASS" "$@"; }
 field() { node -pe "JSON.parse(require('fs').readFileSync(0))$1"; }
 g() { git -C "$WORK/repo" -c user.name=alice -c user.email=alice@example.com -c commit.gpgsign=false "$@"; }
-pids=()
-cleanup() { kill "${pids[@]}" 2>/dev/null || true; wait 2>/dev/null || true; rm -rf "$WORK"; }
-trap cleanup EXIT
-step() { printf '\n== %s\n' "$*"; }
-fail() { echo "FAIL: $*" >&2; exit 1; }
-wait_for() {
-  local what=$1; shift
-  for _ in $(seq 1 100); do if "$@" >/dev/null 2>&1; then return 0; fi; sleep 0.1; done
-  fail "timed out waiting for $what"
-}
 must_fail() {
   local what=$1; shift
   if "$@" >"$WORK/out.txt" 2>&1; then fail "$what was accepted"; fi
@@ -39,15 +26,11 @@ must_fail() {
 # How many pieces of evidence bob holds in the thread.
 bob_has() { [ "$(bob evidence "$THREAD" --json | field .length)" = "$1" ]; }
 
-node packages/cli/src/main.ts relay --port "$PORT" --db "$WORK/relay.db" >"$WORK/relay.log" 2>&1 &
-pids+=("$!")
-wait_for "relay" curl -sf "http://127.0.0.1:$PORT/healthz"
+start_relay
 alice init --relay "$RELAY" >/dev/null
 bob init --relay "$RELAY" >/dev/null
-CPART_HOME=$WORK/alice node packages/cli/src/main.ts daemon >"$WORK/alice.log" 2>&1 &
-pids+=("$!")
-CPART_HOME=$WORK/bob node packages/cli/src/main.ts daemon >"$WORK/bob.log" 2>&1 &
-pids+=("$!")
+start_daemon alice
+start_daemon bob
 bob accept "$(alice invite bob --json | field .invite)" alice >/dev/null
 wait_for "pairing" sh -c "CPART_HOME=$WORK/alice node packages/cli/src/main.ts contacts | grep -q active"
 wait_for "pairing" sh -c "CPART_HOME=$WORK/bob node packages/cli/src/main.ts contacts | grep -q active"

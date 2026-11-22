@@ -146,7 +146,7 @@ function rules(): { rules: Rule[]; global: Allow } {
   return RULES;
 }
 
-export function entropy(s: string): number {
+function entropy(s: string): number {
   if (!s) return 0;
   const counts = new Map<string, number>();
   for (const c of s) counts.set(c, (counts.get(c) ?? 0) + 1);
@@ -199,15 +199,15 @@ interface Hit {
   end: number;
 }
 
-// Pattern hits in one piece of text, with gitleaks' own rules for which part
-// of a match is the secret, entropy and allowlists.
 const CHUNK = 4_000;
 const OVERLAP = 1_000;
 
+// Pattern hits in one piece of text, with gitleaks' own rules for which part
+// of a match is the secret, entropy and allowlists.
 // `shape` is for text put through rot13: then only rules for fixed token
 // shapes apply. Ordinary text comes out with its placeholders scrambled and
 // its structure intact, which the loose rules would take for a secret.
-export function patternHits(text: string, shape = false): Hit[] {
+function patternHits(text: string, shape = false): Hit[] {
   // A few upstream patterns take time that grows with the square of a line's
   // length. Long text is checked in overlapping pieces.
   if (text.length > CHUNK + OVERLAP) {
@@ -525,7 +525,7 @@ const NOT_SECRET_NAME = /^(?:XDG_|DBUS_|SSH_AUTH_SOCK$|SSH_AGENT_PID$|GPG_|DESKT
 const DULL = /^(?:true|false|null|none|yes|no|on|off|localhost|development|production|staging|test|debug|info|warn|warning|error|enabled|disabled)$/i;
 
 // Is this value worth holding a message over when it shows up exactly?
-export function worthMatching(value: string, secretName: boolean): boolean {
+function worthMatching(value: string, secretName: boolean): boolean {
   if (value.length < 8 || value.length > 8192) return false;
   if (DULL.test(value)) return false;
   if (/^[0-9]+$/.test(value) && value.length < 12) return false;
@@ -539,7 +539,7 @@ export function worthMatching(value: string, secretName: boolean): boolean {
   return tokenLike(value);
 }
 
-export const tokenLike = (v: string): boolean => v.length >= 16 && v.length <= 512 && !/\s/.test(v) && /[A-Za-z]/.test(v) && /[0-9]/.test(v) && entropy(v) >= 3.0;
+const tokenLike = (v: string): boolean => v.length >= 16 && v.length <= 512 && !/\s/.test(v) && /[A-Za-z]/.test(v) && /[0-9]/.test(v) && entropy(v) >= 3.0;
 
 const isUrl = (v: string): boolean => /^[a-z][a-z0-9+.-]*:\/\//i.test(v);
 
@@ -609,7 +609,7 @@ export function envValues(env: Record<string, string | undefined>): Exact[] {
   return out;
 }
 
-export function parseDotenv(text: string): { name: string; value: string }[] {
+function parseDotenv(text: string): { name: string; value: string }[] {
   const out: { name: string; value: string }[] = [];
   for (const raw of text.split(/\r?\n/)) {
     const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*[=:]\s*(.*)$/.exec(raw);
@@ -650,7 +650,7 @@ function readSmall(path: string): string | null {
 const SKIP_DIRS = new Set([".git", "node_modules", "vendor", "dist", "build", "target", ".venv", "venv", "__pycache__", ".next", ".cache", ".turbo", "coverage"]);
 
 export const WALK_DEPTH = 12;
-export const WALK_DIRS = 20_000;
+const WALK_DIRS = 20_000;
 
 // What the .env search could not reach. Filled in by dotenvFiles.
 export interface WalkLimit {
@@ -693,7 +693,7 @@ export function dotenvFiles(root: string, limit: WalkLimit = walkLimit(), config
 // A template for a .env file: .env.example, .env.sample, .env.template,
 // .env.dist, .env.defaults, app.example.env. It is committed and full of
 // stand-ins, so its values must look like keys to count.
-export const TEMPLATE_ENV = /(?:^|\.)(?:example|sample|template|tmpl|tpl|dist|defaults?)(?:\.|$)/i;
+const TEMPLATE_ENV = /(?:^|\.)(?:example|sample|template|tmpl|tpl|dist|defaults?)(?:\.|$)/i;
 
 export function dotenvValues(file: string): Exact[] {
   const text = readSmall(file);
@@ -730,7 +730,7 @@ const words = (v: string): boolean => /^[a-z]+(?:[-_.][a-z]+)*$/i.test(v) && v.s
 const NOT_CONFIG_DIR = /^(?:tests?|__tests__|spec|specs|fixtures?|testdata|test-data|__fixtures__|__mocks__|mocks?|e2e|examples?|samples?|results?|snapshots?|__snapshots__|docs?)$/i;
 const NOT_CONFIG_FILE = /^(?:package(?:-lock)?\.json|tsconfig.*\.json|jsconfig\.json|composer\.lock|.*\.lock|pnpm-lock\.yaml|yarn\.lock|.*\.schema\.json|.*\.min\.json)$/i;
 
-export function configValues(file: string): Exact[] {
+function configValues(file: string): Exact[] {
   const text = readSmall(file);
   if (text === null || text.length > MAX_CONFIG) return [];
   const out: Exact[] = [];
@@ -756,7 +756,7 @@ export function configValues(file: string): Exact[] {
 // values are secret whatever they are called.
 const HOME_FILES = [".aws/credentials", ".netrc", ".pgpass", ".git-credentials", ".npmrc", ".pypirc", ".docker/config.json"];
 
-export function homeValues(home: string | undefined): { files: string[]; exact: Exact[] } {
+function homeValues(home: string | undefined): { files: string[]; exact: Exact[] } {
   if (!home) return { files: [], exact: [] };
   const files: string[] = [];
   const out: Exact[] = [];
@@ -803,7 +803,7 @@ export interface Shingles {
 }
 
 // Why a registered file gives no protection right now, or null when it does.
-export function fileProblem(path: string): string | null {
+function fileProblem(path: string): string | null {
   let st;
   try {
     st = lstatSync(path);
@@ -1305,7 +1305,7 @@ export class Guard {
   }
 
   // What this side sent the contact in the last day, up to eight events,
-  // oldest first, and their ids. Long ones keep their ends, where a piece would join on.
+  // oldest first, and their ids.
   private earlier(contactRoot: string): { fields: Field[][]; ids: string } {
     const rows = this.db
       .prepare("SELECT e.id, e.json FROM events e JOIN threads t ON t.id = e.thread_id WHERE e.mine = 1 AND t.contact_root = ? AND e.received_at > ? ORDER BY e.ord DESC LIMIT 8")

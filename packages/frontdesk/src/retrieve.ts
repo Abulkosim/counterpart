@@ -21,7 +21,7 @@ export interface Selection {
   chars: number;
 }
 
-export const RETRIEVE = { budget: 90_000, chunkLines: 40, chunkChars: 2400 } as const;
+const RETRIEVE = { budget: 90_000, chunkLines: 40, chunkChars: 2400 } as const;
 
 const STOP = new Set(
   "a an and are as at be but by can do does for from has have how i if in is it its me my of on or our so than that the their them then there these they this to us was we what when where which who why will with would you your".split(" "),

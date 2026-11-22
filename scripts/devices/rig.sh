@@ -7,18 +7,20 @@
 #
 #   ./scripts/devices/rig.sh                      every scenario, relay on this machine (or in a container if the firewall blocks that)
 #   ./scripts/devices/rig.sh --mode tunnel        relay behind cpart relay --tunnel. Needs cloudflared
-#   ./scripts/devices/rig.sh --no-sessions        only the scenarios that use no model (free, about ten minutes)
+#   ./scripts/devices/rig.sh --no-sessions        only the scenarios that use no model
 #   ./scripts/devices/rig.sh --mode mac           relay in the laptop's network namespace: 127.0.0.1 there, host.docker.internal from the devcontainer
 #   ./scripts/devices/rig.sh scripts/devices/scenarios/01-ask.json
 #   --long                                        pair with the long invite instead of a short code
 #   --prefix NAME                                 start container, network and image names with NAME (default two-devices)
 #
-# Needs docker. Scenarios with live sessions need a Claude Code login in
-# ~/.claude/.credentials.json: a temporary copy is mounted read-only into both
-# devices and deleted when the run ends, however it ends.
-#
 # Exit code: 0 when every scenario ended as expected, 3 when the run finished
 # but one or more did not, 130 when stopped by a signal, 1 otherwise.
+#
+# Needs: docker. Scenarios with live sessions need a Claude Code login in
+#        ~/.claude/.credentials.json: a temporary copy is mounted read-only
+#        into both devices and deleted when the run ends, however it ends.
+# Time:  the run in results/20261118-v2-container (00 to 10) took 62 minutes.
+# Cost:  model tokens for every scenario with a session. --no-sessions costs nothing.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 ROOT=$PWD
@@ -36,7 +38,7 @@ while [ $# -gt 0 ]; do
     --prefix) PREFIX=$2; shift 2 ;;
     --no-sessions) SESSIONS=0; shift ;;
     --out) OUT=$2; shift 2 ;;
-    -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,23p' "$0"; exit 0 ;;
     *) args+=("$1"); shift ;;
   esac
 done

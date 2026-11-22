@@ -17,8 +17,8 @@ Nothing here runs on macOS. What it shows about a Mac is what it shows about any
 ## Run it
 
 ```sh
-./scripts/devices/rig.sh --no-sessions        # no model, no cost: 00-plumbing, about ten minutes
-./scripts/devices/rig.sh                      # every scenario except the long one. Uses real models, about 40 minutes
+./scripts/devices/rig.sh --no-sessions        # no model, no cost: the scenarios with "sessions": false
+./scripts/devices/rig.sh                      # every scenario except the long one. Uses real models
 ./scripts/devices/rig.sh --mode tunnel        # the relay behind cpart relay --tunnel. Needs cloudflared
 ./scripts/devices/rig.sh scripts/devices/scenarios/01-ask.json      # one scenario
 ./scripts/devices/rig.sh --no-sessions scripts/devices/scenarios/07-drop-no-restart.json   # the long one, up to 30 minutes
@@ -27,7 +27,7 @@ Nothing here runs on macOS. What it shows about a Mac is what it shows about any
 
 `--long` pairs with the long invite instead of a short code. `--prefix NAME` starts the names of the containers, the network and the image with `NAME` (default `two-devices`), for a shared machine where names must say whose they are.
 
-Needs Docker. Scenarios with live sessions need a Claude Code login on this machine (`~/.claude/.credentials.json`).
+Needs Docker. Scenarios with live sessions need a Claude Code login on this machine (`~/.claude/.credentials.json`) and cost model tokens. The run in `results/20261118-v2-container`, scenarios 00 to 10 with the long one named, took 62 minutes.
 
 Each run writes `results.json` and `report.md` to `scripts/devices/results/<date>-<mode>/` (or `--out`). Session transcripts and daemon logs go to `logs/` beside them and are not committed: transcripts list the connectors of the account that ran them.
 
@@ -47,7 +47,7 @@ The relay is started with `--url` set to the address the devices use, except in 
 
 ## Pairing
 
-Before any scenario, the way a person now would: `cpart setup --relay <url>` on the laptop, then `cpart invite devcontainer` there. It prints a short code and the line to send, and waits; the rig runs it in the background and reads the line. The devcontainer runs that line, `cpart join <code>@<relay> laptop`. A relay on a private address makes `join` ask first; the rig tries without `--yes`, and when `join` says it needs a terminal, records a human step and runs it again with `--yes`. `--long` uses `cpart invite devcontainer --long` and the `cpart-invite:` string instead.
+Before any scenario, the way a person would: `cpart setup --relay <url>` on the laptop, then `cpart invite devcontainer` there. It prints a short code and the line to send, and waits; the rig runs it in the background and reads the line. The devcontainer runs that line, `cpart join <code>@<relay> laptop`. A relay on a private address makes `join` ask first; the rig tries without `--yes`, and when `join` says it needs a terminal, records a human step and runs it again with `--yes`. `--long` uses `cpart invite devcontainer --long` and the `cpart-invite:` string instead.
 
 `cpart join` makes the devcontainer's identity and registers Counterpart with Claude Code inside that device. Each device has its own Claude Code config directory, so nothing on the machine running the rig is touched.
 

@@ -643,7 +643,7 @@ async function setup(res: SetupResult): Promise<SetupResult> {
   if (s1.code !== 0) throw new Error(`laptop: cpart setup failed: ${res.laptop}`);
   // Short code: cpart invite prints the line to send and waits for the other
   // side, so it runs in the background while the devcontainer joins.
-  // --long: the old invite string, printed at once.
+  // --long: the long invite string, printed at once.
   let invite: string;
   let inviter: { out: () => string; done: Promise<number> } | undefined;
   if (flags.long) {

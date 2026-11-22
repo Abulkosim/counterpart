@@ -273,8 +273,8 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
   const sweeper = setInterval(() => q.sweep.run(now()), 60_000);
   sweeper.unref();
 
-  // ws repeats the HTTP server's errors on itself. With nobody listening there,
-  // a port that is already taken killed the process with an uncaught exception.
+  // ws re-emits the HTTP server's errors. Without a listener, a port already in
+  // use would crash the process with an uncaught exception.
   wss.on("error", (e) => log(`server error: ${e.message}`));
   try {
     await new Promise<void>((resolve, reject) => {

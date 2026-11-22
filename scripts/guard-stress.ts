@@ -5,6 +5,9 @@
 // that the fixed prefix with a few random characters is not. See docs/guard.md.
 //
 //   node scripts/guard-stress.ts [keys]
+//
+// Needs node 24 only. No model, no network. 9 s with the default 300 keys on a
+// shared 2-core machine.
 
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";

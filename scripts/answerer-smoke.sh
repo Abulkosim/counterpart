@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
-# The front desk answering from a real Git repository: `cpart share`, a relay
-# and two daemons as separate processes. Alice shares parts of a repository
-# with Bob; Bob's questions are answered from what is committed there, with
-# citations that Alice's daemon checks. Canaries sit in an uncommitted edit, an
-# untracked file, a file outside the share, .env, a file holding a key, a plain
-# password in YAML and a file in a secrets directory; none may reach the model
-# or Bob. Sharing must be refused when it does not come from Alice.
+# The front desk answering from a real Git repository. Alice shares parts of a
+# repository with Bob; his questions are answered from what is committed there,
+# with citations that Alice's daemon checks. Canaries sit in an uncommitted
+# edit, an untracked file, a file outside the share, .env, a file holding a
+# key, a plain password in YAML and a file in a secrets directory; none may
+# reach the model or Bob. Sharing must be refused when it does not come from
+# Alice.
 #
-# The model is a local stand-in for the Messages API (scripts/answerer-fake-model.mjs),
-# so this checks the plumbing and the checks, not answer quality. The eval in
-# scripts/answerer-eval/ runs real models.
+# The model is a local stand-in for the Messages API
+# (scripts/answerer-fake-model.mjs), so this checks the plumbing and the
+# checks, not answer quality. scripts/answerer-eval/ runs real models.
+#
+# Needs: node 24, git.
+# Time:  156 s on a shared 2-core machine.
+# Cost:  nothing; no model is called.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/smoke-lib.sh

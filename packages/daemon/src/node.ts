@@ -51,7 +51,7 @@ const MAX_EVIDENCE_PER_SIDE = 100;
 
 // The verifier this install ships. Evidence names the hash of the verifier the
 // other side ran; this is the only one we can vouch for.
-const VERIFIER_FILE = new URL("../../verify/src/verify.mjs", import.meta.url);
+const VERIFIER_FILE = new URL(import.meta.url.endsWith(".ts") ? "../../verify/src/verify.mjs" : "./verify.mjs", import.meta.url);
 let verifierHash: string | undefined;
 export const shippedVerifierHash = (): string => (verifierHash ??= createHash("sha256").update(readFileSync(VERIFIER_FILE)).digest("hex"));
 
@@ -138,7 +138,6 @@ interface Outgoing {
 }
 
 class Reject extends Error {}
-
 
 // The local node: keys, contacts, the event log and the outbox. Everything a
 // peer sends passes through `receive`, which is plain code with no model in it.
@@ -449,9 +448,8 @@ export class Counterpart {
     return this.post(threadId, "talk.posted", via ? { text, via } : { text });
   }
 
-  // Add one of my events to a thread. `body` may depend on the thread's state,
-  // so it can be given as a function that runs once the contact is known.
-  // `released` names the held message this is, once its owner let it go.
+  // Add one of my events to a thread. `released` names the held message this
+  // is, once its owner let it go.
   private async post<T extends EventType>(threadId: string, type: T, body: EventBodies[T], extraParents: string[] = [], released?: string): Promise<ThreadEvent<T>> {
     const t = this.db.prepare("SELECT contact_root FROM threads WHERE id = ?").get(threadId) as { contact_root: string } | undefined;
     if (!t) throw new Error(`no thread ${threadId}`);
@@ -460,7 +458,7 @@ export class Counterpart {
     const ticket = released ? null : this.guard.screen(screened);
     const mine = deviceId(this.keys.device.credential);
     // Sequence numbers are allocated here and committed below; a clash with a
-    // concurrent writer fails the unique index and the caller retries.
+    // concurrent writer fails the unique index and the loop tries again.
     for (let attempt = 0; ; attempt++) {
       const seq = (this.db.prepare("SELECT COALESCE(MAX(author_seq), -1) + 1 AS n FROM events WHERE thread_id = ? AND author = ?").get(threadId, mine) as { n: number }).n;
       const parents = [...new Set([...extraParents, ...this.heads(threadId)])].slice(0, LIMITS.parents);

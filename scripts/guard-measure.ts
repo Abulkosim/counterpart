@@ -2,6 +2,8 @@
 // mistake, and secrets it failed to hold. See docs/guard.md.
 //
 //   node scripts/guard-measure.ts [--verbose]
+//
+// Needs node 24 only. No model, no network. 16 s on a shared 2-core machine.
 
 import { measure } from "../packages/daemon/test/guard-corpus/measure.ts";
 

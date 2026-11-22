@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# The outbound guard with real processes: a relay, two daemons, the CLI and
-# the MCP server. Alice's side tries to send a token from its environment, a
-# .env value and a line of a never-share file, plain and encoded; each is
+# The outbound guard. Alice's side tries to send a token from its environment,
+# a .env value and a line of a never-share file, plain and encoded; each is
 # held and Bob receives none of it. Releasing needs Alice at a terminal (a
-# pseudo-terminal here) with her passphrase, and so do dropping a held
-# message, adding a never-share file and turning the guard off.
-# CPART_GUARD=off in the environment changes nothing. On Bob's identity,
-# which has no passphrase, a never-share file that goes missing does not
-# stop him sending for good.
+# pseudo-terminal here) with her passphrase, and so do dropping a held message,
+# adding a never-share file and turning the guard off. CPART_GUARD=off in the
+# environment changes nothing. On Bob's identity, which has no passphrase, a
+# never-share file that goes missing does not stop him sending for good.
+#
+# Needs: node 24, python3 (for the pseudo-terminal).
+# Time:  43 s on a shared 2-core machine.
+# Cost:  nothing; loopback only.
 set -euo pipefail
 export CPART_NO_AUTOSTART=1 CPART_NO_BOOT=1
 cd "$(dirname "$0")/.."

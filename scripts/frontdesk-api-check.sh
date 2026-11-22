@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
-# Runs the front desk against the real Anthropic API with your key. Bob asks
-# Alice's front desk three things through the CLI: one the shared file answers,
-# one it does not, and one that tries to make it leak. Costs a few cents. Not
-# run in CI.
+# The front desk against the real Anthropic API. Bob asks Alice's front desk
+# three things through the CLI: one the shared file answers, one it does not,
+# and one that tries to make it leak.
 #
 #   ANTHROPIC_API_KEY=sk-ant-... ./scripts/frontdesk-api-check.sh
 #
 # MODEL picks the model (default claude-sonnet-5-5). ANTHROPIC_BASE_URL points
 # it at another server; that is how the script itself is tested without a key.
+#
+# Needs: node 24, an Anthropic API key.
+# Time:  not recorded.
+# Cost:  API tokens for three questions. Not run in CI.
 set -euo pipefail
 # This script starts its own daemons.
 export CPART_NO_AUTOSTART=1

@@ -70,10 +70,6 @@ interface Conn {
   aliasOf: string | null; // the same relay as this connection, which is used instead
 }
 
-// `event` is a wake-up hint, not a delivery guarantee: a crash between commit
-// and emit loses it. Consumers that must not miss events read `node.since(ord)`
-// and keep their own cursor.
-//
 // Keeps one authenticated socket to each of this identity's relays. Pushes the
 // outbox up, through a relay the recipient uses, feeds deliveries from every
 // relay to the node, and acknowledges a delivery only after the node has
@@ -85,6 +81,10 @@ interface Conn {
 // and so does one whose network interfaces change. Between attempts the wait
 // doubles, with jitter, up to a cap. The outbox is on disk and a message leaves
 // it only when a relay says it stored it, so nothing queued is lost.
+//
+// `event` is a wake-up hint, not a delivery guarantee: a crash between commit
+// and emit loses it. Consumers that must not miss events read `node.since(ord)`
+// and keep their own cursor.
 export class RelayLink extends EventEmitter<LinkEvents> {
   private node: Counterpart;
   private conns = new Map<string, Conn>();

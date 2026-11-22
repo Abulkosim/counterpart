@@ -72,7 +72,8 @@ in this terminal until you stop it.
   --tunnel         also get a public address from cloudflared, to try it with someone. The
                    address changes every start, so it does not go with --boot
   --boot           run it in the background: it starts at login and restarts if it stops
-                   (a systemd user unit on Linux, a launchd agent on a Mac). Run it again to change flags
+                   (a systemd user unit on Linux; a launchd agent on a Mac, not yet tested there).
+                   Run it again to change flags
   --no-boot        stop that background relay and stop starting it at login. The database is kept
 
 cpart status says when a relay service is installed here.

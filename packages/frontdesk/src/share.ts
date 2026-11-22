@@ -39,7 +39,7 @@ export interface Share {
   rulesHash: string; // identifies what the owner said; changes only when they change it
 }
 
-export const SHARE_LIMITS = { files: 2000, bytes: 16 * 1024 * 1024, fileBytes: 256 * 1024, patterns: 200 } as const;
+const SHARE_LIMITS = { files: 2000, bytes: 16 * 1024 * 1024, fileBytes: 256 * 1024, patterns: 200 } as const;
 
 // Paths never shown, even when named. The worker's list is about what runs;
 // these are about what is private.
@@ -78,7 +78,7 @@ export function shareRules(home: string, contactRoot: string): ShareRule[] {
 // A pattern is relative to the repository root: a file, a directory, or a glob
 // with *, ** and ?. It is matched by this code against committed paths, never
 // handed to Git or a shell.
-export function checkPattern(p: string): string {
+function checkPattern(p: string): string {
   const t = p.replace(/^(\.\/)+/, "").replace(/\/+$/, "");
   if (!t || t.length > 300 || t.startsWith("/") || /[\\\0-\x1f\x7f]/.test(t) || /^[!:]/.test(t) || t.split("/").some((s) => s === ".." || s === "." || s === ""))
     throw new Error(`"${p}": give a path inside the repository, relative to its root, like docs/api.md or "src/**/*.ts"`);
