@@ -653,7 +653,7 @@ async function setup(res: SetupResult): Promise<SetupResult> {
   } else {
     inviter = rig.start("laptop", ["cpart", "invite", "devcontainer"]);
     let line = "";
-    await rig.until(30_000, async () => !!(line = /cpart join (\S+) <your name>/.exec(inviter!.out())?.[1] ?? ""), 500);
+    await rig.until(30_000, async () => !!(line = /cpart join (\S+) <what you call me>/.exec(inviter!.out())?.[1] ?? ""), 500);
     if (!line) throw new Error(`laptop: cpart invite printed no code in 30s: ${inviter.out().trim()}`);
     invite = line;
   }

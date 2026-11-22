@@ -192,7 +192,7 @@ step "alice invites henry with a code and waits; henry joins with --no-agents"
 cpart alice invite henry >"$WORK/alice.invite" 2>&1 &
 INVITE_PID=$!
 pids+=("$INVITE_PID")
-wait_for "alice's code" grep -q "cpart join .* <your name>" "$WORK/alice.invite"
+wait_for "alice's code" grep -q "cpart join .* <what you call me>" "$WORK/alice.invite"
 CODE=$(grep -o "cpart join [^ ]*" "$WORK/alice.invite" | head -1 | cut -d' ' -f3)
 cpart henry join "$CODE" alice --yes --no-agents --no-passphrase | tee "$WORK/henry.join"
 wait "$INVITE_PID"
