@@ -115,7 +115,7 @@ export async function relayCommand(node: Counterpart, args: string[], io: Io): P
         return `  ${r.home ? "home   " : r.leaving ? "leaving" : "       "}  ${safe(r.url)}${r.as ? `  (others call it ${safe(r.as)})` : ""}  ${state}`;
       }),
       "",
-      node.contacts().length ? "Contacts:" : "No contacts yet.",
+      node.contacts().length ? "Contacts:" : "No contacts yet. Pair with: cpart invite <name>",
       ...node.contacts().map((c) => {
         const t = book.their(c.rootKey, c.relay);
         const shared = book.route(t.relays).preferred.length > 0;
