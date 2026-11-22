@@ -64,7 +64,46 @@ const notices = [...packages]
     if (!file) throw new Error(`${name} has no license file to ship`);
     return `${name}@${pkg.version} (${pkg.license ?? "see below"})\n\n${readFileSync(file, "utf8").trim()}\n`;
   });
-writeFileSync(join(DIST, "THIRD_PARTY_LICENSES"), `Counterpart's bundles in this folder include the following packages.\n\n${notices.join("\n---\n\n")}`);
+// Data from other projects, copied in rather than bundled from node_modules.
+const data = [
+  `gitleaks rules (MIT): guard-data/gitleaks-rules.json holds rules converted from
+gitleaks v8.30.1, config/gitleaks.toml, https://github.com/gitleaks/gitleaks
+
+MIT License
+
+Copyright (c) 2019 Zachary Rice
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+`,
+  `EFF short wordlist 1 (CC BY 3.0 US): the pairing code words in cli.js
+
+"EFF's Short Wordlist #1" by the Electronic Frontier Foundation (2016),
+https://www.eff.org/dice, used under the Creative Commons Attribution 3.0
+United States license, https://creativecommons.org/licenses/by/3.0/us/.
+Changed: the word "yo-yo" is left out, because a dash separates the words of
+a code.
+`,
+];
+writeFileSync(
+  join(DIST, "THIRD_PARTY_LICENSES"),
+  `Counterpart's bundles in this folder include the following packages and data.\n\n${[...notices, ...data].join("\n---\n\n")}`,
+);
 
 for (const [file, out] of Object.entries(result.metafile.outputs)) console.log(`${file}  ${Math.round(out.bytes / 1024)} KB`);
 console.log(`dist/THIRD_PARTY_LICENSES  ${packages.size} packages`);
