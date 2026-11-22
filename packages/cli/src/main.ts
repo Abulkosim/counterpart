@@ -461,10 +461,10 @@ async function setup(relay: string | undefined, fromInvite = false): Promise<Cou
       note(
         h.registered === "here" ? `ok  ${h.name} ${h.added ? "now has" : "already has"} the counterpart tools${h.added ? ". Sessions started from now on see them" : ""}`
         : h.registered === "elsewhere" ? `--  ${h.name} already has a server named counterpart for another identity or install. It was left alone, so its sessions do not speak for this one. To switch: ${h.bin} mcp remove counterpart, then cpart setup`
-        : `--  ${h.name}: could not add the tools (${safe(h.error ?? "unknown error")}). By hand: see docs/mcp.md`,
+        : `--  ${h.name}: could not add the tools (${safe(h.error ?? "unknown error")}). By hand: see https://github.com/Abulkosim/counterpart/blob/main/docs/mcp.md`,
       );
     }
-    if (!hosts.some((h) => h.found)) note("--  neither claude nor codex is on your PATH. Add the MCP server by hand: see docs/mcp.md");
+    if (!hosts.some((h) => h.found)) note("--  neither claude nor codex is on your PATH. Add the MCP server by hand: see https://github.com/Abulkosim/counterpart/blob/main/docs/mcp.md");
     if (!flags["no-hooks"]) for (const l of hookLines(installHooks(home), safe)) note(l);
   }
   return node;
