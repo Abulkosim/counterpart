@@ -273,8 +273,8 @@ test("a consumer with a cursor sees every applied event exactly once, in order",
 test("several processes can open and close the same identity at the same moment", async () => {
   const node = await person();
   node.close();
-  // Opening first and closing last both take a brief exclusive lock. Before the
-  // busy timeout was set first, about one open in a hundred failed here.
+  // Opening first and closing last both take a brief exclusive lock. Without
+  // the busy timeout set first, some of these opens fail.
   const src = `
     import { Counterpart } from ${JSON.stringify(new URL("../src/index.ts", import.meta.url).href)};
     let bad = 0;

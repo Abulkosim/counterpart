@@ -263,7 +263,7 @@ test("a receipt moves my event from stored to received, and covers several event
 });
 
 test("a receipt counts only for the sender's own thread", async () => {
-  const { alice, bob } = await paired();
+  const { alice } = await paired();
   const mallory = await person();
   await pair(alice, mallory, "mallory", "alice");
   const withBob = await alice.openThread("bob", "private");

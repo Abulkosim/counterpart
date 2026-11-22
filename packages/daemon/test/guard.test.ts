@@ -272,13 +272,13 @@ test("what Codex found: composed encodings, encoded pieces, capability URLs, lim
   let nested = `the token is ${TOKEN} and that is all`;
   for (let i = 0; i < 6; i++) nested = b64(nested);
   await assert.rejects(alice.say(thread, nested.slice(0, 16000)), /too-much-to-check/);
-  // A huge run of character codes does not crash the check.
-  // (It is then refused for its length, as before.)
+  // A huge run of character codes does not crash the check. The message is
+  // refused for its length or held.
   await assert.rejects(alice.say(thread, "65 ".repeat(200_000)), (e: Error) => !(e instanceof RangeError) && /bad talk.posted body|held/.test(e.message));
   assert.doesNotThrow(() => alice.guard.check({ text: "65 ".repeat(300_000) }));
 });
 
-test("what the second review found: rot13 inside base64, deep nesting, tiny pieces, padding, encoded URL parts, broken files, repeats", async () => {
+test("rot13 inside base64, deep nesting, tiny pieces, padding, encoded URL parts and a deleted never-share file are held; a repeated part is not", async () => {
   const b64 = (x: string): string => Buffer.from(x).toString("base64");
   const rot = (x: string): string => x.replace(/[A-Za-z]/g, (c) => String.fromCharCode(((c.charCodeAt(0) - (c <= "Z" ? 65 : 97) + 13) % 26) + (c <= "Z" ? 65 : 97)));
   const hook = `https://example.test/hook?token=${[...Buffer.from("Wq8Pz3Lm6Tr1Vb9Kc4Ns7Hd2")].map((x) => `%${x.toString(16)}`).join("")}`;
