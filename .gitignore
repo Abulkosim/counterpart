@@ -1,6 +1,20 @@
-node_modules
+# Dependencies and build output
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Local state: relay and daemon databases, secrets, caches
 *.db
 *.db-*
-.cache
 .env
+.cache/
+
+# Output of local runs. Committed results are named in docs/verification.md.
+demo/out/
+demo/out.log
+scripts/redteam/runs/
+# Session transcripts list the connectors of the account that ran them.
+scripts/devices/results/*/logs/
+
+# Agent worktrees
 .claude/worktrees/
