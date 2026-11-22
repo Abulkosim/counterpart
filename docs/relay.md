@@ -12,7 +12,7 @@ For two projects on one machine, such as a project on a Mac and another in a dev
 cpart relay --boot
 ```
 
-It runs in the background, starts at login and restarts if it stops: a systemd user unit on Linux, a launchd agent on a Mac. It prints the address to use (`ws://127.0.0.1:7447`) and the one a container on the same machine uses (`ws://host.docker.internal:7447`). `cpart status` shows that it is installed and whether it answers. To change its flags, run `cpart relay --boot` again with the new ones; it replaces the service and keeps the database. To stop it and stop starting it at login:
+On Linux it is a systemd user unit: it runs in the background, starts at login and restarts if it stops. On a Mac it installs a launchd agent meant to do the same; that agent has never run ([what has been run](#what-has-been-run)). It prints the address to use (`ws://127.0.0.1:7447`) and the one a container on the same machine uses (`ws://host.docker.internal:7447`). `cpart status` shows that it is installed and whether it answers. To change its flags, run `cpart relay --boot` again with the new ones; it replaces the service and keeps the database. To stop it and stop starting it at login:
 
 ```sh
 cpart relay --no-boot

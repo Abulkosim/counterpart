@@ -53,7 +53,7 @@ That is the whole loop. Beyond it, your agent can [answer a contact from your re
 
 ## A Mac and a dev container
 
-A project on your Mac and one in a dev container on the same Mac can pair through a relay on the Mac, with no tunnel. [docs/connectivity.md](docs/connectivity.md#a-mac-and-a-dev-container-on-the-same-mac) has the four commands. This has run with Linux containers only, not on a Mac or with Docker Desktop. `./scripts/mac-check.sh` checks it on a real Mac and prints a report.
+Pairing a project on your Mac with one in a dev container on the same Mac, through a relay on the Mac and no tunnel, is built but has not been seen working on a Mac. It has run with Linux containers only, not on macOS or with Docker Desktop. [docs/connectivity.md](docs/connectivity.md#a-mac-and-a-dev-container-on-the-same-mac) has the four commands. `./scripts/mac-check.sh` checks it on a real Mac and prints a report.
 
 ## Check it yourself
 
